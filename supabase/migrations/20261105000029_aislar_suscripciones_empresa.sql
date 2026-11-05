@@ -2,16 +2,17 @@ BEGIN;
 
 -- ============================================================
 -- 000029: AISLAR SUSCRIPCIONES POR EMPRESA
--- Administrador central: lectura solo de su propia empresa.
--- Gestores: lectura solo de su propia empresa.
--- Eliminar bypass global sin modificar grants ni RPC.
+-- Administrador central: solo su empresa de prueba.
+-- Gestores: solo su propia empresa.
+-- Sin bypass global.
 -- ============================================================
 
--- 1. PREVALIDACIÓN
+-- 1. PREVALIDACIÓN DEL ESTADO REAL
 
 DO $$
 DECLARE
     v_table text;
+    v_policy text;
 BEGIN
     FOREACH v_table IN ARRAY ARRAY[
         'company_subscriptions',
@@ -41,14 +42,20 @@ BEGIN
             RAISE EXCEPTION 'Falta company_id UUID en %', v_table;
         END IF;
 
+        v_policy := CASE
+            WHEN v_table = 'company_subscriptions'
+                THEN 'company_subscriptions_read'
+            ELSE 'subscriptions_company_read'
+        END;
+
         IF (
             SELECT count(*)
             FROM pg_policies
             WHERE schemaname = 'public'
               AND tablename = v_table
-        ) <> 2 THEN
+        ) <> 1 THEN
             RAISE EXCEPTION
-                'Políticas inesperadas en %; revisar antes de continuar',
+                'Políticas adicionales no auditadas en %',
                 v_table;
         END IF;
 
@@ -57,11 +64,12 @@ BEGIN
             FROM pg_policies
             WHERE schemaname = 'public'
               AND tablename = v_table
-              AND policyname = 'platform_admin_all'
-              AND cmd = 'ALL'
+              AND policyname = v_policy
+              AND cmd = 'SELECT'
+              AND roles = ARRAY['authenticated']::name[]
         ) THEN
             RAISE EXCEPTION
-                'No existe platform_admin_all en %',
+                'No existe la política SELECT esperada en %',
                 v_table;
         END IF;
     END LOOP;
@@ -81,40 +89,24 @@ BEGIN
         'public.subscriptions',
         'SELECT'
     ) THEN
-        RAISE EXCEPTION 'Faltan permisos SELECT para authenticated';
+        RAISE EXCEPTION 'Faltan permisos SELECT';
     END IF;
 
     IF NOT has_table_privilege(
         'service_role',
         'public.company_subscriptions',
-        'SELECT'
-    ) OR NOT has_table_privilege(
-        'service_role',
-        'public.company_subscriptions',
         'INSERT'
-    ) OR NOT has_table_privilege(
-        'service_role',
-        'public.subscriptions',
-        'SELECT'
     ) OR NOT has_table_privilege(
         'service_role',
         'public.subscriptions',
         'INSERT'
     ) THEN
-        RAISE EXCEPTION 'service_role no conserva los permisos esperados';
+        RAISE EXCEPTION 'service_role no conserva INSERT';
     END IF;
 END;
 $$;
 
--- 2. ELIMINAR POLÍTICAS GLOBALES
-
-DROP POLICY platform_admin_all
-ON public.company_subscriptions;
-
-DROP POLICY platform_admin_all
-ON public.subscriptions;
-
--- 3. RECONSTRUIR LECTURA DE SUSCRIPCIONES DE EMPRESA
+-- 2. CERRAR EL ACCESO GLOBAL Y RECONSTRUIR POLÍTICAS
 
 DROP POLICY company_subscriptions_read
 ON public.company_subscriptions;
@@ -131,8 +123,6 @@ USING (
     )
 );
 
--- 4. RECONSTRUIR LECTURA DE SUSCRIPCIONES
-
 DROP POLICY subscriptions_company_read
 ON public.subscriptions;
 
@@ -148,12 +138,12 @@ USING (
     )
 );
 
--- 5. VERIFICACIÓN FINAL
+-- 3. VERIFICACIÓN FINAL
 
 DO $$
 DECLARE
-    v_qual text;
     v_table text;
+    v_qual text;
 BEGIN
     FOREACH v_table IN ARRAY ARRAY[
         'company_subscriptions',
@@ -168,24 +158,19 @@ BEGIN
           AND cmd = 'SELECT'
           AND roles = ARRAY['authenticated']::name[];
 
-        IF v_qual IS NULL THEN
-            RAISE EXCEPTION
-                'No existe política SELECT para %',
-                v_table;
-        END IF;
-
-        IF v_qual NOT ILIKE '%company_id%'
+        IF v_qual IS NULL
+           OR v_qual NOT ILIKE '%company_id%'
            OR v_qual NOT ILIKE '%my_company%'
            OR v_qual NOT ILIKE '%is_platform_admin%'
            OR v_qual NOT ILIKE '%is_manager%' THEN
             RAISE EXCEPTION
-                'La política de % no conserva el aislamiento esperado',
+                'Aislamiento incorrecto en %',
                 v_table;
         END IF;
 
         IF v_qual ILIKE '%OR true%' THEN
             RAISE EXCEPTION
-                'Se detectó un bypass global en %',
+                'Bypass global detectado en %',
                 v_table;
         END IF;
 
@@ -196,36 +181,12 @@ BEGIN
               AND tablename = v_table
         ) <> 1 THEN
             RAISE EXCEPTION
-                'Hay políticas adicionales en %',
-                v_table;
-        END IF;
-
-        IF EXISTS (
-            SELECT 1
-            FROM pg_policies
-            WHERE schemaname = 'public'
-              AND tablename = v_table
-              AND policyname = 'platform_admin_all'
-        ) THEN
-            RAISE EXCEPTION
-                'Persiste platform_admin_all en %',
+                'Políticas adicionales detectadas en %',
                 v_table;
         END IF;
     END LOOP;
 
     IF NOT has_table_privilege(
-        'authenticated',
-        'public.company_subscriptions',
-        'SELECT'
-    ) OR NOT has_table_privilege(
-        'authenticated',
-        'public.subscriptions',
-        'SELECT'
-    ) THEN
-        RAISE EXCEPTION 'Se perdió SELECT para authenticated';
-    END IF;
-
-    IF NOT has_table_privilege(
         'service_role',
         'public.company_subscriptions',
         'INSERT'
@@ -234,7 +195,8 @@ BEGIN
         'public.subscriptions',
         'INSERT'
     ) THEN
-        RAISE EXCEPTION 'Se alteraron permisos de service_role';
+        RAISE EXCEPTION
+            'Se alteraron permisos de service_role';
     END IF;
 END;
 $$;

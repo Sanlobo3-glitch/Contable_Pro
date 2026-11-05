@@ -5,18 +5,17 @@
 -- Proyecto: Contable_Pro
 -- Fecha: 2026-11-05
 --
--- OBJETIVO:
--- 1. El administrador global se reconoce por una identidad
---    expresamente autorizada en platform_admins o por la
---    identidad maestra ya definida en la función actual.
--- 2. Un administrador empresarial solo administra su empresa.
--- 3. El rol admin no concede automáticamente privilegios globales.
+-- OBJETIVOS:
+-- 1. Separar administrador global de administrador empresarial.
+-- 2. El rol admin por sí solo no concede acceso global.
+-- 3. Conservar la identidad maestra y platform_admins.
+-- 4. Proteger la cuenta maestra antes de aplicar cambios.
 --
--- IMPORTANTE:
--- Esta migración NO elimina políticas RLS.
--- NO modifica datos de empresas.
--- NO modifica admin_ejecutar_migracion_sql.
--- NO modifica permisos de tablas.
+-- NO MODIFICA:
+-- - Datos de empresas.
+-- - Políticas RLS existentes.
+-- - Permisos de tablas.
+-- - admin_ejecutar_migracion_sql.
 -- ============================================================
 
 BEGIN;
@@ -52,22 +51,51 @@ BEGIN
             'La estructura de platform_admins no coincide con la esperada';
     END IF;
 
-    IF NOT EXISTS (
-        SELECT 1
+    -- Debe existir exactamente un administrador global activo.
+    IF (
+        SELECT count(*)
         FROM public.platform_admins
         WHERE active = TRUE
+    ) <> 1 THEN
+        RAISE EXCEPTION
+            'Cantidad inesperada de administradores globales activos. Migración cancelada';
+    END IF;
+
+    -- Debe existir exactamente un perfil activo con rol admin.
+    IF (
+        SELECT count(*)
+        FROM public.profiles
+        WHERE active = TRUE
+          AND role = 'admin'
+    ) <> 1 THEN
+        RAISE EXCEPTION
+            'Cantidad inesperada de perfiles admin activos. Migración cancelada';
+    END IF;
+
+    -- La cuenta maestra debe estar activa en ambos registros
+    -- y tener el rol admin.
+    IF NOT EXISTS (
+        SELECT 1
+        FROM public.profiles p
+        JOIN public.platform_admins pa
+          ON pa.user_id = p.id
+        WHERE p.active = TRUE
+          AND pa.active = TRUE
+          AND p.role = 'admin'
+          AND lower(btrim(coalesce(p.email, ''))) =
+              'sanlobo3@hotmail.com'
     ) THEN
         RAISE EXCEPTION
-            'No hay administradores globales activos. Se cancela la migración';
+            'No se pudo validar la cuenta maestra. Migración cancelada';
     END IF;
 END;
 $$;
 
 
 -- ------------------------------------------------------------
--- 1. IDENTIDAD DEL ADMINISTRADOR GLOBAL
+-- 1. ADMINISTRADOR GLOBAL
 -- ------------------------------------------------------------
--- Se elimina la elevación automática por tener role = admin.
+-- Se elimina la elevación automática por role = admin.
 -- Se conserva la identidad maestra y la lista explícita
 -- de administradores globales autorizados.
 -- ------------------------------------------------------------
@@ -117,11 +145,11 @@ $function$;
 
 
 -- ------------------------------------------------------------
--- 2. ADMINISTRADOR DE EMPRESA
+-- 2. ADMINISTRADOR EMPRESARIAL
 -- ------------------------------------------------------------
--- Solo puede administrar la empresa asociada a su perfil.
--- El rol admin global no se interpreta como administrador
--- empresarial automáticamente.
+-- Solo reconoce roles empresariales asociados a company_id.
+-- El rol admin global no se interpreta automáticamente
+-- como administrador de una empresa.
 -- ------------------------------------------------------------
 
 CREATE OR REPLACE FUNCTION public.is_company_manager()
@@ -147,10 +175,10 @@ $function$;
 
 
 -- ------------------------------------------------------------
--- 3. FUNCIÓN GENERAL DE GERENCIA EMPRESARIAL
+-- 3. FUNCIÓN GENERAL DE GERENCIA
 -- ------------------------------------------------------------
--- Ya no hereda privilegios del administrador global.
--- Los permisos se determinan por el perfil empresarial.
+-- Comprueba exclusivamente privilegios empresariales.
+-- No hereda privilegios del administrador global.
 -- ------------------------------------------------------------
 
 CREATE OR REPLACE FUNCTION public.is_manager()
@@ -175,7 +203,7 @@ COMMENT ON FUNCTION public.is_company_manager() IS
 'Identifica gerentes empresariales activos con company_id y rol dueno, admin_empresa o gerente.';
 
 COMMENT ON FUNCTION public.is_manager() IS
-'Comprueba exclusivamente privilegios de gerencia de la empresa del usuario. No hereda privilegios globales.';
+'Comprueba exclusivamente privilegios de gerencia empresarial. No hereda privilegios globales.';
 
 
 -- ------------------------------------------------------------
@@ -194,6 +222,18 @@ BEGIN
     ) THEN
         RAISE EXCEPTION
             'Falló la verificación de is_platform_admin';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_proc p
+        JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'public'
+          AND p.proname = 'is_company_manager'
+          AND p.prosecdef = TRUE
+    ) THEN
+        RAISE EXCEPTION
+            'Falló la verificación de is_company_manager';
     END IF;
 
     IF NOT EXISTS (

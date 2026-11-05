@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   AuthProvider,
   useAuth,
@@ -107,6 +107,23 @@ function getPublicCatalogStoreKey(): string | null {
   return getPublicStoreIdentifierFromLocation()
 }
 
+function getRoleHomePage(role?: Role): string {
+  switch (role) {
+    case 'admin': return 'companies'
+    case 'tecnico': return 'support'
+    case 'dueno':
+    case 'admin_empresa': return 'dashboard'
+    case 'gerente': return 'command'
+    case 'contador': return 'cpa'
+    case 'vendedor': return 'routeplan'
+    case 'cajero': return 'pos'
+    case 'almacen': return 'warehouses'
+    case 'comprador': return 'purchases'
+    case 'transportador': return 'dispatch'
+    default: return 'dashboard'
+  }
+}
+
 function isPageAllowedForRole(
   page: string,
   role?: Role,
@@ -213,12 +230,7 @@ function AppContent() {
   const cur = useCurrency()
 
   const scopeKey = isDemo ? 'demo' : (user?.id ?? null)
-  const defaultPageForRole =
-    user?.role === 'tecnico'
-      ? 'support'
-      : user?.role === 'contador'
-        ? 'cpa'
-        : 'dashboard'
+  const defaultPageForRole = getRoleHomePage(user?.role)
 
   const {
     current,
@@ -241,6 +253,28 @@ function AppContent() {
     isAllowedPage: page =>
       isPageAllowedForRole(page, user?.role, { isMasterAccount, isDemo }),
   })
+
+  // Alinear la pantalla inicial y el historial con el rol efectivo del usuario.
+  // Una URL con ?vista= explícita se respeta en el primer ingreso.
+  const previousEffectiveRoleRef = useRef<Role | null>(null)
+  useEffect(() => {
+    const nextRole = user?.role ?? null
+
+    if (!nextRole) {
+      previousEffectiveRoleRef.current = null
+      return
+    }
+
+    const previousRole = previousEffectiveRoleRef.current
+    previousEffectiveRoleRef.current = nextRole
+
+    if (previousRole === nextRole) return
+
+    const hasExplicitPage = Boolean(new URLSearchParams(window.location.search).get('vista'))
+    if (!previousRole && hasExplicitPage) return
+
+    navigateToPage(getRoleHomePage(nextRole), { resetStack: true })
+  }, [user?.role, navigateToPage])
 
   // Nunca iniciar una sesión como autorizada por defecto.
   const [dev, setDev] = useState<DeviceState>({

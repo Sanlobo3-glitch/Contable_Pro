@@ -1,9 +1,11 @@
-
 BEGIN;
 
--- =====================================================
--- 000020: AISLAR INVITACIONES POR EMPRESA
--- =====================================================
+-- ============================================================
+-- 000020: AISLAMIENTO DE INVITACIONES POR EMPRESA
+-- Administrador central: CRUD solo en su empresa actual.
+-- Gestores: conservar lectura empresarial.
+-- Soporte técnico: sin acceso directo.
+-- ============================================================
 
 DO $$
 BEGIN
@@ -13,13 +15,11 @@ BEGIN
 
   IF NOT EXISTS (
     SELECT 1
-    FROM pg_class c
-    JOIN pg_namespace n ON n.oid = c.relnamespace
-    WHERE n.nspname = 'public'
-      AND c.relname = 'company_invites'
-      AND c.relrowsecurity = true
+    FROM pg_class
+    WHERE oid = 'public.company_invites'::regclass
+      AND relrowsecurity = TRUE
   ) THEN
-    RAISE EXCEPTION 'RLS no está habilitado en company_invites';
+    RAISE EXCEPTION 'RLS no está habilitado';
   END IF;
 
   IF NOT EXISTS (
@@ -30,7 +30,13 @@ BEGIN
       AND column_name = 'company_id'
       AND data_type = 'uuid'
   ) THEN
-    RAISE EXCEPTION 'company_invites no tiene company_id UUID';
+    RAISE EXCEPTION 'Falta company_id UUID';
+  END IF;
+
+  IF to_regprocedure('public.is_platform_admin()') IS NULL
+     OR to_regprocedure('public.current_company_id()') IS NULL
+  THEN
+    RAISE EXCEPTION 'Faltan funciones de seguridad';
   END IF;
 
   IF NOT EXISTS (
@@ -42,8 +48,7 @@ BEGIN
       AND cmd = 'SELECT'
       AND 'authenticated' = ANY(roles)
   ) THEN
-    RAISE EXCEPTION
-      'No existe la política de lectura de gestores';
+    RAISE EXCEPTION 'Falta la política de lectura empresarial';
   END IF;
 
   IF NOT EXISTS (
@@ -54,66 +59,132 @@ BEGIN
       AND policyname = 'platform_admin_all'
       AND cmd = 'ALL'
   ) THEN
-    RAISE EXCEPTION
-      'No existe la política global esperada';
+    RAISE EXCEPTION 'No existe la política global esperada';
   END IF;
 END;
 $$;
 
--- Retirar exclusivamente el acceso global.
+-- 1. Eliminar el acceso global.
+
 DROP POLICY platform_admin_all
 ON public.company_invites;
 
--- =====================================================
--- VERIFICACIONES FINALES
--- =====================================================
+-- 2. Administrador central:
+-- CRUD limitado a la empresa actual.
+
+DROP POLICY IF EXISTS platform_admin_company_all
+ON public.company_invites;
+
+CREATE POLICY platform_admin_company_all
+ON public.company_invites
+FOR ALL
+TO authenticated
+USING (
+  public.is_platform_admin()
+  AND company_id = (
+    SELECT public.current_company_id()
+  )
+)
+WITH CHECK (
+  public.is_platform_admin()
+  AND company_id = (
+    SELECT public.current_company_id()
+  )
+);
+
+-- 3. Permisos CRUD a nivel de tabla.
+-- RLS mantiene el aislamiento de filas.
+
+GRANT SELECT, INSERT, UPDATE, DELETE
+ON TABLE public.company_invites
+TO authenticated;
+
+-- 4. Anon no debe tener acceso.
+
+REVOKE ALL PRIVILEGES
+ON TABLE public.company_invites
+FROM anon;
+
+-- 5. Verificaciones finales.
 
 DO $$
+DECLARE
+  v_admin INTEGER;
+  v_global INTEGER;
+  v_select INTEGER;
+  v_support INTEGER;
 BEGIN
-  IF EXISTS (
-    SELECT 1
-    FROM pg_policies
-    WHERE schemaname = 'public'
-      AND tablename = 'company_invites'
-      AND policyname = 'platform_admin_all'
-  ) THEN
-    RAISE EXCEPTION
-      'Sigue existiendo platform_admin_all';
+
+  SELECT COUNT(*) INTO v_admin
+  FROM pg_policies
+  WHERE schemaname = 'public'
+    AND tablename = 'company_invites'
+    AND policyname = 'platform_admin_company_all'
+    AND cmd = 'ALL'
+    AND qual LIKE '%is_platform_admin()%'
+    AND qual LIKE '%current_company_id()%'
+    AND with_check LIKE '%is_platform_admin()%'
+    AND with_check LIKE '%current_company_id()%';
+
+  IF v_admin <> 1 THEN
+    RAISE EXCEPTION 'Falta política CRUD central aislada';
   END IF;
 
-  IF NOT EXISTS (
-    SELECT 1
-    FROM pg_policies
-    WHERE schemaname = 'public'
-      AND tablename = 'company_invites'
-      AND policyname = 'company_invites_select'
-      AND cmd = 'SELECT'
-  ) THEN
-    RAISE EXCEPTION
-      'Se perdió la política de lectura de gestores';
+  SELECT COUNT(*) INTO v_global
+  FROM pg_policies
+  WHERE schemaname = 'public'
+    AND tablename = 'company_invites'
+    AND policyname = 'platform_admin_all';
+
+  IF v_global <> 0 THEN
+    RAISE EXCEPTION 'Persiste el acceso global';
   END IF;
 
-  IF EXISTS (
-    SELECT 1
-    FROM pg_policies
-    WHERE schemaname = 'public'
-      AND tablename = 'company_invites'
-      AND policyname LIKE 'support_%'
-  ) THEN
-    RAISE EXCEPTION
-      'No debe existir acceso de soporte a invitaciones';
+  SELECT COUNT(*) INTO v_select
+  FROM pg_policies
+  WHERE schemaname = 'public'
+    AND tablename = 'company_invites'
+    AND policyname = 'company_invites_select'
+    AND cmd = 'SELECT';
+
+  IF v_select <> 1 THEN
+    RAISE EXCEPTION 'Se perdió la lectura empresarial';
   END IF;
 
-  IF EXISTS (
-    SELECT 1
-    FROM information_schema.role_table_grants
-    WHERE table_schema = 'public'
-      AND table_name = 'company_invites'
-      AND grantee = 'anon'
-  ) THEN
-    RAISE EXCEPTION
-      'La tabla tiene permisos directos para anon';
+  SELECT COUNT(*) INTO v_support
+  FROM pg_policies
+  WHERE schemaname = 'public'
+    AND tablename = 'company_invites'
+    AND policyname LIKE 'support_%';
+
+  IF v_support <> 0 THEN
+    RAISE EXCEPTION 'No se permite soporte directo en invitaciones';
   END IF;
+
+  IF NOT has_table_privilege(
+    'authenticated','public.company_invites','SELECT'
+  ) OR NOT has_table_privilege(
+    'authenticated','public.company_invites','INSERT'
+  ) OR NOT has_table_privilege(
+    'authenticated','public.company_invites','UPDATE'
+  ) OR NOT has_table_privilege(
+    'authenticated','public.company_invites','DELETE'
+  ) THEN
+    RAISE EXCEPTION 'Faltan permisos CRUD authenticated';
+  END IF;
+
+  IF has_table_privilege(
+    'anon','public.company_invites','SELECT'
+  ) OR has_table_privilege(
+    'anon','public.company_invites','INSERT'
+  ) OR has_table_privilege(
+    'anon','public.company_invites','UPDATE'
+  ) OR has_table_privilege(
+    'anon','public.company_invites','DELETE'
+  ) THEN
+    RAISE EXCEPTION 'anon conserva permisos inesperados';
+  END IF;
+
 END;
 $$;
 

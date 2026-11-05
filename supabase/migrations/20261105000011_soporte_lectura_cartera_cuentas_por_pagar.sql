@@ -1,28 +1,35 @@
+
 BEGIN;
 
--- 000011: Soporte temporal de lectura para cartera y cuentas por pagar.
+-- ============================================================
+-- 000011: AISLAMIENTO DE CARTERA Y CUENTAS POR PAGAR
+--
+-- Administrador central:
+-- CRUD dentro de su empresa de prueba exclusivamente.
+--
+-- Soporte:
+-- SELECT temporal con autorización por empresa y módulo.
+--
+-- Usuarios empresariales:
+-- Se conservan sus políticas existentes.
+-- ============================================================
 
+-- 1. PREVALIDACIONES
 DO $$
 DECLARE
   v_table text;
-  v_tables text[] := ARRAY[
+BEGIN
+  FOREACH v_table IN ARRAY ARRAY[
     'customer_credit',
     'credit_payments',
     'credit_allocations',
     'supplier_payments',
     'supplier_allocations',
     'purchases'
-  ];
-BEGIN
-  IF to_regprocedure(
-    'public.support_has_active_authorization(uuid,text,text)'
-  ) IS NULL THEN
-    RAISE EXCEPTION 'Falta la función de autorización de soporte.';
-  END IF;
-
-  FOREACH v_table IN ARRAY v_tables LOOP
+  ]
+  LOOP
     IF to_regclass(format('public.%I', v_table)) IS NULL THEN
-      RAISE EXCEPTION 'No existe public.%.', v_table;
+      RAISE EXCEPTION 'No existe public.%', v_table;
     END IF;
 
     IF NOT EXISTS (
@@ -33,7 +40,7 @@ BEGIN
         AND c.relname = v_table
         AND c.relrowsecurity = true
     ) THEN
-      RAISE EXCEPTION 'RLS no está habilitado en public.%.', v_table;
+      RAISE EXCEPTION 'RLS no está habilitado en public.%', v_table;
     END IF;
 
     IF NOT EXISTS (
@@ -43,21 +50,76 @@ BEGIN
         AND table_name = v_table
         AND column_name = 'company_id'
     ) THEN
-      RAISE EXCEPTION 'Falta company_id en public.%.', v_table;
+      RAISE EXCEPTION 'Falta company_id en public.%', v_table;
     END IF;
   END LOOP;
+
+  IF to_regprocedure(
+    'public.support_has_active_authorization(uuid,text,text)'
+  ) IS NULL THEN
+    RAISE EXCEPTION
+      'Falta support_has_active_authorization. Requiere 000003';
+  END IF;
+
+  IF to_regprocedure('public.is_platform_admin()') IS NULL THEN
+    RAISE EXCEPTION 'Falta public.is_platform_admin()';
+  END IF;
+
+  IF to_regprocedure('public.current_company_id()') IS NULL THEN
+    RAISE EXCEPTION 'Falta public.current_company_id()';
+  END IF;
 END;
 $$;
 
--- CARTERA: retirar acceso global.
-DROP POLICY IF EXISTS platform_admin_all ON public.customer_credit;
-DROP POLICY IF EXISTS platform_admin_all ON public.credit_payments;
-DROP POLICY IF EXISTS platform_admin_all ON public.credit_allocations;
+-- 2. PRIVILEGIOS SQL
+-- Estas tres tablas tenían únicamente SELECT para authenticated.
+-- Los permisos SQL son necesarios para que RLS pueda autorizar
+-- las operaciones CRUD del administrador central.
+GRANT SELECT, INSERT, UPDATE, DELETE
+ON TABLE
+  public.customer_credit,
+  public.credit_payments,
+  public.credit_allocations
+TO authenticated;
 
--- CARTERA: lectura temporal autorizada.
+-- Retirar privilegios directos a usuarios anónimos.
+REVOKE ALL PRIVILEGES
+ON TABLE
+  public.customer_credit,
+  public.credit_payments,
+  public.credit_allocations,
+  public.supplier_payments,
+  public.supplier_allocations,
+  public.purchases
+FROM anon;
+
+-- 3. CARTERA: CUSTOMER CREDIT
+DROP POLICY IF EXISTS platform_admin_all
+ON public.customer_credit;
+
+DROP POLICY IF EXISTS platform_admin_company_all
+ON public.customer_credit;
+
+DROP POLICY IF EXISTS support_read_cartera_customer_credit
+ON public.customer_credit;
+
+CREATE POLICY platform_admin_company_all
+ON public.customer_credit
+FOR ALL
+TO authenticated
+USING (
+  public.is_platform_admin()
+  AND company_id = (SELECT public.current_company_id())
+)
+WITH CHECK (
+  public.is_platform_admin()
+  AND company_id = (SELECT public.current_company_id())
+);
+
 CREATE POLICY support_read_cartera_customer_credit
 ON public.customer_credit
-FOR SELECT TO authenticated
+FOR SELECT
+TO authenticated
 USING (
   public.support_has_active_authorization(
     company_id, 'cartera', 'lectura_diagnostico'
@@ -66,11 +128,35 @@ USING (
   public.support_has_active_authorization(
     company_id, 'cartera', 'intervencion_asistida'
   )
+);
+
+-- 4. CARTERA: CREDIT PAYMENTS
+DROP POLICY IF EXISTS platform_admin_all
+ON public.credit_payments;
+
+DROP POLICY IF EXISTS platform_admin_company_all
+ON public.credit_payments;
+
+DROP POLICY IF EXISTS support_read_cartera_credit_payments
+ON public.credit_payments;
+
+CREATE POLICY platform_admin_company_all
+ON public.credit_payments
+FOR ALL
+TO authenticated
+USING (
+  public.is_platform_admin()
+  AND company_id = (SELECT public.current_company_id())
+)
+WITH CHECK (
+  public.is_platform_admin()
+  AND company_id = (SELECT public.current_company_id())
 );
 
 CREATE POLICY support_read_cartera_credit_payments
 ON public.credit_payments
-FOR SELECT TO authenticated
+FOR SELECT
+TO authenticated
 USING (
   public.support_has_active_authorization(
     company_id, 'cartera', 'lectura_diagnostico'
@@ -79,11 +165,35 @@ USING (
   public.support_has_active_authorization(
     company_id, 'cartera', 'intervencion_asistida'
   )
+);
+
+-- 5. CARTERA: CREDIT ALLOCATIONS
+DROP POLICY IF EXISTS platform_admin_all
+ON public.credit_allocations;
+
+DROP POLICY IF EXISTS platform_admin_company_all
+ON public.credit_allocations;
+
+DROP POLICY IF EXISTS support_read_cartera_credit_allocations
+ON public.credit_allocations;
+
+CREATE POLICY platform_admin_company_all
+ON public.credit_allocations
+FOR ALL
+TO authenticated
+USING (
+  public.is_platform_admin()
+  AND company_id = (SELECT public.current_company_id())
+)
+WITH CHECK (
+  public.is_platform_admin()
+  AND company_id = (SELECT public.current_company_id())
 );
 
 CREATE POLICY support_read_cartera_credit_allocations
 ON public.credit_allocations
-FOR SELECT TO authenticated
+FOR SELECT
+TO authenticated
 USING (
   public.support_has_active_authorization(
     company_id, 'cartera', 'lectura_diagnostico'
@@ -94,15 +204,33 @@ USING (
   )
 );
 
--- CUENTAS POR PAGAR: retirar acceso global.
-DROP POLICY IF EXISTS platform_admin_all ON public.supplier_payments;
-DROP POLICY IF EXISTS platform_admin_all ON public.supplier_allocations;
-DROP POLICY IF EXISTS platform_admin_all ON public.purchases;
+-- 6. CUENTAS POR PAGAR: SUPPLIER PAYMENTS
+DROP POLICY IF EXISTS platform_admin_all
+ON public.supplier_payments;
 
--- CUENTAS POR PAGAR: lectura temporal autorizada.
+DROP POLICY IF EXISTS platform_admin_company_all
+ON public.supplier_payments;
+
+DROP POLICY IF EXISTS support_read_payables_supplier_payments
+ON public.supplier_payments;
+
+CREATE POLICY platform_admin_company_all
+ON public.supplier_payments
+FOR ALL
+TO authenticated
+USING (
+  public.is_platform_admin()
+  AND company_id = (SELECT public.current_company_id())
+)
+WITH CHECK (
+  public.is_platform_admin()
+  AND company_id = (SELECT public.current_company_id())
+);
+
 CREATE POLICY support_read_payables_supplier_payments
 ON public.supplier_payments
-FOR SELECT TO authenticated
+FOR SELECT
+TO authenticated
 USING (
   public.support_has_active_authorization(
     company_id, 'payables', 'lectura_diagnostico'
@@ -111,11 +239,35 @@ USING (
   public.support_has_active_authorization(
     company_id, 'payables', 'intervencion_asistida'
   )
+);
+
+-- 7. CUENTAS POR PAGAR: SUPPLIER ALLOCATIONS
+DROP POLICY IF EXISTS platform_admin_all
+ON public.supplier_allocations;
+
+DROP POLICY IF EXISTS platform_admin_company_all
+ON public.supplier_allocations;
+
+DROP POLICY IF EXISTS support_read_payables_supplier_allocations
+ON public.supplier_allocations;
+
+CREATE POLICY platform_admin_company_all
+ON public.supplier_allocations
+FOR ALL
+TO authenticated
+USING (
+  public.is_platform_admin()
+  AND company_id = (SELECT public.current_company_id())
+)
+WITH CHECK (
+  public.is_platform_admin()
+  AND company_id = (SELECT public.current_company_id())
 );
 
 CREATE POLICY support_read_payables_supplier_allocations
 ON public.supplier_allocations
-FOR SELECT TO authenticated
+FOR SELECT
+TO authenticated
 USING (
   public.support_has_active_authorization(
     company_id, 'payables', 'lectura_diagnostico'
@@ -124,11 +276,40 @@ USING (
   public.support_has_active_authorization(
     company_id, 'payables', 'intervencion_asistida'
   )
+);
+
+-- 8. COMPRAS: PURCHASES
+DROP POLICY IF EXISTS platform_admin_all
+ON public.purchases;
+
+DROP POLICY IF EXISTS platform_admin_company_all
+ON public.purchases;
+
+-- Sustituir la política anterior si utilizaba otro nombre
+-- de módulo para la autorización de soporte.
+DROP POLICY IF EXISTS support_purchases_select
+ON public.purchases;
+
+DROP POLICY IF EXISTS support_read_payables_purchases
+ON public.purchases;
+
+CREATE POLICY platform_admin_company_all
+ON public.purchases
+FOR ALL
+TO authenticated
+USING (
+  public.is_platform_admin()
+  AND company_id = (SELECT public.current_company_id())
+)
+WITH CHECK (
+  public.is_platform_admin()
+  AND company_id = (SELECT public.current_company_id())
 );
 
 CREATE POLICY support_read_payables_purchases
 ON public.purchases
-FOR SELECT TO authenticated
+FOR SELECT
+TO authenticated
 USING (
   public.support_has_active_authorization(
     company_id, 'payables', 'lectura_diagnostico'
@@ -139,41 +320,144 @@ USING (
   )
 );
 
--- Verificación.
+-- 9. VERIFICACIÓN ESTRUCTURAL
 DO $$
+DECLARE
+  v_count integer;
+  v_table text;
+  v_qual text;
+  v_check text;
+  v_support_count integer;
 BEGIN
-  IF EXISTS (
-    SELECT 1
-    FROM pg_policies
-    WHERE schemaname = 'public'
-      AND tablename IN (
-        'customer_credit',
-        'credit_payments',
-        'credit_allocations',
-        'supplier_payments',
-        'supplier_allocations',
-        'purchases'
-      )
-      AND policyname = 'platform_admin_all'
-  ) THEN
-    RAISE EXCEPTION 'Quedó una política global platform_admin_all.';
+  -- Seis políticas CRUD del administrador central.
+  SELECT count(*)
+  INTO v_count
+  FROM pg_policies
+  WHERE schemaname = 'public'
+    AND tablename IN (
+      'customer_credit',
+      'credit_payments',
+      'credit_allocations',
+      'supplier_payments',
+      'supplier_allocations',
+      'purchases'
+    )
+    AND policyname = 'platform_admin_company_all'
+    AND cmd = 'ALL';
+
+  IF v_count <> 6 THEN
+    RAISE EXCEPTION
+      'Se esperaban 6 políticas CRUD centrales; encontradas %',
+      v_count;
   END IF;
 
-  IF (
-    SELECT count(*)
+  -- Seis políticas de lectura de soporte.
+  SELECT count(*)
+  INTO v_support_count
+  FROM pg_policies
+  WHERE schemaname = 'public'
+    AND policyname IN (
+      'support_read_cartera_customer_credit',
+      'support_read_cartera_credit_payments',
+      'support_read_cartera_credit_allocations',
+      'support_read_payables_supplier_payments',
+      'support_read_payables_supplier_allocations',
+      'support_read_payables_purchases'
+    )
+    AND cmd = 'SELECT';
+
+  IF v_support_count <> 6 THEN
+    RAISE EXCEPTION
+      'Se esperaban 6 políticas SELECT de soporte; encontradas %',
+      v_support_count;
+  END IF;
+
+  -- Validar aislamiento central por empresa en cada tabla.
+  FOREACH v_table IN ARRAY ARRAY[
+    'customer_credit',
+    'credit_payments',
+    'credit_allocations',
+    'supplier_payments',
+    'supplier_allocations',
+    'purchases'
+  ]
+  LOOP
+    SELECT qual, with_check
+    INTO v_qual, v_check
     FROM pg_policies
     WHERE schemaname = 'public'
-      AND policyname IN (
-        'support_read_cartera_customer_credit',
-        'support_read_cartera_credit_payments',
-        'support_read_cartera_credit_allocations',
-        'support_read_payables_supplier_payments',
-        'support_read_payables_supplier_allocations',
-        'support_read_payables_purchases'
-      )
-  ) <> 6 THEN
-    RAISE EXCEPTION 'No se verificaron las seis políticas de soporte.';
+      AND tablename = v_table
+      AND policyname = 'platform_admin_company_all';
+
+    IF v_qual IS NULL
+       OR v_check IS NULL
+       OR v_qual NOT ILIKE '%is_platform_admin%'
+       OR v_qual NOT ILIKE '%current_company_id%'
+       OR v_check NOT ILIKE '%is_platform_admin%'
+       OR v_check NOT ILIKE '%current_company_id%' THEN
+      RAISE EXCEPTION
+        'Aislamiento central incorrecto en public.%', v_table;
+    END IF;
+  END LOOP;
+
+  -- No debe quedar ninguna política global anterior.
+  SELECT count(*)
+  INTO v_count
+  FROM pg_policies
+  WHERE schemaname = 'public'
+    AND tablename IN (
+      'customer_credit',
+      'credit_payments',
+      'credit_allocations',
+      'supplier_payments',
+      'supplier_allocations',
+      'purchases'
+    )
+    AND policyname = 'platform_admin_all';
+
+  IF v_count <> 0 THEN
+    RAISE EXCEPTION
+      'Persisten políticas globales platform_admin_all';
   END IF;
+
+  -- Verificar privilegios CRUD SQL de authenticated.
+  IF NOT has_table_privilege(
+    'authenticated', 'public.customer_credit', 'SELECT,INSERT,UPDATE,DELETE'
+  ) OR NOT has_table_privilege(
+    'authenticated', 'public.credit_payments', 'SELECT,INSERT,UPDATE,DELETE'
+  ) OR NOT has_table_privilege(
+    'authenticated', 'public.credit_allocations', 'SELECT,INSERT,UPDATE,DELETE'
+  ) OR NOT has_table_privilege(
+    'authenticated', 'public.supplier_payments', 'SELECT,INSERT,UPDATE,DELETE'
+  ) OR NOT has_table_privilege(
+    'authenticated', 'public.supplier_allocations', 'SELECT,INSERT,UPDATE,DELETE'
+  ) OR NOT has_table_privilege(
+    'authenticated', 'public.purchases', 'SELECT,INSERT,UPDATE,DELETE'
+  ) THEN
+    RAISE EXCEPTION
+      'Faltan privilegios CRUD SQL para authenticated en alguna tabla';
+  END IF;
+
+  -- Confirmar que anon no conserva privilegios directos.
+  IF has_table_privilege(
+    'anon', 'public.customer_credit', 'SELECT'
+  ) OR has_table_privilege(
+    'anon', 'public.credit_payments', 'SELECT'
+  ) OR has_table_privilege(
+    'anon', 'public.credit_allocations', 'SELECT'
+  ) OR has_table_privilege(
+    'anon', 'public.supplier_payments', 'SELECT'
+  ) OR has_table_privilege(
+    'anon', 'public.supplier_allocations', 'SELECT'
+  ) OR has_table_privilege(
+    'anon', 'public.purchases', 'SELECT'
+  ) THEN
+    RAISE EXCEPTION
+      'anon conserva privilegios SELECT en una tabla protegida';
+  END IF;
+
+  RAISE NOTICE
+    '000011 validada: CRUD central aislado, soporte SELECT y privilegios anon revocados';
 END;
 $$;
 

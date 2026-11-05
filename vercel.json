@@ -1,0 +1,23 @@
+{
+  "functions": {
+    "api/copilot.ts": { "maxDuration": 30 },
+    "api/admin-sql.ts": { "maxDuration": 30 },
+    "api/store-preview.ts": { "maxDuration": 15 },
+    "api/document-scanner.ts": { "maxDuration": 45 }
+  },
+  "rewrites": [
+    { "source": "/tienda/:store", "destination": "/api/store-preview?store=:store" },
+    { "source": "/catalogo/:store", "destination": "/api/store-preview?store=:store" },
+    {
+      "source": "/",
+      "has": [{ "type": "query", "key": "tienda" }],
+      "destination": "/api/store-preview"
+    },
+    {
+      "source": "/",
+      "has": [{ "type": "query", "key": "catalogo" }],
+      "destination": "/api/store-preview"
+    },
+    { "source": "/((?!api/).*)", "destination": "/index.html" }
+  ]
+}

@@ -1,142 +1,138 @@
-
 -- ============================================================================
--- 000015: Seguridad de dispositivos y sesiones
--- Contable Pro
+-- 000015: SEGURIDAD DE DISPOSITIVOS Y SESIONES
+-- Fecha: 2026-11-05
 --
--- Objetivos:
--- 1. Retirar el bypass global platform_admin_all de devices.
--- 2. Conservar la lectura de dispositivos para administradores de su empresa.
--- 3. Permitir lectura técnica temporal mediante autorización del módulo team.
--- 4. Proteger device_settings y permitir diagnóstico autorizado de solo lectura.
--- 5. No modificar RPC, triggers ni privilegios de escritura.
+-- Administrador central: CRUD limitado a su empresa actual.
+-- Empresa: conserva lectura de dispositivos para sus administradores.
+-- Soporte: lectura temporal autorizada del módulo team.
+-- device_settings: gestión central aislada y soporte de solo lectura.
+-- No modifica RPC, triggers ni privilegios de escritura existentes.
 -- ============================================================================
 
 BEGIN;
 
--- ============================================================================
 -- 1. PREVALIDACIONES
--- ============================================================================
 
 DO $$
+DECLARE
+    v_table TEXT;
 BEGIN
-  IF to_regclass('public.devices') IS NULL THEN
-    RAISE EXCEPTION 'No existe public.devices';
-  END IF;
+    FOREACH v_table IN ARRAY ARRAY['devices', 'device_settings']
+    LOOP
+        IF to_regclass('public.' || v_table) IS NULL THEN
+            RAISE EXCEPTION 'No existe public.%', v_table;
+        END IF;
 
-  IF to_regclass('public.device_settings') IS NULL THEN
-    RAISE EXCEPTION 'No existe public.device_settings';
-  END IF;
+        IF NOT EXISTS (
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = v_table
+              AND column_name = 'company_id'
+              AND data_type = 'uuid'
+        ) THEN
+            RAISE EXCEPTION
+                'Falta company_id UUID en public.%', v_table;
+        END IF;
 
-  IF NOT EXISTS (
-    SELECT 1
-    FROM information_schema.columns
-    WHERE table_schema = 'public'
-      AND table_name = 'devices'
-      AND column_name = 'company_id'
-      AND data_type = 'uuid'
-  ) THEN
-    RAISE EXCEPTION 'devices.company_id no existe o no es UUID';
-  END IF;
+        IF NOT EXISTS (
+            SELECT 1
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'public'
+              AND c.relname = v_table
+              AND c.relrowsecurity = TRUE
+        ) THEN
+            RAISE EXCEPTION 'RLS no está habilitado en public.%', v_table;
+        END IF;
+    END LOOP;
 
-  IF NOT EXISTS (
-    SELECT 1
-    FROM information_schema.columns
-    WHERE table_schema = 'public'
-      AND table_name = 'device_settings'
-      AND column_name = 'company_id'
-      AND data_type = 'uuid'
-  ) THEN
-    RAISE EXCEPTION 'device_settings.company_id no existe o no es UUID';
-  END IF;
-
-  IF NOT EXISTS (
-    SELECT 1
-    FROM pg_class c
-    JOIN pg_namespace n ON n.oid = c.relnamespace
-    WHERE n.nspname = 'public'
-      AND c.relname = 'devices'
-      AND c.relrowsecurity = true
-  ) THEN
-    RAISE EXCEPTION 'RLS no está habilitado en devices';
-  END IF;
-
-  IF NOT EXISTS (
-    SELECT 1
-    FROM pg_class c
-    JOIN pg_namespace n ON n.oid = c.relnamespace
-    WHERE n.nspname = 'public'
-      AND c.relname = 'device_settings'
-      AND c.relrowsecurity = true
-  ) THEN
-    RAISE EXCEPTION 'RLS no está habilitado en device_settings';
-  END IF;
-
-  IF to_regprocedure(
-    'public.support_has_active_authorization(uuid,text,text)'
-  ) IS NULL THEN
-    RAISE EXCEPTION
-      'No existe support_has_active_authorization(uuid,text,text)';
-  END IF;
+    IF to_regprocedure(
+        'public.support_has_active_authorization(uuid,text,text)'
+    ) IS NULL
+       OR to_regprocedure('public.is_platform_admin()') IS NULL
+       OR to_regprocedure('public.current_company_id()') IS NULL
+       OR to_regprocedure('public.my_company()') IS NULL
+       OR to_regprocedure('public.is_manager()') IS NULL THEN
+        RAISE EXCEPTION
+            'Falta una función de seguridad requerida.';
+    END IF;
 END;
 $$;
 
--- ============================================================================
--- 2. DEVICES: RETIRAR BYPASS GLOBAL
--- ============================================================================
+-- 2. ELIMINAR BYPASS GLOBAL
 
-DROP POLICY IF EXISTS platform_admin_all
-ON public.devices;
+DROP POLICY IF EXISTS platform_admin_all ON public.devices;
+DROP POLICY IF EXISTS platform_admin_all ON public.device_settings;
 
--- Se conserva el acceso normal de los administradores de su empresa.
--- Se elimina exclusivamente el bypass global del administrador de plataforma.
+-- 3. DISPOSITIVOS: ADMINISTRACIÓN CENTRAL AISLADA
 
-DROP POLICY IF EXISTS devices_select
-ON public.devices;
+DROP POLICY IF EXISTS platform_admin_company_all ON public.devices;
+
+CREATE POLICY platform_admin_company_all
+ON public.devices
+FOR ALL
+TO authenticated
+USING (
+    public.is_platform_admin()
+    AND company_id = (SELECT public.current_company_id())
+)
+WITH CHECK (
+    public.is_platform_admin()
+    AND company_id = (SELECT public.current_company_id())
+);
+
+-- 4. DISPOSITIVOS: LECTURA NORMAL DE ADMINISTRADORES DE EMPRESA
+-- Se elimina el OR is_platform_admin() que permitía lectura global.
+
+DROP POLICY IF EXISTS devices_select ON public.devices;
 
 CREATE POLICY devices_select
 ON public.devices
 FOR SELECT
 TO authenticated
 USING (
-  company_id = public.my_company()
-  AND public.is_manager()
+    company_id = public.my_company()
+    AND public.is_manager()
 );
 
--- ============================================================================
--- 3. DEVICES: SOPORTE TÉCNICO DE SOLO LECTURA
--- ============================================================================
+-- 5. DISPOSITIVOS: SOPORTE TEMPORAL DE SOLO LECTURA
 
-DROP POLICY IF EXISTS support_read_devices
-ON public.devices;
+DROP POLICY IF EXISTS support_read_devices ON public.devices;
 
 CREATE POLICY support_read_devices
 ON public.devices
 FOR SELECT
 TO authenticated
 USING (
-  public.support_has_active_authorization(
-    company_id,
-    'team',
-    'lectura_diagnostico'
-  )
-  OR
-  public.support_has_active_authorization(
-    company_id,
-    'team',
-    'intervencion_asistida'
-  )
+    public.support_has_active_authorization(
+        company_id, 'team', 'lectura_diagnostico'
+    )
+    OR
+    public.support_has_active_authorization(
+        company_id, 'team', 'intervencion_asistida'
+    )
 );
 
--- ============================================================================
--- 4. DEVICE_SETTINGS: RETIRAR BYPASS GLOBAL
--- ============================================================================
+-- 6. CONFIGURACIÓN: ADMINISTRACIÓN CENTRAL AISLADA
 
-DROP POLICY IF EXISTS platform_admin_all
+DROP POLICY IF EXISTS platform_admin_company_all
 ON public.device_settings;
 
--- No se crea una política general para usuarios de empresa.
--- La configuración se administra mediante las RPC existentes.
--- El soporte únicamente podrá consultar el valor cuando tenga autorización.
+CREATE POLICY platform_admin_company_all
+ON public.device_settings
+FOR ALL
+TO authenticated
+USING (
+    public.is_platform_admin()
+    AND company_id = (SELECT public.current_company_id())
+)
+WITH CHECK (
+    public.is_platform_admin()
+    AND company_id = (SELECT public.current_company_id())
+);
+
+-- 7. CONFIGURACIÓN: SOPORTE TEMPORAL DE SOLO LECTURA
 
 DROP POLICY IF EXISTS support_read_device_settings
 ON public.device_settings;
@@ -146,102 +142,121 @@ ON public.device_settings
 FOR SELECT
 TO authenticated
 USING (
-  public.support_has_active_authorization(
-    company_id,
-    'team',
-    'lectura_diagnostico'
-  )
-  OR
-  public.support_has_active_authorization(
-    company_id,
-    'team',
-    'intervencion_asistida'
-  )
+    public.support_has_active_authorization(
+        company_id, 'team', 'lectura_diagnostico'
+    )
+    OR
+    public.support_has_active_authorization(
+        company_id, 'team', 'intervencion_asistida'
+    )
 );
 
--- ============================================================================
--- 5. VERIFICACIONES FINALES
--- ============================================================================
+-- 8. VERIFICACIONES
 
 DO $$
 DECLARE
-  v_global_policies integer;
-  v_devices_select integer;
-  v_support_devices integer;
-  v_support_settings integer;
-  v_write_support integer;
+    v_global INTEGER;
+    v_admin INTEGER;
+    v_devices_select INTEGER;
+    v_support INTEGER;
+    v_support_write INTEGER;
+    v_rls INTEGER;
 BEGIN
-  SELECT count(*)
-  INTO v_global_policies
-  FROM pg_policies
-  WHERE schemaname = 'public'
-    AND tablename IN ('devices', 'device_settings')
-    AND policyname = 'platform_admin_all';
+    SELECT COUNT(*)
+    INTO v_global
+    FROM pg_policies
+    WHERE schemaname = 'public'
+      AND tablename IN ('devices', 'device_settings')
+      AND policyname = 'platform_admin_all';
 
-  IF v_global_policies <> 0 THEN
-    RAISE EXCEPTION
-      'Todavía existen políticas platform_admin_all en dispositivos';
-  END IF;
+    IF v_global <> 0 THEN
+        RAISE EXCEPTION
+            'Persisten políticas globales platform_admin_all.';
+    END IF;
 
-  SELECT count(*)
-  INTO v_devices_select
-  FROM pg_policies
-  WHERE schemaname = 'public'
-    AND tablename = 'devices'
-    AND policyname = 'devices_select'
-    AND cmd = 'SELECT';
+    SELECT COUNT(*)
+    INTO v_admin
+    FROM pg_policies
+    WHERE schemaname = 'public'
+      AND tablename IN ('devices', 'device_settings')
+      AND policyname = 'platform_admin_company_all'
+      AND cmd = 'ALL'
+      AND qual LIKE '%is_platform_admin()%'
+      AND qual LIKE '%current_company_id()%'
+      AND with_check LIKE '%is_platform_admin()%'
+      AND with_check LIKE '%current_company_id()%';
 
-  IF v_devices_select <> 1 THEN
-    RAISE EXCEPTION
-      'No quedó correctamente instalada devices_select';
-  END IF;
+    IF v_admin <> 2 THEN
+        RAISE EXCEPTION
+            'Se esperaban 2 políticas centrales aisladas; existen %.',
+            v_admin;
+    END IF;
 
-  SELECT count(*)
-  INTO v_support_devices
-  FROM pg_policies
-  WHERE schemaname = 'public'
-    AND tablename = 'devices'
-    AND policyname = 'support_read_devices'
-    AND cmd = 'SELECT';
+    SELECT COUNT(*)
+    INTO v_devices_select
+    FROM pg_policies
+    WHERE schemaname = 'public'
+      AND tablename = 'devices'
+      AND policyname = 'devices_select'
+      AND cmd = 'SELECT'
+      AND qual NOT LIKE '%is_platform_admin()%';
 
-  IF v_support_devices <> 1 THEN
-    RAISE EXCEPTION
-      'No quedó correctamente instalada support_read_devices';
-  END IF;
+    IF v_devices_select <> 1 THEN
+        RAISE EXCEPTION
+            'La política normal devices_select no quedó correctamente aislada.';
+    END IF;
 
-  SELECT count(*)
-  INTO v_support_settings
-  FROM pg_policies
-  WHERE schemaname = 'public'
-    AND tablename = 'device_settings'
-    AND policyname = 'support_read_device_settings'
-    AND cmd = 'SELECT';
+    SELECT COUNT(*)
+    INTO v_support
+    FROM pg_policies
+    WHERE schemaname = 'public'
+      AND (
+          (tablename = 'devices'
+           AND policyname = 'support_read_devices'
+           AND cmd = 'SELECT')
+          OR
+          (tablename = 'device_settings'
+           AND policyname = 'support_read_device_settings'
+           AND cmd = 'SELECT')
+      );
 
-  IF v_support_settings <> 1 THEN
-    RAISE EXCEPTION
-      'No quedó correctamente instalada support_read_device_settings';
-  END IF;
+    IF v_support <> 2 THEN
+        RAISE EXCEPTION
+            'Se esperaban 2 políticas SELECT de soporte; existen %.',
+            v_support;
+    END IF;
 
-  SELECT count(*)
-  INTO v_write_support
-  FROM pg_policies
-  WHERE schemaname = 'public'
-    AND tablename IN ('devices', 'device_settings')
-    AND policyname IN (
-      'support_read_devices',
-      'support_read_device_settings'
-    )
-    AND cmd <> 'SELECT';
+    SELECT COUNT(*)
+    INTO v_support_write
+    FROM pg_policies
+    WHERE schemaname = 'public'
+      AND tablename IN ('devices', 'device_settings')
+      AND policyname IN (
+          'support_read_devices',
+          'support_read_device_settings'
+      )
+      AND cmd <> 'SELECT';
 
-  IF v_write_support <> 0 THEN
-    RAISE EXCEPTION
-      'Se detectó una política de soporte con permisos distintos de SELECT';
-  END IF;
+    IF v_support_write <> 0 THEN
+        RAISE EXCEPTION
+            'Soporte tiene una política distinta de SELECT.';
+    END IF;
+
+    SELECT COUNT(*)
+    INTO v_rls
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public'
+      AND c.relname IN ('devices', 'device_settings')
+      AND c.relrowsecurity = TRUE;
+
+    IF v_rls <> 2 THEN
+        RAISE EXCEPTION
+            'RLS debe permanecer activo en ambas tablas.';
+    END IF;
 END;
 $$;
 
 COMMIT;
 
--- ============================================================================
--- FIN 000015
--- ============================================================================
+-- FIN MIGRACION 000015

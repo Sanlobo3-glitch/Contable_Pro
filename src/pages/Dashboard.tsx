@@ -34,6 +34,7 @@ import {
   ShieldAlert,
   ArrowRight,
   CalendarClock,
+  FileSpreadsheet,
 } from 'lucide-react'
 import { useCurrency, fmtDate, fmtNum } from '../lib/currency'
 import { cacheGet, cacheSet } from '../lib/offlineQueue'
@@ -965,6 +966,18 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
               Despacho contable
             </button>
           )}
+          {onNavigate && (
+            <button
+              type="button"
+              onClick={() => onNavigate('dispatch_history')}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-200 bg-white text-xs font-medium text-slate-700 hover:bg-slate-50 transition-colors whitespace-nowrap shrink-0"
+              title="Historial de despachos por producto, cliente y tienda con reporte para imprimir"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5 text-indigo-600" />
+              <span className="hidden sm:inline">Trazabilidad y despachos</span>
+              <span className="sm:hidden">Despachos</span>
+            </button>
+          )}
           {onNavigate && canSell && (
             <button
               type="button"
@@ -1067,7 +1080,7 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
             <div className="flex items-center gap-2 flex-wrap">
               <button
                 type="button"
-                onClick={() => onNavigate('omnichannel_inbox')}
+                onClick={() => onNavigate('omnichannel')}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-600/90 hover:bg-indigo-500 text-xs font-semibold text-white shadow-xs transition-colors cursor-pointer"
               >
                 <Boxes className="w-3.5 h-3.5" />
@@ -1080,7 +1093,7 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
               </button>
               <button
                 type="button"
-                onClick={() => onNavigate('ai_action_hub')}
+                onClick={() => onNavigate('ai_actions')}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-purple-600/90 hover:bg-purple-500 text-xs font-semibold text-white shadow-xs transition-colors cursor-pointer"
               >
                 <Bot className="w-3.5 h-3.5" />
@@ -1097,7 +1110,7 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5 pt-3.5">
             <button
               type="button"
-              onClick={() => onNavigate('omnichannel_inbox')}
+              onClick={() => onNavigate('omnichannel')}
               className="text-left p-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 transition-colors cursor-pointer"
             >
               <div className="flex items-center justify-between text-xs text-indigo-200 mb-1">
@@ -1112,7 +1125,7 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
 
             <button
               type="button"
-              onClick={() => onNavigate('ai_action_hub')}
+              onClick={() => onNavigate('ai_actions')}
               className="text-left p-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 transition-colors cursor-pointer"
             >
               <div className="flex items-center justify-between text-xs text-indigo-200 mb-1">
@@ -1127,7 +1140,7 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
 
             <button
               type="button"
-              onClick={() => onNavigate('branch_rebalancing')}
+              onClick={() => onNavigate('branch_balance')}
               className="text-left p-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 transition-colors cursor-pointer"
             >
               <div className="flex items-center justify-between text-xs text-indigo-200 mb-1">
@@ -1157,7 +1170,7 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
 
             <button
               type="button"
-              onClick={() => onNavigate('compliance_monitor')}
+              onClick={() => onNavigate('compliance')}
               className="text-left p-2.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 transition-colors cursor-pointer col-span-2 sm:col-span-1"
             >
               <div className="flex items-center justify-between text-xs text-indigo-200 mb-1">

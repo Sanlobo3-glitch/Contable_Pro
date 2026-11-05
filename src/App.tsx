@@ -93,6 +93,7 @@ import Layaways from './pages/Layaways'
 import ExchangesWarranties from './pages/ExchangesWarranties'
 import BankReconciliation from './pages/BankReconciliation'
 import PriceShield from './pages/PriceShield'
+import DispatchHistory from './pages/DispatchHistory'
 import {
   registerDevice,
   touchDevice,
@@ -184,6 +185,9 @@ function isPageAllowedForRole(
       return canViewAccounting(role)
     case 'erpbridge':
       return canViewAccounting(role) || isCompanyManager(role)
+    case 'dispatch_history':
+    case 'despachos':
+    case 'trazabilidad':
     case 'support':
       return true
     case 'team':
@@ -633,19 +637,26 @@ function AppContent() {
     command: <CommandCenter onNavigate={navigateToPage} />,
     routeplan: <RoutePlanner onNavigate={navigateToPage} />,
     dispatch: <RouteDispatchPage onNavigate={navigateToPage} />,
+    dispatch_history: <DispatchHistory onNavigate={navigateToPage} />,
+    despachos: <DispatchHistory onNavigate={navigateToPage} />,
+    trazabilidad: <DispatchHistory onNavigate={navigateToPage} />,
     ask: <AskCopilot onNavigate={navigateToPage} />,
     lots: <Lots onNavigate={navigateToPage} />,
     support: <TechSupport currentOriginPage={safeCurrent} onNavigate={navigateToPage} />,
     sqlcenter: <SqlAdminCenter />,
     manual: <Manual role={user.role} onNavigate={navigateToPage} />,
     omnichannel: <OmnichannelInbox onNavigate={navigateToPage} />,
+    omnichannel_inbox: <OmnichannelInbox onNavigate={navigateToPage} />,
     ai_actions: <AiActionHub onNavigate={navigateToPage} />,
+    ai_action_hub: <AiActionHub onNavigate={navigateToPage} />,
     branch_balance: <BranchRebalancing onNavigate={navigateToPage} />,
+    branch_rebalancing: <BranchRebalancing onNavigate={navigateToPage} />,
     supplier_intel: <SupplierIntelligence onNavigate={navigateToPage} />,
     anomaly_detector: <AnomalyDetector onNavigate={navigateToPage} />,
     equipment_assets: <EquipmentAssets onNavigate={navigateToPage} />,
     employee_portal: <EmployeePortal onNavigate={navigateToPage} />,
     compliance: <ComplianceMonitor onNavigate={navigateToPage} />,
+    compliance_monitor: <ComplianceMonitor onNavigate={navigateToPage} />,
     api_ecosystem: <ApiEcosystem onNavigate={navigateToPage} />,
   }
 

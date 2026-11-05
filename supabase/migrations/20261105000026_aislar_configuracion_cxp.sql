@@ -1,292 +1,370 @@
 BEGIN;
 
--- ============================================================
--- 000026 - AISLAR CONFIGURACIÓN DE CUENTAS POR PAGAR (CXP)
--- Proyecto: Contable_Pro
+-- =========================================================
+-- 000025: AISLAR CONFIGURACION DE CUENTAS POR COBRAR
 --
--- Objetivos:
--- 1. Eliminar el acceso global platform_admin_all.
--- 2. Revocar acceso directo de anon y authenticated.
--- 3. Mantener las funciones RPC de configuración.
--- 4. Mantener el trigger de validación de suscripción.
--- 5. Conservar la política de lectura limitada por empresa.
--- 6. No modificar privilegios de service_role.
--- ============================================================
+-- Administrador central:
+--   Acceso exclusivamente a la empresa de su propio perfil.
+--
+-- Administradores y responsables de empresa:
+--   Conservan el acceso a su propia empresa.
+--
+-- Soporte técnico:
+--   Sin acceso directo ni autorización automática.
+--
+-- Se conservan las protecciones de suscripción y triggers.
+-- =========================================================
 
 DO $$
 DECLARE
-    v_table_owner text;
-    v_policy_count integer;
-    v_trigger_count integer;
+    v_rls boolean;
 BEGIN
-    -- Verificar existencia de tabla.
-    IF to_regclass('public.cxp_settings') IS NULL THEN
-        RAISE EXCEPTION 'No existe public.cxp_settings';
+    IF to_regclass('public.cxc_settings') IS NULL THEN
+        RAISE EXCEPTION 'No existe public.cxc_settings';
     END IF;
 
-    -- Verificar RLS y propietario.
-    SELECT pg_get_userbyid(c.relowner)
-    INTO v_table_owner
-    FROM pg_class c
-    WHERE c.oid = 'public.cxp_settings'::regclass;
+    SELECT relrowsecurity
+    INTO v_rls
+    FROM pg_class
+    WHERE oid = 'public.cxc_settings'::regclass;
 
-    IF NOT (
-        SELECT relrowsecurity
-        FROM pg_class
-        WHERE oid = 'public.cxp_settings'::regclass
+    IF v_rls IS DISTINCT FROM TRUE THEN
+        RAISE EXCEPTION 'RLS no está habilitado en cxc_settings';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'cxc_settings'
+          AND column_name = 'company_id'
+          AND data_type = 'uuid'
     ) THEN
-        RAISE EXCEPTION 'RLS no está habilitado en cxp_settings';
+        RAISE EXCEPTION 'company_id no existe o no es UUID';
     END IF;
 
-    IF v_table_owner <> 'postgres' THEN
-        RAISE EXCEPTION
-            'Propietario inesperado de cxp_settings: %',
-            v_table_owner;
-    END IF;
-
-    -- Verificar política de lectura por empresa.
     IF NOT EXISTS (
         SELECT 1
         FROM pg_policies
         WHERE schemaname = 'public'
-          AND tablename = 'cxp_settings'
-          AND policyname = 'cxp_settings_select'
+          AND tablename = 'cxc_settings'
+          AND policyname = 'cxc_settings_select'
           AND cmd = 'SELECT'
           AND qual = '(company_id = current_company_id())'
     ) THEN
-        RAISE EXCEPTION
-            'No existe la política de lectura por empresa esperada';
+        RAISE EXCEPTION 'La política original de lectura no coincide';
     END IF;
 
-    -- Verificar política global que se va a retirar.
     IF NOT EXISTS (
         SELECT 1
         FROM pg_policies
         WHERE schemaname = 'public'
-          AND tablename = 'cxp_settings'
+          AND tablename = 'cxc_settings'
           AND policyname = 'platform_admin_all'
           AND cmd = 'ALL'
     ) THEN
-        RAISE EXCEPTION
-            'No existe platform_admin_all; revisar estado antes de continuar';
+        RAISE EXCEPTION 'No existe la política global esperada';
     END IF;
 
-    -- No continuar si aparecieron políticas adicionales no auditadas.
-    SELECT count(*)
-    INTO v_policy_count
-    FROM pg_policies
-    WHERE schemaname = 'public'
-      AND tablename = 'cxp_settings';
-
-    IF v_policy_count <> 2 THEN
-        RAISE EXCEPTION
-            'Número inesperado de políticas en cxp_settings: %',
-            v_policy_count;
+    IF (
+        SELECT count(*)
+        FROM pg_policies
+        WHERE schemaname = 'public'
+          AND tablename = 'cxc_settings'
+    ) <> 2 THEN
+        RAISE EXCEPTION 'Hay políticas adicionales no auditadas';
     END IF;
 
-    -- Verificar RPC de lectura.
+    IF has_table_privilege(
+        'anon', 'public.cxc_settings', 'SELECT'
+    ) OR has_table_privilege(
+        'authenticated', 'public.cxc_settings', 'INSERT'
+    ) OR has_table_privilege(
+        'authenticated', 'public.cxc_settings', 'UPDATE'
+    ) OR has_table_privilege(
+        'authenticated', 'public.cxc_settings', 'DELETE'
+    ) THEN
+        RAISE EXCEPTION 'Hay privilegios directos inesperados';
+    END IF;
+
+    IF to_regprocedure('public.cxc_config()') IS NULL
+       OR to_regprocedure('public.cxc_save_account(uuid)') IS NULL THEN
+        RAISE EXCEPTION 'Faltan las funciones CXC';
+    END IF;
+
+    IF NOT (
+        SELECT prosecdef
+        FROM pg_proc
+        WHERE oid = 'public.cxc_config()'::regprocedure
+    ) OR NOT (
+        SELECT prosecdef
+        FROM pg_proc
+        WHERE oid = 'public.cxc_save_account(uuid)'::regprocedure
+    ) THEN
+        RAISE EXCEPTION 'Las funciones deben conservar SECURITY DEFINER';
+    END IF;
+
+    IF NOT has_function_privilege(
+        'authenticated',
+        'public.cxc_config()',
+        'EXECUTE'
+    ) OR NOT has_function_privilege(
+        'authenticated',
+        'public.cxc_save_account(uuid)',
+        'EXECUTE'
+    ) THEN
+        RAISE EXCEPTION 'Falta EXECUTE en las funciones CXC';
+    END IF;
+
     IF NOT EXISTS (
         SELECT 1
-        FROM pg_proc p
-        JOIN pg_namespace n ON n.oid = p.pronamespace
-        WHERE n.nspname = 'public'
-          AND p.proname = 'cxp_config'
-          AND pg_get_function_identity_arguments(p.oid) = ''
-          AND p.prosecdef
-          AND has_function_privilege('authenticated', p.oid, 'EXECUTE')
-    ) THEN
-        RAISE EXCEPTION
-            'cxp_config() no existe como SECURITY DEFINER o no es ejecutable por authenticated';
-    END IF;
-
-    -- Verificar RPC de escritura.
-    IF NOT EXISTS (
+        FROM pg_trigger
+        WHERE tgrelid = 'public.cxc_settings'::regclass
+          AND tgname = 'cxc_settings_check_subscription'
+          AND NOT tgisinternal
+    ) OR NOT EXISTS (
         SELECT 1
-        FROM pg_proc p
-        JOIN pg_namespace n ON n.oid = p.pronamespace
-        WHERE n.nspname = 'public'
-          AND p.proname = 'cxp_save_account'
-          AND pg_get_function_identity_arguments(p.oid) = 'p_account uuid'
-          AND p.prosecdef
-          AND has_function_privilege('authenticated', p.oid, 'EXECUTE')
+        FROM pg_trigger
+        WHERE tgrelid = 'public.cxc_settings'::regclass
+          AND tgname = 'trg_company_subscription_guard'
+          AND NOT tgisinternal
     ) THEN
-        RAISE EXCEPTION
-            'cxp_save_account(uuid) no existe como SECURITY DEFINER o no es ejecutable por authenticated';
-    END IF;
-
-    -- Verificar trigger de protección de suscripción.
-    SELECT count(*)
-    INTO v_trigger_count
-    FROM pg_trigger t
-    WHERE t.tgrelid = 'public.cxp_settings'::regclass
-      AND t.tgname = 'trg_company_subscription_guard'
-      AND NOT t.tgisinternal;
-
-    IF v_trigger_count <> 1 THEN
-        RAISE EXCEPTION
-            'No se encontró el trigger trg_company_subscription_guard';
-    END IF;
-
-    -- Verificar que service_role conserva sus permisos esenciales.
-    IF NOT has_table_privilege(
-        'service_role',
-        'public.cxp_settings',
-        'SELECT'
-    ) OR NOT has_table_privilege(
-        'service_role',
-        'public.cxp_settings',
-        'INSERT'
-    ) OR NOT has_table_privilege(
-        'service_role',
-        'public.cxp_settings',
-        'UPDATE'
-    ) OR NOT has_table_privilege(
-        'service_role',
-        'public.cxp_settings',
-        'DELETE'
-    ) THEN
-        RAISE EXCEPTION
-            'service_role no conserva los privilegios requeridos';
+        RAISE EXCEPTION 'Faltan triggers originales de protección';
     END IF;
 END;
 $$;
 
--- ============================================================
--- 1. Retirar acceso global de administrador de plataforma.
--- ============================================================
+-- =========================================================
+-- ELIMINAR ACCESO GLOBAL INSEGURO
+-- Se conserva la lectura por empresa.
+-- =========================================================
 
 DROP POLICY platform_admin_all
-ON public.cxp_settings;
+ON public.cxc_settings;
 
--- ============================================================
--- 2. Cerrar acceso directo a la tabla.
---
--- La aplicación utiliza:
---   cxp_config()
---   cxp_save_account(uuid)
---
--- Ambas funciones son SECURITY DEFINER y validan el contexto
--- de empresa mediante _ctx().
---
--- No se revocan los permisos de service_role.
--- ============================================================
+-- =========================================================
+-- RPC DE CONSULTA CXC
+-- El administrador central solo consulta su empresa activa.
+-- Los gestores siguen limitados a su propia empresa.
+-- =========================================================
 
-REVOKE ALL PRIVILEGES
-ON TABLE public.cxp_settings
-FROM PUBLIC, anon, authenticated;
+CREATE OR REPLACE FUNCTION public.cxc_config()
+RETURNS jsonb
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path TO 'pg_catalog', 'public', 'pg_temp'
+AS $function$
+DECLARE
+    v_co uuid;
+    v_acc uuid;
+    v_active boolean := false;
+    a public.acc_accounts%rowtype;
+BEGIN
+    IF auth.uid() IS NULL
+       OR NOT (
+           public.is_platform_admin()
+           OR public.is_company_manager()
+       ) THEN
+        RAISE EXCEPTION 'No autorizado';
+    END IF;
 
--- ============================================================
--- 3. Verificaciones finales.
--- ============================================================
+    v_co := public.current_company_id();
+
+    IF v_co IS NULL THEN
+        RAISE EXCEPTION 'El usuario no tiene empresa activa';
+    END IF;
+
+    SELECT account_id
+    INTO v_acc
+    FROM public.cxc_settings
+    WHERE company_id = v_co;
+
+    SELECT coalesce(active, false)
+    INTO v_active
+    FROM public.acc_settings
+    WHERE company_id = v_co;
+
+    IF v_acc IS NOT NULL THEN
+        SELECT *
+        INTO a
+        FROM public.acc_accounts
+        WHERE id = v_acc
+          AND company_id = v_co;
+    END IF;
+
+    RETURN jsonb_build_object(
+        'account_id', v_acc,
+        'account_code', a.code,
+        'account_name', a.name,
+        'accounting_active', coalesce(v_active, false)
+    );
+END;
+$function$;
+
+-- =========================================================
+-- RPC DE CONFIGURACIÓN CXC
+-- No acepta cuentas pertenecientes a otra empresa.
+-- =========================================================
+
+CREATE OR REPLACE FUNCTION public.cxc_save_account(
+    p_account uuid
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'pg_catalog', 'public', 'pg_temp'
+AS $function$
+DECLARE
+    v_co uuid;
+    v_res jsonb := NULL;
+BEGIN
+    IF auth.uid() IS NULL
+       OR NOT (
+           public.is_platform_admin()
+           OR public.is_company_manager()
+       ) THEN
+        RAISE EXCEPTION 'No autorizado';
+    END IF;
+
+    v_co := public.current_company_id();
+
+    IF v_co IS NULL THEN
+        RAISE EXCEPTION 'El usuario no tiene empresa activa';
+    END IF;
+
+    IF p_account IS NOT NULL
+       AND NOT EXISTS (
+           SELECT 1
+           FROM public.acc_accounts
+           WHERE id = p_account
+             AND company_id = v_co
+             AND is_postable = TRUE
+             AND active = TRUE
+       ) THEN
+        RAISE EXCEPTION
+          'La cuenta elegida no existe, está inactiva o no admite movimientos';
+    END IF;
+
+    INSERT INTO public.cxc_settings (
+        company_id,
+        account_id
+    )
+    VALUES (
+        v_co,
+        p_account
+    )
+    ON CONFLICT (company_id)
+    DO UPDATE SET
+        account_id = EXCLUDED.account_id,
+        updated_at = now();
+
+    -- Conserva la contabilización de pendientes.
+    IF p_account IS NOT NULL
+       AND EXISTS (
+           SELECT 1
+           FROM public.acc_settings
+           WHERE company_id = v_co
+             AND active = TRUE
+       ) THEN
+        BEGIN
+            v_res := public.acc_post_pending();
+        EXCEPTION WHEN OTHERS THEN
+            v_res := NULL;
+        END;
+    END IF;
+
+    RETURN coalesce(v_res, '{}'::jsonb);
+END;
+$function$;
+
+-- =========================================================
+-- VERIFICACIÓN FINAL
+-- =========================================================
 
 DO $$
-DECLARE
-    v_privilege text;
-    v_role text;
 BEGIN
-    -- No debe quedar la política global.
     IF EXISTS (
         SELECT 1
         FROM pg_policies
         WHERE schemaname = 'public'
-          AND tablename = 'cxp_settings'
+          AND tablename = 'cxc_settings'
           AND policyname = 'platform_admin_all'
     ) THEN
-        RAISE EXCEPTION
-            'Sigue existiendo platform_admin_all';
+        RAISE EXCEPTION 'Sigue existiendo la política global';
     END IF;
 
-    -- Debe conservarse la política de lectura por empresa.
     IF NOT EXISTS (
         SELECT 1
         FROM pg_policies
         WHERE schemaname = 'public'
-          AND tablename = 'cxp_settings'
-          AND policyname = 'cxp_settings_select'
+          AND tablename = 'cxc_settings'
+          AND policyname = 'cxc_settings_select'
           AND cmd = 'SELECT'
           AND qual = '(company_id = current_company_id())'
     ) THEN
-        RAISE EXCEPTION
-            'Se perdió la política cxp_settings_select';
+        RAISE EXCEPTION 'Se perdió la lectura aislada por empresa';
     END IF;
 
-    -- No debe haber privilegios directos para anon ni authenticated.
-    FOREACH v_role IN ARRAY ARRAY['anon', 'authenticated']
-    LOOP
-        FOREACH v_privilege IN ARRAY ARRAY[
-            'SELECT',
-            'INSERT',
-            'UPDATE',
-            'DELETE',
-            'TRUNCATE',
-            'REFERENCES',
-            'TRIGGER'
-        ]
-        LOOP
-            IF has_table_privilege(
-                v_role,
-                'public.cxp_settings',
-                v_privilege
-            ) THEN
-                RAISE EXCEPTION
-                    'Permanece el privilegio % para % en cxp_settings',
-                    v_privilege,
-                    v_role;
-            END IF;
-        END LOOP;
-    END LOOP;
+    IF (
+        SELECT count(*)
+        FROM pg_policies
+        WHERE schemaname = 'public'
+          AND tablename = 'cxc_settings'
+    ) <> 1 THEN
+        RAISE EXCEPTION 'El conjunto final de políticas es inesperado';
+    END IF;
 
-    -- Las funciones RPC deben continuar disponibles.
-    IF NOT has_function_privilege(
-        'authenticated',
-        'public.cxp_config()',
-        'EXECUTE'
+    IF has_table_privilege(
+        'anon', 'public.cxc_settings', 'SELECT'
+    ) OR has_table_privilege(
+        'authenticated', 'public.cxc_settings', 'INSERT'
+    ) OR has_table_privilege(
+        'authenticated', 'public.cxc_settings', 'UPDATE'
+    ) OR has_table_privilege(
+        'authenticated', 'public.cxc_settings', 'DELETE'
     ) THEN
-        RAISE EXCEPTION
-            'Se perdió EXECUTE de authenticated sobre cxp_config()';
+        RAISE EXCEPTION 'Se detectaron privilegios directos inesperados';
     END IF;
 
     IF NOT has_function_privilege(
         'authenticated',
-        'public.cxp_save_account(uuid)',
+        'public.cxc_config()',
+        'EXECUTE'
+    ) OR NOT has_function_privilege(
+        'authenticated',
+        'public.cxc_save_account(uuid)',
         'EXECUTE'
     ) THEN
-        RAISE EXCEPTION
-            'Se perdió EXECUTE de authenticated sobre cxp_save_account(uuid)';
+        RAISE EXCEPTION 'Se perdió EXECUTE en las funciones CXC';
     END IF;
 
-    -- El trigger debe permanecer.
+    IF NOT (
+        SELECT prosecdef
+        FROM pg_proc
+        WHERE oid = 'public.cxc_config()'::regprocedure
+    ) OR NOT (
+        SELECT prosecdef
+        FROM pg_proc
+        WHERE oid = 'public.cxc_save_account(uuid)'::regprocedure
+    ) THEN
+        RAISE EXCEPTION 'Las RPC perdieron SECURITY DEFINER';
+    END IF;
+
     IF NOT EXISTS (
         SELECT 1
         FROM pg_trigger
-        WHERE tgrelid = 'public.cxp_settings'::regclass
+        WHERE tgrelid = 'public.cxc_settings'::regclass
+          AND tgname = 'cxc_settings_check_subscription'
+          AND NOT tgisinternal
+    ) OR NOT EXISTS (
+        SELECT 1
+        FROM pg_trigger
+        WHERE tgrelid = 'public.cxc_settings'::regclass
           AND tgname = 'trg_company_subscription_guard'
           AND NOT tgisinternal
     ) THEN
-        RAISE EXCEPTION
-            'Desapareció el trigger de protección de suscripción';
-    END IF;
-
-    -- service_role debe conservar acceso.
-    IF NOT has_table_privilege(
-        'service_role',
-        'public.cxp_settings',
-        'SELECT'
-    ) OR NOT has_table_privilege(
-        'service_role',
-        'public.cxp_settings',
-        'INSERT'
-    ) OR NOT has_table_privilege(
-        'service_role',
-        'public.cxp_settings',
-        'UPDATE'
-    ) OR NOT has_table_privilege(
-        'service_role',
-        'public.cxp_settings',
-        'DELETE'
-    ) THEN
-        RAISE EXCEPTION
-            'Se alteraron los privilegios de service_role';
+        RAISE EXCEPTION 'Se perdió un trigger de protección';
     END IF;
 END;
 $$;

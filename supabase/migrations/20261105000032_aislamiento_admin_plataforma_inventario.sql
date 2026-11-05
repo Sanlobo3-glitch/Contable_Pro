@@ -1,67 +1,49 @@
--- ============================================================
--- 000032: AISLAMIENTO DEL ADMINISTRADOR CENTRAL EN INVENTARIO
--- Dependencia: funciones y tablas existentes de Contable_Pro.
---
--- El administrador de plataforma no obtiene acceso operativo
--- a una empresa por tener company_id en su perfil.
---
--- Se preservan los roles operativos de empresa.
--- ============================================================
-
 BEGIN;
 
--- ------------------------------------------------------------
+-- ============================================================
+-- 000032: INVENTARIO AISLADO POR EMPRESA
+-- Administrador central: acceso operativo solo a su empresa.
+-- Gestores: conservan sus permisos empresariales.
+-- Soporte: conserva autorización temporal y auditada.
+-- ============================================================
+
 -- 1. PREVALIDACIÓN
--- ------------------------------------------------------------
 
 DO $$
 BEGIN
-  IF to_regprocedure('public.is_platform_admin()') IS NULL THEN
-    RAISE EXCEPTION 'No existe public.is_platform_admin().';
-  END IF;
-
-  IF to_regprocedure('public.current_company_id()') IS NULL THEN
-    RAISE EXCEPTION 'No existe public.current_company_id().';
-  END IF;
-
-  IF to_regprocedure('public.can_manage_inventory()') IS NULL THEN
-    RAISE EXCEPTION 'No existe public.can_manage_inventory().';
+  IF to_regprocedure('public.is_platform_admin()') IS NULL
+     OR to_regprocedure('public.current_company_id()') IS NULL
+     OR to_regprocedure('public.can_manage_inventory()') IS NULL THEN
+    RAISE EXCEPTION 'Faltan funciones de autorización';
   END IF;
 
   IF to_regclass('public.inventory_transfer_items') IS NULL
      OR to_regclass('public.inventory_transfers') IS NULL THEN
-    RAISE EXCEPTION 'Faltan tablas de traslados de inventario.';
+    RAISE EXCEPTION 'Faltan tablas de traslados';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema='public'
+      AND table_name='inventory_transfer_items'
+      AND column_name='company_id'
+      AND data_type='uuid'
+  ) OR NOT EXISTS (
+    SELECT 1 FROM information_schema.columns
+    WHERE table_schema='public'
+      AND table_name='inventory_transfers'
+      AND column_name='company_id'
+      AND data_type='uuid'
+  ) THEN
+    RAISE EXCEPTION 'Falta company_id UUID en tablas de traslados';
   END IF;
 END;
 $$;
 
--- ------------------------------------------------------------
--- 2. AISLAR current_company_id()
--- ------------------------------------------------------------
+-- 2. CONSERVAR current_company_id()
+-- No se modifica: debe seguir devolviendo la empresa del perfil.
 
-CREATE OR REPLACE FUNCTION public.current_company_id()
-RETURNS uuid
-LANGUAGE sql
-STABLE
-SECURITY DEFINER
-SET search_path TO ''
-AS $function$
-  SELECT
-    CASE
-      WHEN public.is_platform_admin() THEN NULL::uuid
-      ELSE (
-        SELECT p.company_id
-        FROM public.profiles p
-        WHERE p.id = auth.uid()
-          AND p.active = true
-        LIMIT 1
-      )
-    END;
-$function$;
-
--- ------------------------------------------------------------
--- 3. RESTRINGIR GESTIÓN DE INVENTARIO
--- ------------------------------------------------------------
+-- 3. AUTORIZACIÓN DE INVENTARIO LIMITADA A LA EMPRESA PROPIA
 
 CREATE OR REPLACE FUNCTION public.can_manage_inventory()
 RETURNS boolean
@@ -72,151 +54,140 @@ SET search_path TO ''
 AS $function$
   SELECT
     auth.uid() IS NOT NULL
-    AND NOT public.is_platform_admin()
     AND EXISTS (
       SELECT 1
       FROM public.profiles p
-      WHERE p.id = auth.uid()
-        AND p.active = true
+      WHERE p.id=auth.uid()
+        AND p.active=true
         AND p.company_id IS NOT NULL
-        AND p.role IN (
-          'dueno',
-          'admin_empresa',
-          'gerente',
-          'almacen'
+        AND p.company_id=public.current_company_id()
+        AND (
+          public.is_platform_admin()
+          OR (
+            NOT public.is_platform_admin()
+            AND p.role IN (
+              'admin',
+              'dueno',
+              'admin_empresa',
+              'gerente',
+              'almacen'
+            )
+          )
         )
     );
 $function$;
 
--- ------------------------------------------------------------
--- 4. CORREGIR VALIDACIÓN DE DETALLES DE TRASLADOS
--- ------------------------------------------------------------
+-- 4. DETALLES DE TRASLADOS: INSERT EN BORRADOR
 
 DROP POLICY IF EXISTS inventory_transfer_items_insert_draft
 ON public.inventory_transfer_items;
 
 CREATE POLICY inventory_transfer_items_insert_draft
 ON public.inventory_transfer_items
-FOR INSERT
-TO authenticated
+FOR INSERT TO authenticated
 WITH CHECK (
-  company_id = public.current_company_id()
+  company_id=public.current_company_id()
   AND public.can_manage_inventory()
   AND EXISTS (
     SELECT 1
     FROM public.inventory_transfers t
-    WHERE t.id = inventory_transfer_items.transfer_id
-      AND t.company_id = inventory_transfer_items.company_id
-      AND t.company_id = public.current_company_id()
-      AND t.status = 'draft'
+    WHERE t.id=inventory_transfer_items.transfer_id
+      AND t.company_id=inventory_transfer_items.company_id
+      AND t.company_id=public.current_company_id()
+      AND t.status='draft'
   )
 );
+
+-- 5. DETALLES DE TRASLADOS: UPDATE EN BORRADOR
 
 DROP POLICY IF EXISTS inventory_transfer_items_update_draft
 ON public.inventory_transfer_items;
 
 CREATE POLICY inventory_transfer_items_update_draft
 ON public.inventory_transfer_items
-FOR UPDATE
-TO authenticated
+FOR UPDATE TO authenticated
 USING (
-  company_id = public.current_company_id()
+  company_id=public.current_company_id()
   AND public.can_manage_inventory()
   AND EXISTS (
     SELECT 1
     FROM public.inventory_transfers t
-    WHERE t.id = inventory_transfer_items.transfer_id
-      AND t.company_id = inventory_transfer_items.company_id
-      AND t.company_id = public.current_company_id()
-      AND t.status = 'draft'
+    WHERE t.id=inventory_transfer_items.transfer_id
+      AND t.company_id=inventory_transfer_items.company_id
+      AND t.company_id=public.current_company_id()
+      AND t.status='draft'
   )
 )
 WITH CHECK (
-  company_id = public.current_company_id()
+  company_id=public.current_company_id()
   AND public.can_manage_inventory()
   AND EXISTS (
     SELECT 1
     FROM public.inventory_transfers t
-    WHERE t.id = inventory_transfer_items.transfer_id
-      AND t.company_id = inventory_transfer_items.company_id
-      AND t.company_id = public.current_company_id()
-      AND t.status = 'draft'
+    WHERE t.id=inventory_transfer_items.transfer_id
+      AND t.company_id=inventory_transfer_items.company_id
+      AND t.company_id=public.current_company_id()
+      AND t.status='draft'
   )
 );
+
+-- 6. DETALLES DE TRASLADOS: DELETE EN BORRADOR
 
 DROP POLICY IF EXISTS inventory_transfer_items_delete_draft
 ON public.inventory_transfer_items;
 
 CREATE POLICY inventory_transfer_items_delete_draft
 ON public.inventory_transfer_items
-FOR DELETE
-TO authenticated
+FOR DELETE TO authenticated
 USING (
-  company_id = public.current_company_id()
+  company_id=public.current_company_id()
   AND public.can_manage_inventory()
   AND EXISTS (
     SELECT 1
     FROM public.inventory_transfers t
-    WHERE t.id = inventory_transfer_items.transfer_id
-      AND t.company_id = inventory_transfer_items.company_id
-      AND t.company_id = public.current_company_id()
-      AND t.status = 'draft'
+    WHERE t.id=inventory_transfer_items.transfer_id
+      AND t.company_id=inventory_transfer_items.company_id
+      AND t.company_id=public.current_company_id()
+      AND t.status='draft'
   )
 );
 
--- ------------------------------------------------------------
--- 5. VALIDACIONES DE SEGURIDAD
--- ------------------------------------------------------------
+-- 7. VALIDACIONES
 
 DO $$
-DECLARE
-  v_admin_company uuid;
 BEGIN
-  IF public.can_manage_inventory() THEN
-    RAISE EXCEPTION
-      'El usuario actual no debe obtener gestión de inventario como administrador central.';
-  END IF;
-
-  IF public.current_company_id() IS NOT NULL
+  IF public.current_company_id() IS NULL
      AND public.is_platform_admin() THEN
     RAISE EXCEPTION
-      'El administrador central sigue obteniendo una empresa operativa.';
+      'El administrador central no tiene empresa de prueba asignada';
+  END IF;
+
+  IF public.is_platform_admin()
+     AND NOT public.can_manage_inventory() THEN
+    RAISE EXCEPTION
+      'El administrador central no tiene acceso a inventario en su empresa';
   END IF;
 
   IF NOT EXISTS (
-    SELECT 1
-    FROM pg_policies
-    WHERE schemaname = 'public'
-      AND tablename = 'inventory_transfer_items'
-      AND policyname = 'inventory_transfer_items_insert_draft'
-      AND cmd = 'INSERT'
+    SELECT 1 FROM pg_policies
+    WHERE schemaname='public'
+      AND tablename='inventory_transfer_items'
+      AND policyname='inventory_transfer_items_insert_draft'
+      AND cmd='INSERT'
+  ) OR NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname='public'
+      AND tablename='inventory_transfer_items'
+      AND policyname='inventory_transfer_items_update_draft'
+      AND cmd='UPDATE'
+  ) OR NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname='public'
+      AND tablename='inventory_transfer_items'
+      AND policyname='inventory_transfer_items_delete_draft'
+      AND cmd='DELETE'
   ) THEN
-    RAISE EXCEPTION
-      'No quedó creada la política INSERT de detalles de traslados.';
-  END IF;
-
-  IF NOT EXISTS (
-    SELECT 1
-    FROM pg_policies
-    WHERE schemaname = 'public'
-      AND tablename = 'inventory_transfer_items'
-      AND policyname = 'inventory_transfer_items_update_draft'
-      AND cmd = 'UPDATE'
-  ) THEN
-    RAISE EXCEPTION
-      'No quedó creada la política UPDATE de detalles de traslados.';
-  END IF;
-
-  IF NOT EXISTS (
-    SELECT 1
-    FROM pg_policies
-    WHERE schemaname = 'public'
-      AND tablename = 'inventory_transfer_items'
-      AND policyname = 'inventory_transfer_items_delete_draft'
-      AND cmd = 'DELETE'
-  ) THEN
-    RAISE EXCEPTION
-      'No quedó creada la política DELETE de detalles de traslados.';
+    RAISE EXCEPTION 'Faltan políticas de traslados';
   END IF;
 END;
 $$;

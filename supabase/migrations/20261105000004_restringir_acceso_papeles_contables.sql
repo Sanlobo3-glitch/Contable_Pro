@@ -1,8 +1,10 @@
+
 -- ============================================================================
 -- INVENTARIO PRO · MIGRACIÓN 000004
 -- Protección de papeles de trabajo del contador
 --
--- Elimina el acceso global de soporte técnico a cpa_working_papers.
+-- Elimina el acceso global de soporte técnico y del administrador
+-- de plataforma a cpa_working_papers.
 -- Conserva los permisos de los roles autorizados dentro de su empresa.
 --
 -- No modifica funciones contables.
@@ -12,21 +14,11 @@
 
 BEGIN;
 
--- ============================================================================
 -- 1. ASEGURAR RLS
--- ============================================================================
-
 ALTER TABLE public.cpa_working_papers
 ENABLE ROW LEVEL SECURITY;
 
-
--- ============================================================================
 -- 2. REEMPLAZAR LA POLÍTICA ANTERIOR
---
--- Se elimina is_tech_support().
--- El usuario debe tener perfil activo y pertenecer a la misma empresa.
--- ============================================================================
-
 DROP POLICY IF EXISTS cpa_working_papers_access
 ON public.cpa_working_papers;
 
@@ -43,7 +35,6 @@ USING (
           AND p.active = true
           AND p.company_id = cpa_working_papers.company_id
           AND p.role IN (
-              'admin',
               'dueno',
               'admin_empresa',
               'gerente',
@@ -59,7 +50,6 @@ WITH CHECK (
           AND p.active = true
           AND p.company_id = cpa_working_papers.company_id
           AND p.role IN (
-              'admin',
               'dueno',
               'admin_empresa',
               'gerente',
@@ -68,15 +58,7 @@ WITH CHECK (
     )
 );
 
-
--- ============================================================================
 -- 3. RESTRINGIR PRIVILEGIOS DE TABLA
---
--- anon: sin acceso.
--- authenticated: solo SELECT, INSERT y UPDATE.
--- Se conserva el acceso administrativo interno de PostgreSQL/Supabase.
--- ============================================================================
-
 REVOKE ALL PRIVILEGES
 ON TABLE public.cpa_working_papers
 FROM PUBLIC, anon, authenticated;
@@ -85,15 +67,13 @@ GRANT SELECT, INSERT, UPDATE
 ON TABLE public.cpa_working_papers
 TO authenticated;
 
-
--- ============================================================================
 -- 4. VERIFICACIÓN ESTRUCTURAL
--- ============================================================================
-
 DO $verification$
 DECLARE
     v_rls_enabled boolean;
     v_policy_count integer;
+    v_policy_qual text;
+    v_policy_check text;
 BEGIN
     SELECT c.relrowsecurity
     INTO v_rls_enabled
@@ -108,18 +88,30 @@ BEGIN
             'Verificación fallida: RLS no está habilitado';
     END IF;
 
-    SELECT count(*)
-    INTO v_policy_count
-    FROM pg_policies AS p
-    WHERE p.schemaname = 'public'
-      AND p.tablename = 'cpa_working_papers'
-      AND p.policyname = 'cpa_working_papers_access'
-      AND p.cmd = 'ALL'
-      AND p.roles = ARRAY['authenticated']::name[];
+    SELECT count(*), min(qual), min(with_check)
+    INTO v_policy_count, v_policy_qual, v_policy_check
+    FROM pg_policies
+    WHERE schemaname = 'public'
+      AND tablename = 'cpa_working_papers'
+      AND policyname = 'cpa_working_papers_access'
+      AND cmd = 'ALL'
+      AND roles = ARRAY['authenticated']::name[];
 
     IF v_policy_count <> 1 THEN
         RAISE EXCEPTION
             'Verificación fallida: política de acceso no encontrada';
+    END IF;
+
+    IF v_policy_qual NOT LIKE '%contador%'
+       OR v_policy_check NOT LIKE '%contador%' THEN
+        RAISE EXCEPTION
+            'Verificación fallida: condición de roles incorrecta';
+    END IF;
+
+    IF v_policy_qual LIKE '%admin%'
+       OR v_policy_check LIKE '%admin%' THEN
+        RAISE EXCEPTION
+            'Verificación fallida: se detectó un rol administrativo global';
     END IF;
 END;
 $verification$;

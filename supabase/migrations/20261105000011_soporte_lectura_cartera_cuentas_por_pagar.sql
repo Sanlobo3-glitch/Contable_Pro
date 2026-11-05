@@ -1,17 +1,7 @@
 BEGIN;
 
--- ============================================================
--- 000011: Soporte temporal de lectura para cartera y CxP
---
--- Modulos confirmados en src/lib/navigation.ts:
---   cartera  = Cartera (fiado)
---   payables = Cuentas por pagar
---
--- No concede INSERT, UPDATE ni DELETE.
--- No modifica RPC financieras ni _ctx().
--- ============================================================
+-- 000011: Soporte temporal de lectura para cartera y cuentas por pagar.
 
--- 1. PREVALIDACIONES
 DO $$
 DECLARE
   v_table text;
@@ -27,14 +17,12 @@ BEGIN
   IF to_regprocedure(
     'public.support_has_active_authorization(uuid,text,text)'
   ) IS NULL THEN
-    RAISE EXCEPTION
-      'Falta public.support_has_active_authorization(uuid,text,text). Aplicación cancelada.';
+    RAISE EXCEPTION 'Falta la función de autorización de soporte.';
   END IF;
 
   FOREACH v_table IN ARRAY v_tables LOOP
     IF to_regclass(format('public.%I', v_table)) IS NULL THEN
-      RAISE EXCEPTION
-        'No existe public.%. Aplicación cancelada.', v_table;
+      RAISE EXCEPTION 'No existe public.%.', v_table;
     END IF;
 
     IF NOT EXISTS (
@@ -45,9 +33,7 @@ BEGIN
         AND c.relname = v_table
         AND c.relrowsecurity = true
     ) THEN
-      RAISE EXCEPTION
-        'RLS no está habilitado en public.%. Aplicación cancelada.',
-        v_table;
+      RAISE EXCEPTION 'RLS no está habilitado en public.%.', v_table;
     END IF;
 
     IF NOT EXISTS (
@@ -57,206 +43,122 @@ BEGIN
         AND table_name = v_table
         AND column_name = 'company_id'
     ) THEN
-      RAISE EXCEPTION
-        'Falta company_id en public.%. Aplicación cancelada.',
-        v_table;
+      RAISE EXCEPTION 'Falta company_id en public.%.', v_table;
     END IF;
   END LOOP;
 END;
 $$;
 
--- ============================================================
--- 2. CARTERA DE CLIENTES
--- ============================================================
+-- CARTERA: retirar acceso global.
+DROP POLICY IF EXISTS platform_admin_all ON public.customer_credit;
+DROP POLICY IF EXISTS platform_admin_all ON public.credit_payments;
+DROP POLICY IF EXISTS platform_admin_all ON public.credit_allocations;
 
--- Retirar el acceso global del administrador de plataforma.
-DROP POLICY IF EXISTS platform_admin_all
-  ON public.customer_credit;
-
-DROP POLICY IF EXISTS platform_admin_all
-  ON public.credit_payments;
-
-DROP POLICY IF EXISTS platform_admin_all
-  ON public.credit_allocations;
-
--- Lectura temporal únicamente con autorización vigente
--- para el módulo exacto "cartera".
+-- CARTERA: lectura temporal autorizada.
 CREATE POLICY support_read_cartera_customer_credit
 ON public.customer_credit
-FOR SELECT
-TO authenticated
+FOR SELECT TO authenticated
 USING (
-  company_id = (SELECT public.current_company_id())
-  AND (
-    public.support_has_active_authorization(
-      company_id,
-      'cartera',
-      'lectura_diagnostico'
-    )
-    OR
-    public.support_has_active_authorization(
-      company_id,
-      'cartera',
-      'intervencion_asistida'
-    )
+  public.support_has_active_authorization(
+    company_id, 'cartera', 'lectura_diagnostico'
+  )
+  OR
+  public.support_has_active_authorization(
+    company_id, 'cartera', 'intervencion_asistida'
   )
 );
 
 CREATE POLICY support_read_cartera_credit_payments
 ON public.credit_payments
-FOR SELECT
-TO authenticated
+FOR SELECT TO authenticated
 USING (
-  company_id = (SELECT public.current_company_id())
-  AND (
-    public.support_has_active_authorization(
-      company_id,
-      'cartera',
-      'lectura_diagnostico'
-    )
-    OR
-    public.support_has_active_authorization(
-      company_id,
-      'cartera',
-      'intervencion_asistida'
-    )
+  public.support_has_active_authorization(
+    company_id, 'cartera', 'lectura_diagnostico'
+  )
+  OR
+  public.support_has_active_authorization(
+    company_id, 'cartera', 'intervencion_asistida'
   )
 );
 
 CREATE POLICY support_read_cartera_credit_allocations
 ON public.credit_allocations
-FOR SELECT
-TO authenticated
+FOR SELECT TO authenticated
 USING (
-  company_id = (SELECT public.current_company_id())
-  AND (
-    public.support_has_active_authorization(
-      company_id,
-      'cartera',
-      'lectura_diagnostico'
-    )
-    OR
-    public.support_has_active_authorization(
-      company_id,
-      'cartera',
-      'intervencion_asistida'
-    )
+  public.support_has_active_authorization(
+    company_id, 'cartera', 'lectura_diagnostico'
+  )
+  OR
+  public.support_has_active_authorization(
+    company_id, 'cartera', 'intervencion_asistida'
   )
 );
 
--- ============================================================
--- 3. CUENTAS POR PAGAR
--- ============================================================
+-- CUENTAS POR PAGAR: retirar acceso global.
+DROP POLICY IF EXISTS platform_admin_all ON public.supplier_payments;
+DROP POLICY IF EXISTS platform_admin_all ON public.supplier_allocations;
+DROP POLICY IF EXISTS platform_admin_all ON public.purchases;
 
-DROP POLICY IF EXISTS platform_admin_all
-  ON public.supplier_payments;
-
-DROP POLICY IF EXISTS platform_admin_all
-  ON public.supplier_allocations;
-
-DROP POLICY IF EXISTS platform_admin_all
-  ON public.purchases;
-
--- Lectura temporal únicamente con autorización vigente
--- para el módulo exacto "payables".
+-- CUENTAS POR PAGAR: lectura temporal autorizada.
 CREATE POLICY support_read_payables_supplier_payments
 ON public.supplier_payments
-FOR SELECT
-TO authenticated
+FOR SELECT TO authenticated
 USING (
-  company_id = (SELECT public.current_company_id())
-  AND (
-    public.support_has_active_authorization(
-      company_id,
-      'payables',
-      'lectura_diagnostico'
-    )
-    OR
-    public.support_has_active_authorization(
-      company_id,
-      'payables',
-      'intervencion_asistida'
-    )
+  public.support_has_active_authorization(
+    company_id, 'payables', 'lectura_diagnostico'
+  )
+  OR
+  public.support_has_active_authorization(
+    company_id, 'payables', 'intervencion_asistida'
   )
 );
 
 CREATE POLICY support_read_payables_supplier_allocations
 ON public.supplier_allocations
-FOR SELECT
-TO authenticated
+FOR SELECT TO authenticated
 USING (
-  company_id = (SELECT public.current_company_id())
-  AND (
-    public.support_has_active_authorization(
-      company_id,
-      'payables',
-      'lectura_diagnostico'
-    )
-    OR
-    public.support_has_active_authorization(
-      company_id,
-      'payables',
-      'intervencion_asistida'
-    )
+  public.support_has_active_authorization(
+    company_id, 'payables', 'lectura_diagnostico'
+  )
+  OR
+  public.support_has_active_authorization(
+    company_id, 'payables', 'intervencion_asistida'
   )
 );
 
 CREATE POLICY support_read_payables_purchases
 ON public.purchases
-FOR SELECT
-TO authenticated
+FOR SELECT TO authenticated
 USING (
-  company_id = (SELECT public.current_company_id())
-  AND (
-    public.support_has_active_authorization(
-      company_id,
-      'payables',
-      'lectura_diagnostico'
-    )
-    OR
-    public.support_has_active_authorization(
-      company_id,
-      'payables',
-      'intervencion_asistida'
-    )
+  public.support_has_active_authorization(
+    company_id, 'payables', 'lectura_diagnostico'
+  )
+  OR
+  public.support_has_active_authorization(
+    company_id, 'payables', 'intervencion_asistida'
   )
 );
 
--- ============================================================
--- 4. VERIFICACIÓN DE SEGURIDAD
--- ============================================================
-
+-- Verificación.
 DO $$
-DECLARE
-  v_table text;
-  v_tables text[] := ARRAY[
-    'customer_credit',
-    'credit_payments',
-    'credit_allocations',
-    'supplier_payments',
-    'supplier_allocations',
-    'purchases'
-  ];
-  v_remaining integer;
 BEGIN
-  FOREACH v_table IN ARRAY v_tables LOOP
-
-    -- Confirmar que no quedó la política global.
-    SELECT count(*)
-    INTO v_remaining
+  IF EXISTS (
+    SELECT 1
     FROM pg_policies
     WHERE schemaname = 'public'
-      AND tablename = v_table
-      AND policyname = 'platform_admin_all';
+      AND tablename IN (
+        'customer_credit',
+        'credit_payments',
+        'credit_allocations',
+        'supplier_payments',
+        'supplier_allocations',
+        'purchases'
+      )
+      AND policyname = 'platform_admin_all'
+  ) THEN
+    RAISE EXCEPTION 'Quedó una política global platform_admin_all.';
+  END IF;
 
-    IF v_remaining > 0 THEN
-      RAISE EXCEPTION
-        'Permanece platform_admin_all en public.%.', v_table;
-    END IF;
-
-  END LOOP;
-
-  -- Confirmar las seis políticas temporales.
   IF (
     SELECT count(*)
     FROM pg_policies
@@ -270,12 +172,8 @@ BEGIN
         'support_read_payables_purchases'
       )
   ) <> 6 THEN
-    RAISE EXCEPTION
-      'No se pudieron verificar las seis políticas temporales de soporte.';
+    RAISE EXCEPTION 'No se verificaron las seis políticas de soporte.';
   END IF;
-
-  RAISE NOTICE
-    'Migración 000011: verificaciones completadas correctamente.';
 END;
 $$;
 

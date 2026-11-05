@@ -1,3 +1,4 @@
+
 -- ============================================================
 -- 000034: ACCESO ADMINISTRATIVO AISLADO AL CATALOGO
 --          Y LECTURA DEL HISTORIAL DE INVENTARIO

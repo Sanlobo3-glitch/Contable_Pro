@@ -1,173 +1,134 @@
-
 BEGIN;
 
 -- ============================================================
 -- 000018: AISLAMIENTO Y SOPORTE TECNICO DE CATEGORIAS
--- Tabla: public.categories
--- Modulo real: categories
+-- Administrador central: CRUD solo en su empresa actual.
+-- Usuarios: conservar políticas empresariales.
+-- Soporte: conservar lectura temporal autorizada.
 -- ============================================================
 
--- 1. PREVALIDACIONES
 DO $$
 BEGIN
-  IF to_regclass('public.categories') IS NULL THEN
-    RAISE EXCEPTION 'No existe public.categories';
-  END IF;
+    IF to_regclass('public.categories') IS NULL THEN
+        RAISE EXCEPTION 'No existe public.categories';
+    END IF;
 
-  IF to_regprocedure(
-    'public.support_has_active_authorization(uuid,text,text)'
-  ) IS NULL THEN
-    RAISE EXCEPTION 'No existe la funcion de autorizacion tecnica';
-  END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_class
+        WHERE oid = 'public.categories'::regclass
+          AND relrowsecurity = TRUE
+    ) THEN
+        RAISE EXCEPTION 'RLS no está activo';
+    END IF;
 
-  IF NOT EXISTS (
-    SELECT 1
-    FROM pg_class c
-    JOIN pg_namespace n ON n.oid = c.relnamespace
-    WHERE n.nspname = 'public'
-      AND c.relname = 'categories'
-      AND c.relrowsecurity = true
-  ) THEN
-    RAISE EXCEPTION 'RLS no esta habilitado en categories';
-  END IF;
+    IF to_regprocedure('public.is_platform_admin()') IS NULL
+       OR to_regprocedure('public.current_company_id()') IS NULL
+       OR to_regprocedure(
+          'public.support_has_active_authorization(uuid,text,text)'
+       ) IS NULL THEN
+        RAISE EXCEPTION 'Faltan funciones de seguridad';
+    END IF;
 
-  IF NOT EXISTS (
-    SELECT 1
-    FROM information_schema.columns
-    WHERE table_schema = 'public'
-      AND table_name = 'categories'
-      AND column_name = 'company_id'
-      AND data_type = 'uuid'
-  ) THEN
-    RAISE EXCEPTION 'categories no tiene company_id UUID';
-  END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies
+        WHERE schemaname='public'
+          AND tablename='categories'
+          AND policyname='categories_select'
+          AND cmd='SELECT'
+    ) OR NOT EXISTS (
+        SELECT 1 FROM pg_policies
+        WHERE schemaname='public'
+          AND tablename='categories'
+          AND policyname='categories_write'
+          AND cmd='ALL'
+    ) THEN
+        RAISE EXCEPTION 'Faltan políticas empresariales originales';
+    END IF;
 
-  IF NOT EXISTS (
-    SELECT 1
-    FROM pg_policies
-    WHERE schemaname = 'public'
-      AND tablename = 'categories'
-      AND policyname = 'categories_select'
-      AND cmd = 'SELECT'
-  ) THEN
-    RAISE EXCEPTION 'Falta categories_select';
-  END IF;
-
-  IF NOT EXISTS (
-    SELECT 1
-    FROM pg_policies
-    WHERE schemaname = 'public'
-      AND tablename = 'categories'
-      AND policyname = 'categories_write'
-      AND cmd = 'ALL'
-  ) THEN
-    RAISE EXCEPTION 'Falta categories_write';
-  END IF;
-
-  IF NOT EXISTS (
-    SELECT 1
-    FROM pg_policies
-    WHERE schemaname = 'public'
-      AND tablename = 'categories'
-      AND policyname = 'platform_admin_all'
-      AND cmd = 'ALL'
-  ) THEN
-    RAISE EXCEPTION 'No se encontro platform_admin_all';
-  END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies
+        WHERE schemaname='public'
+          AND tablename='categories'
+          AND policyname='support_categories_select'
+          AND cmd='SELECT'
+    ) THEN
+        RAISE EXCEPTION 'Falta la política de soporte existente';
+    END IF;
 END;
 $$;
 
--- 2. ELIMINAR EL BYPASS GLOBAL
-DROP POLICY platform_admin_all ON public.categories;
-
--- 3. LECTURA TECNICA CON AUTORIZACION TEMPORAL
-DROP POLICY IF EXISTS support_read_categories
+-- Acceso central limitado a la empresa actual.
+DROP POLICY IF EXISTS platform_admin_all
 ON public.categories;
 
-CREATE POLICY support_read_categories
+DROP POLICY IF EXISTS platform_admin_company_all
+ON public.categories;
+
+CREATE POLICY platform_admin_company_all
 ON public.categories
-FOR SELECT
+FOR ALL
 TO authenticated
 USING (
-  public.support_has_active_authorization(
-    company_id,
-    'categories',
-    'lectura_diagnostico'
-  )
-  OR
-  public.support_has_active_authorization(
-    company_id,
-    'categories',
-    'intervencion_asistida'
-  )
+    public.is_platform_admin()
+    AND company_id = (SELECT public.current_company_id())
+)
+WITH CHECK (
+    public.is_platform_admin()
+    AND company_id = (SELECT public.current_company_id())
 );
 
--- 4. VERIFICACIONES
+-- Las políticas empresariales y de soporte existentes
+-- permanecen intactas.
+
+-- Verificaciones.
 DO $$
 DECLARE
-  v_global integer;
-  v_support integer;
-  v_select integer;
-  v_write integer;
-  v_anon integer;
+    v_admin INTEGER;
+    v_global INTEGER;
 BEGIN
-  SELECT count(*)
-  INTO v_global
-  FROM pg_policies
-  WHERE schemaname = 'public'
-    AND tablename = 'categories'
-    AND policyname = 'platform_admin_all';
+    SELECT COUNT(*) INTO v_admin
+    FROM pg_policies
+    WHERE schemaname='public'
+      AND tablename='categories'
+      AND policyname='platform_admin_company_all'
+      AND cmd='ALL'
+      AND qual LIKE '%is_platform_admin()%'
+      AND qual LIKE '%current_company_id()%'
+      AND with_check LIKE '%is_platform_admin()%'
+      AND with_check LIKE '%current_company_id()%';
 
-  IF v_global <> 0 THEN
-    RAISE EXCEPTION 'Permanece el acceso global';
-  END IF;
+    IF v_admin <> 1 THEN
+        RAISE EXCEPTION 'Política central aislada incorrecta';
+    END IF;
 
-  SELECT count(*)
-  INTO v_support
-  FROM pg_policies
-  WHERE schemaname = 'public'
-    AND tablename = 'categories'
-    AND policyname = 'support_read_categories'
-    AND cmd = 'SELECT';
+    SELECT COUNT(*) INTO v_global
+    FROM pg_policies
+    WHERE schemaname='public'
+      AND tablename='categories'
+      AND policyname='platform_admin_all';
 
-  IF v_support <> 1 THEN
-    RAISE EXCEPTION 'No se creo correctamente la politica tecnica';
-  END IF;
+    IF v_global <> 0 THEN
+        RAISE EXCEPTION 'Persiste bypass global';
+    END IF;
 
-  SELECT count(*)
-  INTO v_select
-  FROM pg_policies
-  WHERE schemaname = 'public'
-    AND tablename = 'categories'
-    AND policyname = 'categories_select'
-    AND cmd = 'SELECT';
+    IF NOT has_table_privilege('authenticated','public.categories','SELECT')
+       OR NOT has_table_privilege('authenticated','public.categories','INSERT')
+       OR NOT has_table_privilege('authenticated','public.categories','UPDATE')
+       OR NOT has_table_privilege('authenticated','public.categories','DELETE')
+    THEN
+        RAISE EXCEPTION 'Faltan privilegios CRUD';
+    END IF;
 
-  IF v_select <> 1 THEN
-    RAISE EXCEPTION 'Se altero la politica original de lectura';
-  END IF;
-
-  SELECT count(*)
-  INTO v_write
-  FROM pg_policies
-  WHERE schemaname = 'public'
-    AND tablename = 'categories'
-    AND policyname = 'categories_write'
-    AND cmd = 'ALL';
-
-  IF v_write <> 1 THEN
-    RAISE EXCEPTION 'Se altero la politica original de escritura';
-  END IF;
-
-  SELECT count(*)
-  INTO v_anon
-  FROM information_schema.role_table_grants
-  WHERE table_schema = 'public'
-    AND table_name = 'categories'
-    AND grantee = 'anon';
-
-  IF v_anon <> 0 THEN
-    RAISE EXCEPTION 'Se detectaron privilegios anon inesperados';
-  END IF;
+    IF has_table_privilege('anon','public.categories','SELECT')
+       OR has_table_privilege('anon','public.categories','INSERT')
+       OR has_table_privilege('anon','public.categories','UPDATE')
+       OR has_table_privilege('anon','public.categories','DELETE')
+       OR has_table_privilege('anon','public.categories','TRUNCATE')
+       OR has_table_privilege('anon','public.categories','REFERENCES')
+       OR has_table_privilege('anon','public.categories','TRIGGER')
+    THEN
+        RAISE EXCEPTION 'anon conserva privilegios inesperados';
+    END IF;
 END;
 $$;
 

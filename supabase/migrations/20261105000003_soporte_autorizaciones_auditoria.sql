@@ -1,12 +1,11 @@
 
 -- ============================================================================
 -- INVENTARIO PRO · MIGRACIÓN 000003
--- Autorizaciones independientes y auditoría de soporte técnico
+-- Autorizaciones temporales, auditoría y gestión técnica protegida
 --
--- IMPORTANTE:
--- Esta migración crea la base de autorización y auditoría.
--- No elimina todavía los bypass de las políticas RLS antiguas.
+-- No elimina todavía las políticas RLS antiguas.
 -- No modifica admin_ejecutar_migracion_sql.
+-- No concede acceso general a datos de empresas.
 -- ============================================================================
 
 BEGIN;
@@ -17,28 +16,17 @@ BEGIN;
 
 CREATE TABLE IF NOT EXISTS public.support_authorizations (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-
     ticket_id uuid NOT NULL
         REFERENCES public.support_tickets(id) ON DELETE CASCADE,
-
     company_id uuid NOT NULL,
-
-    granted_by uuid NOT NULL
-        REFERENCES auth.users(id),
-
-    technician_id uuid NOT NULL
-        REFERENCES auth.users(id),
-
+    granted_by uuid NOT NULL REFERENCES auth.users(id),
+    technician_id uuid NOT NULL REFERENCES auth.users(id),
     module_name text NOT NULL,
-
     authorization_scope text NOT NULL
-        CHECK (
-            authorization_scope IN (
-                'lectura_diagnostico',
-                'intervencion_asistida'
-            )
-        ),
-
+        CHECK (authorization_scope IN (
+            'lectura_diagnostico',
+            'intervencion_asistida'
+        )),
     granted_at timestamptz NOT NULL DEFAULT now(),
     expires_at timestamptz NOT NULL,
     revoked_at timestamptz,
@@ -68,37 +56,26 @@ FROM PUBLIC, anon, authenticated;
 
 
 -- ============================================================================
--- 2. AUDITORÍA DE SOPORTE
+-- 2. AUDITORÍA DE ACCESO TÉCNICO
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS public.support_access_audit (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-
     ticket_id uuid
         REFERENCES public.support_tickets(id) ON DELETE SET NULL,
-
     authorization_id uuid
         REFERENCES public.support_authorizations(id) ON DELETE SET NULL,
-
     company_id uuid,
-
-    actor_id uuid
-        REFERENCES auth.users(id) ON DELETE SET NULL,
-
+    actor_id uuid REFERENCES auth.users(id) ON DELETE SET NULL,
     event_type text NOT NULL
-        CHECK (
-            event_type IN (
-                'authorization_granted',
-                'authorization_revoked',
-                'access_validated'
-            )
-        ),
-
+        CHECK (event_type IN (
+            'authorization_granted',
+            'authorization_revoked',
+            'access_validated'
+        )),
     module_name text,
     authorization_scope text,
-
     event_metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
-
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
@@ -115,7 +92,14 @@ FROM PUBLIC, anon, authenticated;
 
 
 -- ============================================================================
--- 3. CONCEDER AUTORIZACIÓN TEMPORAL
+-- 3. CONCEDER AUTORIZACIÓN
+--
+-- Si p_technician_id es NULL:
+--   1. Busca un perfil activo con rol tecnico.
+--   2. Si no existe, busca la cuenta maestra autorizada.
+--   3. Si no existe destinatario válido, rechaza la operación.
+--
+-- Nunca selecciona un usuario arbitrario.
 -- ============================================================================
 
 CREATE OR REPLACE FUNCTION public.support_grant_ticket_authorization(
@@ -130,33 +114,24 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path TO ''
 AS $function$
-
 DECLARE
     v_ticket public.support_tickets%ROWTYPE;
-
     v_actor_role text;
     v_actor_company uuid;
     v_actor_active boolean;
 
+    v_tech_id uuid;
     v_tech_role text;
     v_tech_name text;
     v_tech_email text;
-
-    v_is_platform_admin boolean;
+    v_tech_platform_admin boolean := false;
 
     v_expires timestamptz;
     v_auth_id uuid;
     v_code text;
-
 BEGIN
-
     IF auth.uid() IS NULL THEN
         RAISE EXCEPTION 'Se requiere una sesión autenticada';
-    END IF;
-
-    IF p_technician_id IS NULL
-       OR p_technician_id = auth.uid() THEN
-        RAISE EXCEPTION 'El técnico debe ser otro usuario autorizado';
     END IF;
 
     IF p_scope NOT IN (
@@ -178,20 +153,14 @@ BEGIN
             'La autorización debe durar entre 1 y 168 horas';
     END IF;
 
-
-    -- Verificar que quien autoriza tenga un perfil activo.
-
-    SELECT role, company_id, active
+    SELECT p.role, p.company_id, p.active
     INTO v_actor_role, v_actor_company, v_actor_active
-    FROM public.profiles
-    WHERE id = auth.uid();
+    FROM public.profiles p
+    WHERE p.id = auth.uid();
 
     IF v_actor_active IS DISTINCT FROM true THEN
         RAISE EXCEPTION 'Usuario inactivo o sin perfil';
     END IF;
-
-
-    -- Bloquear el ticket mientras se autoriza.
 
     SELECT *
     INTO v_ticket
@@ -208,8 +177,10 @@ BEGIN
         RAISE EXCEPTION 'La solicitud no pertenece a tu empresa';
     END IF;
 
-
-    -- Solo puede autorizar el solicitante o un responsable empresarial.
+    IF v_ticket.status IN ('resuelto', 'cerrado') THEN
+        RAISE EXCEPTION
+            'No se puede autorizar una solicitud resuelta o cerrada';
+    END IF;
 
     IF v_ticket.user_id IS DISTINCT FROM auth.uid()
        AND COALESCE(v_actor_role, '') NOT IN (
@@ -221,53 +192,96 @@ BEGIN
             'No tienes permiso para autorizar esta solicitud';
     END IF;
 
-
-    -- Consultar la identidad del técnico.
-
-    SELECT role, full_name, email
-    INTO v_tech_role, v_tech_name, v_tech_email
-    FROM public.profiles
-    WHERE id = p_technician_id
-      AND active = true;
-
-    IF NOT FOUND THEN
-        RAISE EXCEPTION 'Técnico no encontrado o inactivo';
+    -- Resolver destinatario técnico.
+    IF p_technician_id IS NULL THEN
+        SELECT
+            p.id,
+            p.role,
+            p.full_name,
+            p.email,
+            (
+                lower(btrim(COALESCE(p.email, ''))) =
+                    'sanlobo3@hotmail.com'
+                OR EXISTS (
+                    SELECT 1
+                    FROM public.platform_admins pa
+                    WHERE pa.user_id = p.id
+                      AND pa.active = true
+                )
+            )
+        INTO
+            v_tech_id,
+            v_tech_role,
+            v_tech_name,
+            v_tech_email,
+            v_tech_platform_admin
+        FROM public.profiles p
+        WHERE p.active = true
+          AND (
+              p.role = 'tecnico'
+              OR lower(btrim(COALESCE(p.email, ''))) =
+                    'sanlobo3@hotmail.com'
+              OR EXISTS (
+                  SELECT 1
+                  FROM public.platform_admins pa
+                  WHERE pa.user_id = p.id
+                    AND pa.active = true
+              )
+          )
+        ORDER BY
+            CASE
+                WHEN p.role = 'tecnico' THEN 1
+                WHEN lower(btrim(COALESCE(p.email, ''))) =
+                    'sanlobo3@hotmail.com' THEN 2
+                ELSE 3
+            END,
+            p.id
+        LIMIT 1;
+    ELSE
+        SELECT
+            p.id,
+            p.role,
+            p.full_name,
+            p.email,
+            (
+                lower(btrim(COALESCE(p.email, ''))) =
+                    'sanlobo3@hotmail.com'
+                OR EXISTS (
+                    SELECT 1
+                    FROM public.platform_admins pa
+                    WHERE pa.user_id = p.id
+                      AND pa.active = true
+                )
+            )
+        INTO
+            v_tech_id,
+            v_tech_role,
+            v_tech_name,
+            v_tech_email,
+            v_tech_platform_admin
+        FROM public.profiles p
+        WHERE p.id = p_technician_id
+          AND p.active = true;
     END IF;
 
-
-    -- Un técnico debe tener rol tecnico o ser administrador global activo.
-    -- No basta con tener el rol admin de una empresa.
-
-    SELECT EXISTS (
-        SELECT 1
-        FROM public.platform_admins pa
-        WHERE pa.user_id = p_technician_id
-          AND pa.active = true
-    )
-    INTO v_is_platform_admin;
+    IF v_tech_id IS NULL THEN
+        RAISE EXCEPTION
+            'No hay un técnico activo ni administrador global disponible';
+    END IF;
 
     IF COALESCE(v_tech_role, '') <> 'tecnico'
-       AND lower(btrim(COALESCE(v_tech_email, '')))
-            <> 'sanlobo3@hotmail.com'
-       AND NOT v_is_platform_admin THEN
-
+       AND NOT COALESCE(v_tech_platform_admin, false) THEN
         RAISE EXCEPTION
             'El destinatario no es técnico ni administrador global autorizado';
     END IF;
 
-
-    -- Revocar autorizaciones anteriores del mismo ticket.
-
+    -- Revocar cualquier autorización previa de este ticket.
     UPDATE public.support_authorizations
     SET revoked_at = now()
     WHERE ticket_id = p_ticket_id
       AND revoked_at IS NULL;
 
-
     v_expires := now() + make_interval(hours => p_duration_hours);
-
-
-    -- Crear autorización independiente.
 
     INSERT INTO public.support_authorizations (
         ticket_id,
@@ -282,23 +296,18 @@ BEGIN
         p_ticket_id,
         v_ticket.company_id,
         auth.uid(),
-        p_technician_id,
+        v_tech_id,
         btrim(p_module),
         p_scope,
         v_expires
     )
     RETURNING id INTO v_auth_id;
 
-
-    -- Código de compatibilidad visual.
-
     v_code := 'AUT-' ||
         upper(substr(replace(gen_random_uuid()::text, '-', ''), 1, 8));
 
-
-    -- Mantener campos antiguos para compatibilidad con la interfaz.
-    -- Estos campos NO serán la fuente de verdad de la autorización.
-
+    -- Campos antiguos solo para compatibilidad visual.
+    -- La tabla support_authorizations es la fuente de verdad.
     UPDATE public.support_tickets
     SET
         session_authorized = true,
@@ -307,13 +316,10 @@ BEGIN
         authorized_until = v_expires,
         revoked_at = NULL,
         authorization_scope = p_scope,
-        assigned_to = p_technician_id,
+        assigned_to = v_tech_id,
         assigned_name = COALESCE(v_tech_name, v_tech_email),
         updated_at = now()
     WHERE id = p_ticket_id;
-
-
-    -- Registrar concesión.
 
     INSERT INTO public.support_access_audit (
         ticket_id,
@@ -334,19 +340,18 @@ BEGIN
         btrim(p_module),
         p_scope,
         jsonb_build_object(
-            'technician_id', p_technician_id,
+            'technician_id', v_tech_id,
             'expires_at', v_expires
         )
     );
-
 
     RETURN jsonb_build_object(
         'ok', true,
         'authorization_id', v_auth_id,
         'authorization_code', v_code,
+        'technician_id', v_tech_id,
         'expires_at', v_expires
     );
-
 END;
 $function$;
 
@@ -363,32 +368,25 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path TO ''
 AS $function$
-
 DECLARE
     v_ticket public.support_tickets%ROWTYPE;
-
     v_role text;
     v_company uuid;
     v_actor_active boolean;
-
     v_auth public.support_authorizations%ROWTYPE;
-
 BEGIN
-
     IF auth.uid() IS NULL THEN
         RAISE EXCEPTION 'Se requiere una sesión autenticada';
     END IF;
 
-
-    SELECT role, company_id, active
+    SELECT p.role, p.company_id, p.active
     INTO v_role, v_company, v_actor_active
-    FROM public.profiles
-    WHERE id = auth.uid();
+    FROM public.profiles p
+    WHERE p.id = auth.uid();
 
     IF v_actor_active IS DISTINCT FROM true THEN
         RAISE EXCEPTION 'Usuario inactivo o sin perfil';
     END IF;
-
 
     SELECT *
     INTO v_ticket
@@ -400,7 +398,6 @@ BEGIN
         RAISE EXCEPTION 'Solicitud no encontrada';
     END IF;
 
-
     IF v_ticket.company_id IS DISTINCT FROM v_company
        OR (
            v_ticket.user_id IS DISTINCT FROM auth.uid()
@@ -410,18 +407,15 @@ BEGIN
                'gerente'
            )
        ) THEN
-
         RAISE EXCEPTION
             'No tienes permiso para revocar esta autorización';
     END IF;
-
 
     UPDATE public.support_authorizations
     SET revoked_at = now()
     WHERE ticket_id = p_ticket_id
       AND revoked_at IS NULL
     RETURNING * INTO v_auth;
-
 
     IF NOT FOUND THEN
         RETURN jsonb_build_object(
@@ -430,14 +424,12 @@ BEGIN
         );
     END IF;
 
-
     UPDATE public.support_tickets
     SET
         session_authorized = false,
         revoked_at = now(),
         updated_at = now()
     WHERE id = p_ticket_id;
-
 
     INSERT INTO public.support_access_audit (
         ticket_id,
@@ -458,15 +450,13 @@ BEGIN
         v_auth.authorization_scope
     );
 
-
     RETURN jsonb_build_object('ok', true);
-
 END;
 $function$;
 
 
 -- ============================================================================
--- 5. COMPROBAR AUTORIZACIÓN ACTIVA
+-- 5. CONSULTAR AUTORIZACIÓN ACTIVA DEL TÉCNICO
 -- ============================================================================
 
 CREATE OR REPLACE FUNCTION public.support_has_active_authorization(
@@ -480,35 +470,30 @@ STABLE
 SECURITY DEFINER
 SET search_path TO ''
 AS $function$
-
     SELECT
         auth.uid() IS NOT NULL
         AND EXISTS (
             SELECT 1
             FROM public.support_authorizations a
-
             JOIN public.profiles tech
               ON tech.id = a.technician_id
              AND tech.active = true
-
             WHERE a.company_id = p_company_id
               AND a.module_name = p_module
               AND a.authorization_scope = p_scope
               AND a.technician_id = auth.uid()
               AND a.revoked_at IS NULL
               AND a.expires_at > now()
-
               AND (
                   tech.role = 'tecnico'
                   OR public.is_platform_admin()
               )
         );
-
 $function$;
 
 
 -- ============================================================================
--- 6. VALIDAR Y REGISTRAR ACCESO TÉCNICO
+-- 6. VALIDAR Y REGISTRAR ACCESO
 -- ============================================================================
 
 CREATE OR REPLACE FUNCTION public.support_register_access(
@@ -521,12 +506,9 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path TO ''
 AS $function$
-
 DECLARE
     v_auth public.support_authorizations%ROWTYPE;
-
 BEGIN
-
     IF auth.uid() IS NULL
        OR p_company_id IS NULL
        OR p_module IS NULL
@@ -534,42 +516,31 @@ BEGIN
            'lectura_diagnostico',
            'intervencion_asistida'
        ) THEN
-
         RETURN false;
     END IF;
-
-
-    -- Obtener directamente una autorización vigente.
-    -- Así se registra exactamente la autorización validada.
 
     SELECT a.*
     INTO v_auth
     FROM public.support_authorizations a
-
     JOIN public.profiles tech
       ON tech.id = a.technician_id
      AND tech.active = true
-
     WHERE a.company_id = p_company_id
       AND a.module_name = p_module
       AND a.authorization_scope = p_scope
       AND a.technician_id = auth.uid()
       AND a.revoked_at IS NULL
       AND a.expires_at > now()
-
       AND (
           tech.role = 'tecnico'
           OR public.is_platform_admin()
       )
-
     ORDER BY a.granted_at DESC
     LIMIT 1;
-
 
     IF NOT FOUND THEN
         RETURN false;
     END IF;
-
 
     INSERT INTO public.support_access_audit (
         ticket_id,
@@ -590,21 +561,105 @@ BEGIN
         p_scope
     );
 
-
     RETURN true;
-
 END;
 $function$;
 
 
 -- ============================================================================
--- 7. PERMISOS DE EJECUCIÓN
+-- 7. GUARDAR DIAGNÓSTICO Y RESOLUCIÓN
+--
+-- Solo el técnico asignado o el administrador global real puede hacerlo.
+-- El rol visual del frontend no concede privilegios.
+-- ============================================================================
+
+CREATE OR REPLACE FUNCTION public.support_update_ticket_technical_resolution(
+    p_ticket_id uuid,
+    p_status text,
+    p_tech_diagnosis text,
+    p_resolution_notes text
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO ''
+AS $function$
+DECLARE
+    v_ticket public.support_tickets%ROWTYPE;
+    v_active boolean;
+    v_role text;
+BEGIN
+    IF auth.uid() IS NULL THEN
+        RAISE EXCEPTION 'Se requiere una sesión autenticada';
+    END IF;
+
+    IF p_status NOT IN (
+        'pendiente',
+        'en_revision',
+        'resuelto',
+        'cerrado'
+    ) THEN
+        RAISE EXCEPTION 'Estado de solicitud inválido';
+    END IF;
+
+    SELECT p.active, p.role
+    INTO v_active, v_role
+    FROM public.profiles p
+    WHERE p.id = auth.uid();
+
+    IF v_active IS DISTINCT FROM true THEN
+        RAISE EXCEPTION 'Usuario inactivo o sin perfil';
+    END IF;
+
+    IF COALESCE(v_role, '') <> 'tecnico'
+       AND NOT public.is_platform_admin() THEN
+        RAISE EXCEPTION
+            'Solo el técnico o administrador global puede gestionar el caso';
+    END IF;
+
+    SELECT *
+    INTO v_ticket
+    FROM public.support_tickets
+    WHERE id = p_ticket_id
+    FOR UPDATE;
+
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Solicitud no encontrada';
+    END IF;
+
+    IF v_ticket.assigned_to IS DISTINCT FROM auth.uid()
+       AND NOT public.is_platform_admin() THEN
+        RAISE EXCEPTION
+            'Este caso no está asignado a tu usuario técnico';
+    END IF;
+
+    UPDATE public.support_tickets
+    SET
+        status = p_status,
+        tech_diagnosis = NULLIF(btrim(COALESCE(p_tech_diagnosis, '')), ''),
+        resolution_notes = NULLIF(btrim(COALESCE(p_resolution_notes, '')), ''),
+        resolved_at = CASE
+            WHEN p_status IN ('resuelto', 'cerrado') THEN now()
+            ELSE NULL
+        END,
+        updated_at = now()
+    WHERE id = p_ticket_id;
+
+    RETURN jsonb_build_object(
+        'ok', true,
+        'ticket_id', p_ticket_id,
+        'status', p_status
+    );
+END;
+$function$;
+
+
+-- ============================================================================
+-- 8. PRIVILEGIOS DE EJECUCIÓN
 -- ============================================================================
 
 REVOKE ALL ON FUNCTION
-public.support_grant_ticket_authorization(
-    uuid, uuid, text, text, integer
-)
+public.support_grant_ticket_authorization(uuid, uuid, text, text, integer)
 FROM PUBLIC, anon;
 
 REVOKE ALL ON FUNCTION
@@ -612,22 +667,19 @@ public.support_revoke_ticket_authorization(uuid)
 FROM PUBLIC, anon;
 
 REVOKE ALL ON FUNCTION
-public.support_has_active_authorization(
-    uuid, text, text
-)
+public.support_has_active_authorization(uuid, text, text)
 FROM PUBLIC, anon;
 
 REVOKE ALL ON FUNCTION
-public.support_register_access(
-    uuid, text, text
-)
+public.support_register_access(uuid, text, text)
 FROM PUBLIC, anon;
 
+REVOKE ALL ON FUNCTION
+public.support_update_ticket_technical_resolution(uuid, text, text, text)
+FROM PUBLIC, anon;
 
 GRANT EXECUTE ON FUNCTION
-public.support_grant_ticket_authorization(
-    uuid, uuid, text, text, integer
-)
+public.support_grant_ticket_authorization(uuid, uuid, text, text, integer)
 TO authenticated;
 
 GRANT EXECUTE ON FUNCTION
@@ -635,17 +687,16 @@ public.support_revoke_ticket_authorization(uuid)
 TO authenticated;
 
 GRANT EXECUTE ON FUNCTION
-public.support_has_active_authorization(
-    uuid, text, text
-)
+public.support_has_active_authorization(uuid, text, text)
 TO authenticated;
 
 GRANT EXECUTE ON FUNCTION
-public.support_register_access(
-    uuid, text, text
-)
+public.support_register_access(uuid, text, text)
 TO authenticated;
 
+GRANT EXECUTE ON FUNCTION
+public.support_update_ticket_technical_resolution(uuid, text, text, text)
+TO authenticated;
 
 COMMIT;
 

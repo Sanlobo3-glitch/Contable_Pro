@@ -1,3 +1,4 @@
+
 import { supabase } from './supabase'
 import type {
   Role,
@@ -13,6 +14,17 @@ import { getRoleLabel } from './auth'
 import { getPageLabel } from './navigation'
 
 const LOCAL_TICKETS_KEY = 'ip_support_tickets_fallback_v1'
+
+type RpcPayload = {
+  success?: boolean
+  authorization_code?: string | null
+  authorized_until?: string | null
+  authorization_id?: string | null
+  technician_id?: string | null
+  technician_name?: string | null
+  message?: string
+  error?: string
+}
 
 function readLocalTickets(): SupportTicket[] {
   try {
@@ -33,6 +45,11 @@ function writeLocalTickets(tickets: SupportTicket[]): void {
   }
 }
 
+/**
+ * Se conserva por compatibilidad con posibles importaciones existentes.
+ * Este código ya no concede autorización: la autorización válida la genera
+ * exclusivamente support_grant_ticket_authorization en Supabase.
+ */
 export function generateAuthorizationCode(): string {
   const digits = Math.floor(1000 + Math.random() * 9000)
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
@@ -61,6 +78,7 @@ export function detectClientPlatform(): string {
             : /Linux/i.test(ua)
               ? 'Linux'
               : 'Web'
+
     const browser = /Edg\//i.test(ua)
       ? 'Edge'
       : /Chrome\//i.test(ua)
@@ -70,6 +88,7 @@ export function detectClientPlatform(): string {
           : /Firefox\//i.test(ua)
             ? 'Firefox'
             : 'Navegador'
+
     return `${os} · ${browser}`
   } catch {
     return 'Navegador web'
@@ -104,23 +123,65 @@ export function buildSessionSnapshot({
 
 export function isSessionAuthorizationActive(ticket: SupportTicket): boolean {
   if (!ticket.session_authorized || ticket.revoked_at) return false
-  if (ticket.status === 'cerrado') return false
-  if (!ticket.authorized_until) return true
+  if (ticket.status === 'cerrado' || ticket.status === 'resuelto') return false
+
+  // Una autorización real siempre debe tener vencimiento.
+  if (!ticket.authorized_until) return false
+
   const untilMs = new Date(ticket.authorized_until).getTime()
   return Number.isFinite(untilMs) && untilMs > Date.now()
 }
 
-export function computeAuthorizedUntilIso(hours: number | 'until_resolved'): string | null {
-  if (hours === 'until_resolved') {
-    // Tope de seguridad auditable de 7 días si elige hasta resolver
-    return new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString()
-  }
-  return new Date(Date.now() + hours * 3600 * 1000).toISOString()
+export function computeAuthorizedUntilIso(
+  hours: number | 'until_resolved',
+): string | null {
+  const safeHours =
+    hours === 'until_resolved'
+      ? 168
+      : Math.min(168, Math.max(1, Math.floor(Number(hours) || 1)))
+
+  return new Date(Date.now() + safeHours * 3600 * 1000).toISOString()
+}
+
+function getDurationHours(hours: number | 'until_resolved'): number {
+  if (hours === 'until_resolved') return 168
+  return Math.min(168, Math.max(1, Math.floor(Number(hours) || 1)))
 }
 
 function isMissingTableError(msg: string | undefined): boolean {
   if (!msg) return false
-  return /support_tickets|relation .* does not exist|schema cache|42P01|PGRST205/i.test(msg)
+  return /support_tickets|relation .* does not exist|schema cache|42P01|PGRST205/i.test(
+    msg,
+  )
+}
+
+function getRpcPayload(data: unknown): RpcPayload {
+  if (Array.isArray(data)) {
+    return (data[0] || {}) as RpcPayload
+  }
+
+  if (data && typeof data === 'object') {
+    return data as RpcPayload
+  }
+
+  return {}
+}
+
+function getRpcError(payload: RpcPayload, fallback: string): string {
+  return payload.message || payload.error || fallback
+}
+
+function normalizeModuleName(modulePage: string | null | undefined): string {
+  const moduleName = (modulePage || '').trim()
+  if (!moduleName) {
+    throw new Error('El ticket no tiene un módulo asociado para autorizar.')
+  }
+
+  if (moduleName.length > 100) {
+    throw new Error('El identificador del módulo supera los 100 caracteres.')
+  }
+
+  return moduleName
 }
 
 export async function fetchSupportTickets({
@@ -140,7 +201,9 @@ export async function fetchSupportTickets({
     if (!isTechTeam) {
       if (
         user.company_id &&
-        (user.role === 'dueno' || user.role === 'admin_empresa' || user.role === 'gerente')
+        (user.role === 'dueno' ||
+          user.role === 'admin_empresa' ||
+          user.role === 'gerente')
       ) {
         query = query.eq('company_id', user.company_id)
       } else {
@@ -160,10 +223,12 @@ export async function fetchSupportTickets({
                 t.user_id === user.id ||
                 (user.company_id &&
                   t.company_id === user.company_id &&
-                  (user.role === 'dueno' || user.role === 'admin_empresa'))
+                  (user.role === 'dueno' || user.role === 'admin_empresa')),
             )
+
         return { tickets: visible, needsSqlMigration: true }
       }
+
       throw error
     }
 
@@ -175,8 +240,11 @@ export async function fetchSupportTickets({
     return { tickets: remoteRows, needsSqlMigration: false }
   } catch {
     const local = readLocalTickets()
+
     return {
-      tickets: isTechTeam ? local : local.filter(t => t.user_id === user.id),
+      tickets: isTechTeam
+        ? local
+        : local.filter(t => t.user_id === user.id),
       needsSqlMigration: true,
     }
   }
@@ -206,9 +274,8 @@ export async function createSupportTicket({
   snapshot: SupportSessionSnapshot
 }): Promise<{ ticket: SupportTicket; savedInLocalFallback: boolean }> {
   const now = new Date().toISOString()
-  const authCode = authorizeSession ? generateAuthorizationCode() : null
-  const authUntil = authorizeSession ? computeAuthorizedUntilIso(durationHours) : null
 
+  // El navegador nunca crea un ticket con autorización activa.
   const newTicket: SupportTicket = {
     id:
       typeof crypto !== 'undefined' && crypto.randomUUID
@@ -226,10 +293,10 @@ export async function createSupportTicket({
     subject: subject.trim(),
     description: description.trim(),
     module_page: modulePage || null,
-    session_authorized: authorizeSession,
-    authorization_code: authCode,
-    authorized_at: authorizeSession ? now : null,
-    authorized_until: authUntil,
+    session_authorized: false,
+    authorization_code: null,
+    authorized_at: null,
+    authorized_until: null,
     revoked_at: null,
     authorization_scope: authorizationScope,
     session_snapshot: snapshot,
@@ -258,12 +325,14 @@ export async function createSupportTicket({
       subject: newTicket.subject,
       description: newTicket.description,
       module_page: newTicket.module_page,
-      session_authorized: newTicket.session_authorized,
-      authorization_code: newTicket.authorization_code,
-      authorized_at: newTicket.authorized_at,
-      authorized_until: newTicket.authorized_until,
+
+      // Consentimiento y autorización se gestionan después mediante RPC.
+      session_authorized: false,
+      authorization_code: null,
+      authorized_at: null,
+      authorized_until: null,
       revoked_at: null,
-      authorization_scope: newTicket.authorization_scope,
+      authorization_scope: authorizationScope,
       session_snapshot: newTicket.session_snapshot,
       status: 'pendiente',
     })
@@ -272,15 +341,66 @@ export async function createSupportTicket({
 
   if (error) {
     if (isMissingTableError(error.message)) {
+      // El almacenamiento local nunca concede acceso técnico.
       const local = readLocalTickets()
       writeLocalTickets([newTicket, ...local])
       return { ticket: newTicket, savedInLocalFallback: true }
     }
+
     throw new Error(error.message)
   }
 
+  const savedTicket = (data as SupportTicket) || newTicket
+
+  if (!authorizeSession) {
+    return { ticket: savedTicket, savedInLocalFallback: false }
+  }
+
+  // La solicitud ya existe. Ahora el servidor valida el consentimiento,
+  // selecciona al técnico elegible y crea la autorización auditable.
+  const moduleName = normalizeModuleName(savedTicket.module_page)
+
+  const { data: authorizationData, error: authorizationError } =
+    await supabase.rpc('support_grant_ticket_authorization', {
+      p_ticket_id: savedTicket.id,
+      p_technician_id: null,
+      p_module: moduleName,
+      p_scope: authorizationScope,
+      p_duration_hours: getDurationHours(durationHours),
+    })
+
+  if (authorizationError) {
+    throw new Error(
+      `La solicitud ${savedTicket.ticket_number} fue creada, pero la autorización técnica no pudo activarse. Motivo: ${authorizationError.message}`,
+    )
+  }
+
+  const authorization = getRpcPayload(authorizationData)
+
+  if (authorization.success === false) {
+    throw new Error(
+      `La solicitud ${savedTicket.ticket_number} fue creada, pero la autorización técnica no pudo activarse. Motivo: ${getRpcError(
+        authorization,
+        'El servidor rechazó la autorización.',
+      )}`,
+    )
+  }
+
   return {
-    ticket: (data as SupportTicket) || newTicket,
+    ticket: {
+      ...savedTicket,
+      session_authorized: true,
+      authorization_code: authorization.authorization_code || null,
+      authorized_at: now,
+      authorized_until:
+        authorization.authorized_until ||
+        computeAuthorizedUntilIso(durationHours),
+      revoked_at: null,
+      authorization_scope: authorizationScope,
+      assigned_to: authorization.technician_id || savedTicket.assigned_to,
+      assigned_name:
+        authorization.technician_name || savedTicket.assigned_name,
+    },
     savedInLocalFallback: false,
   }
 }
@@ -298,38 +418,68 @@ export async function updateTicketSessionAuthorization({
   scope?: SupportAuthorizationScope
   snapshot?: SupportSessionSnapshot
 }): Promise<void> {
-  const now = new Date().toISOString()
-  const patch = authorize
-    ? {
-        session_authorized: true,
-        authorization_code: generateAuthorizationCode(),
-        authorized_at: now,
-        authorized_until: computeAuthorizedUntilIso(durationHours),
-        revoked_at: null,
-        authorization_scope: scope,
-        ...(snapshot ? { session_snapshot: snapshot } : {}),
-        updated_at: now,
-      }
-    : {
-        session_authorized: false,
-        revoked_at: now,
-        updated_at: now,
-      }
+  // Se conserva el parámetro para no romper las llamadas actuales.
+  // El snapshot no es prueba de consentimiento ni concede permisos.
+  void snapshot
 
-  const { error } = await supabase
-    .from('support_tickets')
-    .update(patch)
-    .eq('id', ticketId)
+  if (!ticketId) {
+    throw new Error('Falta el identificador del ticket.')
+  }
 
-  if (error) {
-    if (isMissingTableError(error.message)) {
-      const local = readLocalTickets().map(t =>
-        t.id === ticketId ? ({ ...t, ...patch } as SupportTicket) : t
+  if (!authorize) {
+    const { data, error } = await supabase.rpc(
+      'support_revoke_ticket_authorization',
+      {
+        p_ticket_id: ticketId,
+      },
+    )
+
+    if (error) throw new Error(error.message)
+
+    const result = getRpcPayload(data)
+    if (result.success === false) {
+      throw new Error(
+        getRpcError(result, 'No fue posible revocar la autorización.'),
       )
-      writeLocalTickets(local)
-      return
     }
-    throw new Error(error.message)
+
+    return
+  }
+
+  // El módulo se obtiene del ticket remoto; no se acepta un módulo inventado
+  // desde el estado local del navegador.
+  const { data: ticket, error: ticketError } = await supabase
+    .from('support_tickets')
+    .select('module_page')
+    .eq('id', ticketId)
+    .single()
+
+  if (ticketError) {
+    throw new Error(
+      `No se pudo consultar el módulo del ticket antes de autorizar: ${ticketError.message}`,
+    )
+  }
+
+  const moduleName = normalizeModuleName(ticket?.module_page)
+
+  const { data, error } = await supabase.rpc(
+    'support_grant_ticket_authorization',
+    {
+      p_ticket_id: ticketId,
+      p_technician_id: null,
+      p_module: moduleName,
+      p_scope: scope,
+      p_duration_hours: getDurationHours(durationHours),
+    },
+  )
+
+  if (error) throw new Error(error.message)
+
+  const result = getRpcPayload(data)
+  if (result.success === false) {
+    throw new Error(
+      getRpcError(result, 'El servidor rechazó la autorización.'),
+    )
   }
 }
 
@@ -346,30 +496,26 @@ export async function updateTicketTechnicalResolution({
   techDiagnosis: string
   resolutionNotes: string
 }): Promise<void> {
-  const now = new Date().toISOString()
-  const patch = {
-    status,
-    assigned_to: techUser.id,
-    assigned_name: techUser.full_name || techUser.email,
-    tech_diagnosis: techDiagnosis.trim() || null,
-    resolution_notes: resolutionNotes.trim() || null,
-    resolved_at: status === 'resuelto' || status === 'cerrado' ? now : null,
-    updated_at: now,
-  }
+  // La identidad del técnico la determina auth.uid() en Supabase.
+  // No confiamos en techUser.id ni en assigned_to enviados por el cliente.
+  void techUser
 
-  const { error } = await supabase
-    .from('support_tickets')
-    .update(patch)
-    .eq('id', ticketId)
+  const { data, error } = await supabase.rpc(
+    'support_update_ticket_technical_resolution',
+    {
+      p_ticket_id: ticketId,
+      p_status: status,
+      p_tech_diagnosis: techDiagnosis.trim() || null,
+      p_resolution_notes: resolutionNotes.trim() || null,
+    },
+  )
 
-  if (error) {
-    if (isMissingTableError(error.message)) {
-      const local = readLocalTickets().map(t =>
-        t.id === ticketId ? ({ ...t, ...patch } as SupportTicket) : t
-      )
-      writeLocalTickets(local)
-      return
-    }
-    throw new Error(error.message)
+  if (error) throw new Error(error.message)
+
+  const result = getRpcPayload(data)
+  if (result.success === false) {
+    throw new Error(
+      getRpcError(result, 'No fue posible guardar la actualización técnica.'),
+    )
   }
 }

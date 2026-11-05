@@ -1,29 +1,25 @@
 
 BEGIN;
 
--- =========================================================
+-- ============================================================
 -- 000022: AISLAR METAS DE VENDEDORES
--- Retira el acceso global del administrador de plataforma.
--- No concede acceso directo a usuarios ni a soporte.
--- =========================================================
+-- Administrador central: CRUD solo en su empresa actual.
+-- Usuarios ordinarios y soporte: sin acceso directo.
+-- ============================================================
 
 DO $$
-DECLARE
-  v_rls boolean;
 BEGIN
   IF to_regclass('public.seller_goals') IS NULL THEN
     RAISE EXCEPTION 'No existe public.seller_goals';
   END IF;
 
-  SELECT c.relrowsecurity
-    INTO v_rls
-  FROM pg_class c
-  JOIN pg_namespace n ON n.oid = c.relnamespace
-  WHERE n.nspname = 'public'
-    AND c.relname = 'seller_goals';
-
-  IF v_rls IS DISTINCT FROM TRUE THEN
-    RAISE EXCEPTION 'RLS no está habilitado en seller_goals';
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_class
+    WHERE oid = 'public.seller_goals'::regclass
+      AND relrowsecurity = TRUE
+  ) THEN
+    RAISE EXCEPTION 'RLS no está habilitado';
   END IF;
 
   IF NOT EXISTS (
@@ -34,7 +30,13 @@ BEGIN
       AND column_name = 'company_id'
       AND data_type = 'uuid'
   ) THEN
-    RAISE EXCEPTION 'No existe company_id UUID en seller_goals';
+    RAISE EXCEPTION 'company_id UUID no existe';
+  END IF;
+
+  IF to_regprocedure('public.is_platform_admin()') IS NULL
+     OR to_regprocedure('public.current_company_id()') IS NULL
+  THEN
+    RAISE EXCEPTION 'Faltan funciones de seguridad';
   END IF;
 
   IF NOT EXISTS (
@@ -56,81 +58,113 @@ BEGIN
       AND policyname <> 'platform_admin_all'
   ) THEN
     RAISE EXCEPTION
-      'Hay políticas adicionales no auditadas en seller_goals';
+      'Hay políticas adicionales no auditadas';
   END IF;
 
   IF has_table_privilege(
-    'authenticated',
-    'public.seller_goals',
-    'SELECT'
+    'authenticated','public.seller_goals','SELECT'
   ) OR has_table_privilege(
-    'authenticated',
-    'public.seller_goals',
-    'INSERT'
+    'authenticated','public.seller_goals','INSERT'
   ) OR has_table_privilege(
-    'authenticated',
-    'public.seller_goals',
-    'UPDATE'
+    'authenticated','public.seller_goals','UPDATE'
   ) OR has_table_privilege(
-    'authenticated',
-    'public.seller_goals',
-    'DELETE'
+    'authenticated','public.seller_goals','DELETE'
   ) THEN
     RAISE EXCEPTION
-      'authenticated tiene permisos directos inesperados en seller_goals';
+      'authenticated tiene permisos directos previos inesperados';
   END IF;
 END;
 $$;
 
+-- 1. Retirar acceso global.
+
 DROP POLICY platform_admin_all
 ON public.seller_goals;
 
--- =========================================================
--- VERIFICACIÓN FINAL
--- =========================================================
+-- 2. Acceso CRUD del administrador central,
+-- exclusivamente dentro de su empresa actual.
+
+CREATE POLICY platform_admin_company_all
+ON public.seller_goals
+FOR ALL
+TO authenticated
+USING (
+  public.is_platform_admin()
+  AND company_id = (SELECT public.current_company_id())
+)
+WITH CHECK (
+  public.is_platform_admin()
+  AND company_id = (SELECT public.current_company_id())
+);
+
+-- 3. Permisos de tabla.
+-- RLS limita las filas al administrador central autorizado.
+
+GRANT SELECT, INSERT, UPDATE, DELETE
+ON TABLE public.seller_goals
+TO authenticated;
+
+REVOKE ALL PRIVILEGES
+ON TABLE public.seller_goals
+FROM anon;
+
+-- 4. Verificación final.
 
 DO $$
+DECLARE
+  v_policy integer;
+  v_global integer;
 BEGIN
-  IF EXISTS (
-    SELECT 1
-    FROM pg_policies
-    WHERE schemaname = 'public'
-      AND tablename = 'seller_goals'
-      AND policyname = 'platform_admin_all'
-  ) THEN
+  SELECT count(*)
+  INTO v_policy
+  FROM pg_policies
+  WHERE schemaname = 'public'
+    AND tablename = 'seller_goals'
+    AND policyname = 'platform_admin_company_all'
+    AND cmd = 'ALL'
+    AND qual LIKE '%is_platform_admin()%'
+    AND qual LIKE '%current_company_id()%'
+    AND with_check LIKE '%is_platform_admin()%'
+    AND with_check LIKE '%current_company_id()%';
+
+  IF v_policy <> 1 THEN
     RAISE EXCEPTION
-      'Sigue existiendo platform_admin_all en seller_goals';
+      'No existe la política CRUD central aislada';
   END IF;
 
-  IF EXISTS (
-    SELECT 1
-    FROM pg_policies
-    WHERE schemaname = 'public'
-      AND tablename = 'seller_goals'
+  SELECT count(*)
+  INTO v_global
+  FROM pg_policies
+  WHERE schemaname = 'public'
+    AND tablename = 'seller_goals'
+    AND policyname = 'platform_admin_all';
+
+  IF v_global <> 0 THEN
+    RAISE EXCEPTION 'Persiste la política global';
+  END IF;
+
+  IF NOT has_table_privilege(
+    'authenticated','public.seller_goals','SELECT'
+  ) OR NOT has_table_privilege(
+    'authenticated','public.seller_goals','INSERT'
+  ) OR NOT has_table_privilege(
+    'authenticated','public.seller_goals','UPDATE'
+  ) OR NOT has_table_privilege(
+    'authenticated','public.seller_goals','DELETE'
   ) THEN
-    RAISE EXCEPTION
-      'Se encontraron políticas inesperadas en seller_goals';
+    RAISE EXCEPTION 'Faltan permisos CRUD authenticated';
   END IF;
 
   IF has_table_privilege(
-    'authenticated',
-    'public.seller_goals',
-    'SELECT'
+    'anon','public.seller_goals','SELECT'
   ) OR has_table_privilege(
-    'authenticated',
-    'public.seller_goals',
-    'INSERT'
+    'anon','public.seller_goals','INSERT'
   ) OR has_table_privilege(
-    'authenticated',
-    'public.seller_goals',
-    'UPDATE'
+    'anon','public.seller_goals','UPDATE'
   ) OR has_table_privilege(
-    'authenticated',
-    'public.seller_goals',
-    'DELETE'
+    'anon','public.seller_goals','DELETE'
   ) THEN
-    RAISE EXCEPTION
-      'Se detectaron permisos directos para authenticated';
+    RAISE EXCEPTION 'anon conserva permisos inesperados';
   END IF;
 END;
 $$;

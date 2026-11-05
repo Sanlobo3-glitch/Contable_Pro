@@ -79,7 +79,7 @@ const PLANS = [
   },
 ] as const
 
-const CONTACT_EMAIL = 'inventariopro@emerald.qzz.io'
+const CONTACT_EMAIL = 'emerald.red.social@gmail.com'
 
 export default function Subscription() {
   const { user } = useAuth()

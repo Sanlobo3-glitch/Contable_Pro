@@ -21,7 +21,7 @@ const PLANS = [
   },
 ]
 
-const CONTACT_EMAIL = 'inventariopro@emerald.qzz.io'
+const CONTACT_EMAIL = 'emerald.red.social@gmail.com'
 const CONTACT_WHATSAPP = '' // pon aquí tu número, ej: '584121234567'
 
 export default function Pricing() {

@@ -2,4 +2,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://inventariopro.emerald.qzz.io/sitemap.xml
+Sitemap: https://contable-pro-zeta.vercel.app/sitemap.xml

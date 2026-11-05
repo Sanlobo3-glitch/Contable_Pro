@@ -1,13 +1,25 @@
 -- ============================================================
 -- 000039: AISLAMIENTO DE PERFILES Y AUTORIZACION DE SOPORTE
--- Administrador central: exclusivamente su empresa de prueba.
--- Soporte técnico: autorización expresa, temporal y auditada.
+--
+-- Administrador central:
+--   - Solo administra usuarios de su empresa de prueba.
+--   - No puede trasladar usuarios entre empresas.
+--   - No puede modificar otros administradores centrales.
+--
+-- Eliminación:
+--   - Desactiva y archiva.
+--   - Nunca elimina auth.users ni historial operativo.
+--
+-- Soporte:
+--   - Exige autorización expresa y vigente.
+--   - Empresa, ticket, técnico, módulo y alcance coincidentes.
+--   - Registra cada intervención en auditoría.
 -- ============================================================
 
 BEGIN;
 
 -- ------------------------------------------------------------
--- 1. GUARDAR USUARIO COMPLETO SIN CAMBIARLO DE EMPRESA
+-- 1. GUARDAR USUARIO COMPLETO
 -- ------------------------------------------------------------
 
 CREATE OR REPLACE FUNCTION public.admin_guardar_usuario_completo(
@@ -40,7 +52,6 @@ DECLARE
     v_new_role text;
     v_new_active boolean;
 BEGIN
-    -- La barrera valida administrador, sesión y empresa objetivo.
     v_company := public.admin_target_company(p_user_id);
 
     SELECT *
@@ -51,9 +62,11 @@ BEGIN
     FOR UPDATE;
 
     IF NOT FOUND THEN
-        RAISE EXCEPTION 'Usuario no encontrado en la empresa de prueba';
+        RAISE EXCEPTION
+            'Usuario no encontrado en la empresa de prueba';
     END IF;
 
+    -- No permitir cambios de empresa.
     v_new_company := coalesce(p_company_id, v_target.company_id);
 
     IF v_new_company IS DISTINCT FROM v_company
@@ -180,7 +193,8 @@ $function$;
 
 
 -- ------------------------------------------------------------
--- 2. ELIMINAR O ARCHIVAR PERFIL SOLO EN EMPRESA DE PRUEBA
+-- 2. DESACTIVAR Y ARCHIVAR PERFIL
+--    NO ELIMINA auth.users NI REGISTROS HISTORICOS.
 -- ------------------------------------------------------------
 
 CREATE OR REPLACE FUNCTION public.admin_eliminar_perfil(
@@ -194,7 +208,6 @@ AS $function$
 DECLARE
     v_target public.profiles%ROWTYPE;
     v_company uuid;
-    v_has_history boolean := false;
 BEGIN
     v_company := public.admin_target_company(p_user_id);
 
@@ -210,63 +223,21 @@ BEGIN
     FOR UPDATE;
 
     IF NOT FOUND THEN
-        RAISE EXCEPTION 'El perfil ya no existe en la empresa de prueba';
+        RAISE EXCEPTION
+            'El perfil no existe en la empresa de prueba';
     END IF;
 
-    DELETE FROM public.devices
-    WHERE user_id = v_target.id
-      AND company_id = v_company;
-
-    IF to_regclass('public.visits') IS NOT NULL THEN
-        EXECUTE
-            'SELECT EXISTS (
-                SELECT 1
-                FROM public.visits
-                WHERE seller_id = $1
-            )'
-        INTO v_has_history
-        USING v_target.id;
-    END IF;
-
-    IF NOT v_has_history
-       AND to_regclass('public.audit_log') IS NOT NULL THEN
-        EXECUTE
-            'SELECT EXISTS (
-                SELECT 1
-                FROM public.audit_log
-                WHERE user_id = $1
-            )'
-        INTO v_has_history
-        USING v_target.id;
-    END IF;
-
-    IF NOT v_has_history THEN
-        BEGIN
-            DELETE FROM auth.users
-            WHERE id = v_target.id;
-
-            DELETE FROM public.profiles
-            WHERE id = v_target.id
-              AND company_id = v_company;
-
-            RETURN jsonb_build_object(
-                'ok', true,
-                'mode', 'eliminado',
-                'message',
-                'Perfil eliminado definitivamente; no se encontró historial operativo.'
-            );
-        EXCEPTION
-            WHEN OTHERS THEN
-                -- Si existen dependencias, conservar y archivar.
-                NULL;
-        END;
-    END IF;
-
+    -- Desactivar el acceso.
     UPDATE public.profiles
     SET active = false
     WHERE id = v_target.id
       AND company_id = v_company;
 
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'No se pudo desactivar el perfil';
+    END IF;
+
+    -- Archivar ficha laboral conservando sus datos.
     INSERT INTO public.member_profiles (
         user_id,
         company_id,
@@ -288,15 +259,17 @@ BEGIN
     RETURN jsonb_build_object(
         'ok', true,
         'mode', 'archivado',
+        'user_id', v_target.id,
+        'company_id', v_company,
         'message',
-        'Acceso revocado y perfil archivado; se conserva el historial.'
+        'Acceso desactivado. Se conserva la cuenta y todo el historial.'
     );
 END;
 $function$;
 
 
 -- ------------------------------------------------------------
--- 3. EXIGIR AUTORIZACION VIGENTE PARA INTERVENCION TECNICA
+-- 3. ACTUALIZACION DE RESOLUCION TECNICA CON AUTORIZACION
 -- ------------------------------------------------------------
 
 CREATE OR REPLACE FUNCTION public.support_update_ticket_technical_resolution(
@@ -318,7 +291,8 @@ DECLARE
     v_module text;
 BEGIN
     IF auth.uid() IS NULL THEN
-        RAISE EXCEPTION 'Se requiere una sesión autenticada';
+        RAISE EXCEPTION
+            'Se requiere una sesión autenticada';
     END IF;
 
     IF p_status NOT IN (
@@ -342,7 +316,7 @@ BEGIN
     IF coalesce(v_role, '') <> 'tecnico'
        AND NOT public.is_platform_admin() THEN
         RAISE EXCEPTION
-            'Solo un técnico o administrador central autorizado puede intervenir';
+            'Solo un técnico o administrador central puede gestionar el caso';
     END IF;
 
     SELECT *
@@ -356,26 +330,28 @@ BEGIN
     END IF;
 
     IF v_ticket.company_id IS NULL THEN
-        RAISE EXCEPTION 'La solicitud no tiene empresa asociada';
+        RAISE EXCEPTION
+            'La solicitud no tiene empresa asociada';
     END IF;
 
+    -- Todo interventor debe tener el ticket asignado.
     IF v_ticket.assigned_to IS DISTINCT FROM auth.uid() THEN
         RAISE EXCEPTION
-            'El caso no está asignado al usuario técnico autorizado'
+            'El caso no está asignado al usuario que intenta intervenir'
             USING ERRCODE = '42501';
     END IF;
 
-    -- El módulo autorizado debe coincidir con el módulo de la solicitud.
     v_module := coalesce(
         nullif(btrim(v_ticket.module_page), ''),
         v_ticket.category
     );
 
     IF v_module IS NULL OR btrim(v_module) = '' THEN
-        RAISE EXCEPTION 'La solicitud no tiene un módulo identificable';
+        RAISE EXCEPTION
+            'La solicitud no tiene un módulo identificable';
     END IF;
 
-    -- Solo se admite intervención asistida, no lectura/diagnóstico.
+    -- Buscar autorización expresa y vigente.
     SELECT a.*
     INTO v_authorization
     FROM public.support_authorizations a
@@ -408,7 +384,8 @@ BEGIN
             ''
         ),
         resolved_at = CASE
-            WHEN p_status IN ('resuelto', 'cerrado') THEN now()
+            WHEN p_status IN ('resuelto', 'cerrado')
+                THEN now()
             ELSE NULL
         END,
         updated_at = now()
@@ -417,9 +394,11 @@ BEGIN
       AND assigned_to = auth.uid();
 
     IF NOT FOUND THEN
-        RAISE EXCEPTION 'No se pudo actualizar la solicitud';
+        RAISE EXCEPTION
+            'No se pudo actualizar la solicitud';
     END IF;
 
+    -- Registrar validación e intervención.
     INSERT INTO public.support_access_audit (
         ticket_id,
         authorization_id,
@@ -441,7 +420,8 @@ BEGIN
         jsonb_build_object(
             'action', 'technical_resolution_update',
             'new_status', p_status,
-            'authorization_expires_at', v_authorization.expires_at
+            'authorization_expires_at',
+            v_authorization.expires_at
         )
     );
 
@@ -456,7 +436,7 @@ $function$;
 
 
 -- ------------------------------------------------------------
--- 4. VALIDACIONES DE SEGURIDAD Y ESTRUCTURA
+-- 4. VALIDACIONES DE SEGURIDAD
 -- ------------------------------------------------------------
 
 DO $validation$
@@ -466,7 +446,8 @@ BEGIN
     SELECT count(*)
     INTO v_count
     FROM pg_proc p
-    JOIN pg_namespace n ON n.oid = p.pronamespace
+    JOIN pg_namespace n
+      ON n.oid = p.pronamespace
     WHERE n.nspname = 'public'
       AND p.proname IN (
           'admin_guardar_usuario_completo',

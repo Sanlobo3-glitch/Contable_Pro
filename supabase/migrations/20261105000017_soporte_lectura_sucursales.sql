@@ -1,5 +1,3 @@
-Ruta: "supabase/migrations/20261105000017_soporte_lectura_sucursales.sql"
-
 BEGIN;
 
 -- ============================================================

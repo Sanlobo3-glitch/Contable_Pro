@@ -1,15 +1,21 @@
 
 -- ============================================================
 -- 000007: SOPORTE TEMPORAL DE SOLO LECTURA - INVENTARIO
--- Dependencia: migración 000003.
+-- Dependencia: 000003.
+--
+-- Permite diagnóstico técnico únicamente con autorización
+-- vigente, por empresa, módulo y alcance.
 --
 -- No concede INSERT, UPDATE ni DELETE al soporte.
--- Conserva las políticas existentes de empresa y roles.
+-- No modifica las políticas operativas de empresa.
 -- ============================================================
 
 BEGIN;
 
--- 1. Validar dependencias y estructura.
+-- ------------------------------------------------------------
+-- 1. PREFLIGHT: dependencias y estructura
+-- ------------------------------------------------------------
+
 DO $$
 DECLARE
   v_table text;
@@ -32,6 +38,12 @@ BEGIN
   END IF;
 
   FOREACH v_table IN ARRAY v_tables LOOP
+
+    IF to_regclass('public.' || v_table) IS NULL THEN
+      RAISE EXCEPTION
+        'No existe la tabla public.%', v_table;
+    END IF;
+
     IF NOT EXISTS (
       SELECT 1
       FROM information_schema.columns
@@ -54,12 +66,15 @@ BEGIN
       RAISE EXCEPTION
         'RLS no está habilitado en public.%', v_table;
     END IF;
+
   END LOOP;
 END;
 $$;
 
--- 2. Eliminar el acceso global automático del administrador
--- de plataforma en estas tablas.
+-- ------------------------------------------------------------
+-- 2. RETIRAR EL BYPASS GLOBAL DEL ADMINISTRADOR DE PLATAFORMA
+-- ------------------------------------------------------------
+
 DROP POLICY IF EXISTS platform_admin_all
 ON public.warehouses;
 
@@ -84,8 +99,11 @@ ON public.inventory_transfers;
 DROP POLICY IF EXISTS platform_admin_all
 ON public.inventory_transfer_items;
 
--- 3. Bodegas y existencias.
--- Autorización limitada al módulo warehouses.
+-- ------------------------------------------------------------
+-- 3. BODEGAS
+-- Módulo real: warehouses
+-- ------------------------------------------------------------
+
 DROP POLICY IF EXISTS support_warehouses_select
 ON public.warehouses;
 
@@ -106,6 +124,11 @@ USING (
     'intervencion_asistida'
   )
 );
+
+-- ------------------------------------------------------------
+-- 4. EXISTENCIAS
+-- Módulo real: warehouses
+-- ------------------------------------------------------------
 
 DROP POLICY IF EXISTS support_warehouse_stock_select
 ON public.warehouse_stock;
@@ -128,6 +151,11 @@ USING (
   )
 );
 
+-- ------------------------------------------------------------
+-- 5. RESERVAS DE EXISTENCIAS
+-- Módulo real: warehouses
+-- ------------------------------------------------------------
+
 DROP POLICY IF EXISTS support_stock_reservations_select
 ON public.warehouse_stock_reservations;
 
@@ -149,7 +177,11 @@ USING (
   )
 );
 
--- 4. Lotes y vencimientos.
+-- ------------------------------------------------------------
+-- 6. LOTES Y VENCIMIENTOS
+-- Módulo real: lots
+-- ------------------------------------------------------------
+
 DROP POLICY IF EXISTS support_product_lots_select
 ON public.product_lots;
 
@@ -171,7 +203,11 @@ USING (
   )
 );
 
--- 5. Kardex y movimientos.
+-- ------------------------------------------------------------
+-- 7. KARDEX
+-- Módulo real: kardex
+-- ------------------------------------------------------------
+
 DROP POLICY IF EXISTS support_kardex_select
 ON public.kardex;
 
@@ -192,6 +228,11 @@ USING (
     'intervencion_asistida'
   )
 );
+
+-- ------------------------------------------------------------
+-- 8. MOVIMIENTOS DE BODEGA
+-- Módulo real: kardex
+-- ------------------------------------------------------------
 
 DROP POLICY IF EXISTS support_warehouse_movements_select
 ON public.warehouse_movements;
@@ -214,7 +255,11 @@ USING (
   )
 );
 
--- 6. Traslados entre bodegas.
+-- ------------------------------------------------------------
+-- 9. TRASLADOS ENTRE BODEGAS
+-- Módulo real: warehouses
+-- ------------------------------------------------------------
+
 DROP POLICY IF EXISTS support_inventory_transfers_select
 ON public.inventory_transfers;
 
@@ -235,6 +280,11 @@ USING (
     'intervencion_asistida'
   )
 );
+
+-- ------------------------------------------------------------
+-- 10. DETALLES DE TRASLADOS
+-- La autorización se comprueba contra la empresa del registro.
+-- ------------------------------------------------------------
 
 DROP POLICY IF EXISTS support_inventory_transfer_items_select
 ON public.inventory_transfer_items;
@@ -257,12 +307,15 @@ USING (
   )
 );
 
--- 7. Verificar que las políticas de lectura existan
--- y que no permanezcan las políticas globales eliminadas.
+-- ------------------------------------------------------------
+-- 11. VALIDACIÓN FINAL
+-- ------------------------------------------------------------
+
 DO $$
 DECLARE
   v_table text;
   v_policy text;
+
   v_tables text[] := ARRAY[
     'warehouses',
     'warehouse_stock',
@@ -274,7 +327,9 @@ DECLARE
     'inventory_transfer_items'
   ];
 BEGIN
+
   FOREACH v_table IN ARRAY v_tables LOOP
+
     v_policy := CASE v_table
       WHEN 'warehouses'
         THEN 'support_warehouses_select'
@@ -301,9 +356,11 @@ BEGIN
         AND tablename = v_table
         AND policyname = v_policy
         AND cmd = 'SELECT'
+        AND roles @> ARRAY['authenticated']::name[]
     ) THEN
       RAISE EXCEPTION
-        'No se creó la política % en %.', v_policy, v_table;
+        'No se creó correctamente la política % en %.',
+        v_policy, v_table;
     END IF;
 
     IF EXISTS (
@@ -316,7 +373,9 @@ BEGIN
       RAISE EXCEPTION
         'Permanece platform_admin_all en %.', v_table;
     END IF;
+
   END LOOP;
+
 END;
 $$;
 

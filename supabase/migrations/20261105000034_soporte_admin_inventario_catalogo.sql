@@ -218,4 +218,4 @@ $$;
 
 COMMIT;
 
-Resultado esperado: 11 políticas administrativas nuevas, todas restringidas a "current_company_id()". Los permisos SQL existentes siguen siendo necesarios; esta migración no los amplía ni concede permisos de escritura sobre kardex, lotes o movimientos.
+ 

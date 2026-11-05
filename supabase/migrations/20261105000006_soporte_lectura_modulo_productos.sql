@@ -7,6 +7,10 @@
 
 BEGIN;
 
+-- ------------------------------------------------------------
+-- 1. PREFLIGHT
+-- ------------------------------------------------------------
+
 DO $$
 BEGIN
   IF to_regprocedure(
@@ -37,19 +41,43 @@ BEGIN
   ) THEN
     RAISE EXCEPTION 'RLS no está habilitado en categories.';
   END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'products'
+      AND column_name = 'company_id'
+  ) THEN
+    RAISE EXCEPTION 'Falta products.company_id.';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'public'
+      AND table_name = 'categories'
+      AND column_name = 'company_id'
+  ) THEN
+    RAISE EXCEPTION 'Falta categories.company_id.';
+  END IF;
 END;
 $$;
 
--- El administrador de plataforma deja de tener
--- acceso global automático a estas tablas.
+-- ------------------------------------------------------------
+-- 2. RETIRAR ACCESO GLOBAL AUTOMÁTICO DE PLATAFORMA
+-- ------------------------------------------------------------
+
 DROP POLICY IF EXISTS platform_admin_all
 ON public.products;
 
 DROP POLICY IF EXISTS platform_admin_all
 ON public.categories;
 
--- Lectura temporal de productos:
--- solo con autorización activa para el módulo products.
+-- ------------------------------------------------------------
+-- 3. LECTURA TEMPORAL AUTORIZADA DE PRODUCTOS
+-- ------------------------------------------------------------
+
 DROP POLICY IF EXISTS support_products_select
 ON public.products;
 
@@ -71,8 +99,10 @@ USING (
   )
 );
 
--- Lectura temporal de categorías:
--- solo con autorización activa para el módulo categories.
+-- ------------------------------------------------------------
+-- 4. LECTURA TEMPORAL AUTORIZADA DE CATEGORÍAS
+-- ------------------------------------------------------------
+
 DROP POLICY IF EXISTS support_categories_select
 ON public.categories;
 
@@ -94,7 +124,10 @@ USING (
   )
 );
 
--- Verificación de las políticas instaladas.
+-- ------------------------------------------------------------
+-- 5. VERIFICACIÓN FINAL
+-- ------------------------------------------------------------
+
 DO $$
 DECLARE
   v_products_policy integer;

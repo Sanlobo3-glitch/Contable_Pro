@@ -348,7 +348,7 @@ export default function AppLayout({
       { id: 'exchanges', label: 'Cambios y garantías', section: 'Ventas y cobros', keywords: 'cambios mano a mano talla referencia excedente garantias posventa', icon: <ArrowLeftRight className="w-4 h-4 shrink-0" />, allowed: canRegisterSales(role) || canManageInventory(role) },
       { id: 'sellers', label: 'Equipo y nómina', section: 'Ventas y cobros', keywords: 'vendedores comisiones vales pagos', icon: <BadgeCheck className="w-4 h-4 shrink-0" />, allowed: canManageTeam(role) || canViewAccounting(role) },
       { id: 'employee_portal', label: 'Portal de vendedor', section: 'Ventas y cobros', keywords: 'autoservicio comisiones metas vendedor cartera saldo', icon: <UserCheck className="w-4 h-4 shrink-0" />, allowed: true },
-      { id: 'routeplan', label: role === 'vendedor' ? 'Mi ruta' : 'Planificar rutas', section: 'Ventas y cobros', keywords: 'paradas visitas', icon: <RouteIcon className="w-4 h-4 shrink-0" />, allowed: canRegisterSales(role) || canManageTransport(role) },
+            { id: 'routeplan', label: role === 'vendedor' ? 'Mi ruta' : 'Planificar rutas', section: 'Ventas y cobros', keywords: 'paradas visitas', icon: <RouteIcon className="w-4 h-4 shrink-0" />, allowed: canRegisterSales(role) || canManageTransport(role) },
       { id: 'dispatch', label: role === 'vendedor' ? 'Mi carga de ruta' : 'Despacho de ruta', section: 'Ventas y cobros', keywords: 'camion liquidacion carga', icon: <Truck className="w-4 h-4 shrink-0" />, allowed: canRegisterSales(role) || canManageTransport(role) || canManageInventory(role) },
       { id: 'goals', label: 'Metas', section: 'Ventas y cobros', keywords: 'objetivos cuotas', icon: <Target className="w-4 h-4 shrink-0" />, allowed: canRegisterSales(role) || isCompanyManager(role) },
 
@@ -552,13 +552,13 @@ export default function AppLayout({
   function handleMasterRoleChange(nextRole: Role) {
     if (!isMasterAccount) return
     switchMasterRole(nextRole)
-    if (nextRole === 'tecnico') {
-      onNavigate('support')
-    } else if (nextRole === 'contador' && (current === 'dashboard' || current === 'support' || current === 'users' || current === 'companies' || current === 'adminplans')) {
-      onNavigate('cpa')
-    } else if (nextRole === 'transportador' && (current === 'dashboard' || current === 'cpa' || current === 'users' || current === 'companies' || current === 'adminplans')) {
-      onNavigate('dispatch')
-    }
+  }
+
+  function handleMasterRoleReset() {
+    if (!isMasterAccount) return
+    switchMasterRole(null, null)
+    refreshCurrency()
+    void refreshWarehouses()
   }
 
   function handleMasterCompanyChange(companyId: string) {
@@ -654,11 +654,7 @@ export default function AppLayout({
           {hasOverride && (
             <button
               type="button"
-              onClick={() => {
-                switchMasterRole(null, null)
-                refreshCurrency()
-                void refreshWarehouses()
-              }}
+              onClick={handleMasterRoleReset}
               className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 text-xs font-medium whitespace-nowrap shrink-0 transition-colors"
             >
               <RotateCcw className="w-3 h-3" />
@@ -709,8 +705,7 @@ export default function AppLayout({
       </div>
     )
   }
-
-  function renderSupportPassBanner() {
+    function renderSupportPassBanner() {
     if (!activeSupportPass) return null
     return (
       <div className="bg-red-700 text-white px-4 py-2 text-xs flex flex-wrap items-center justify-between gap-3 shadow-md border-b border-red-800">
@@ -1046,8 +1041,7 @@ export default function AppLayout({
                 </div>
                 <Camera className="w-3.5 h-3.5 text-slate-400 shrink-0" />
               </button>
-
-              {!isDemo && isMasterAccount && user && (
+                            {!isDemo && isMasterAccount && user && (
                 <div className="mb-2.5 pb-2.5 border-b border-slate-100 space-y-1.5">
                   <div className="flex items-center justify-between gap-2 text-[11px]">
                     <span className="inline-flex items-center gap-1 font-semibold text-slate-800">
@@ -1058,7 +1052,7 @@ export default function AppLayout({
                       <button
                         type="button"
                         onClick={() => {
-                          switchMasterRole(null, null)
+                          handleMasterRoleReset()
                           setMobileOpen(false)
                         }}
                         className="text-[11px] font-medium text-amber-700 underline whitespace-nowrap"

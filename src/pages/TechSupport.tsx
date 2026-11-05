@@ -3,7 +3,6 @@ import {
   CheckCircle2,
   Clock,
   Database,
-  ExternalLink,
   KeyRound,
   LifeBuoy,
   Lock,
@@ -13,7 +12,6 @@ import {
   ShieldAlert,
   ShieldCheck,
   ShieldOff,
-  UserCheck,
   Wrench,
   X,
 } from 'lucide-react'
@@ -65,7 +63,7 @@ const STATUS_LABELS: Record<SupportTicketStatus, { label: string; tone: string }
 type QueueFilter = 'all' | 'authorized' | 'pendiente' | 'en_revision' | 'resuelto'
 
 function formatRemainingTime(untilIso: string | null): string {
-  if (!untilIso) return 'Vigente hasta cierre'
+  if (!untilIso) return 'Sin vencimiento válido'
   const diffMs = new Date(untilIso).getTime() - Date.now()
   if (!Number.isFinite(diffMs) || diffMs <= 0) return 'Expirada'
   const totalMin = Math.round(diffMs / 60000)
@@ -82,7 +80,7 @@ export default function TechSupport({
   currentOriginPage?: string
   onNavigate?: (page: string) => void
 }) {
-  const { user, isMasterAccount, switchMasterRole } = useAuth()
+  const { user } = useAuth()
   const { activeWarehouse, activeBranch } = useWarehouse()
   const cur = useCurrency()
 
@@ -233,9 +231,11 @@ export default function TechSupport({
       setSelectedId(ticket.id)
       setFeedback({
         ok: true,
-        text: authorizeSession
-          ? `Solicitud ${ticket.ticket_number} enviada con código de autorización ${ticket.authorization_code}.${savedInLocalFallback ? ' (Guardada localmente; ejecuta la migración SQL para sincronizar en nube).' : ''}`
-          : `Solicitud ${ticket.ticket_number} enviada al equipo técnico.`,
+        text: savedInLocalFallback
+          ? `Solicitud ${ticket.ticket_number} guardada en este dispositivo. No se concedió autorización técnica ni se sincronizó con Supabase.`
+          : ticket.session_authorized && ticket.authorization_code
+            ? `Solicitud ${ticket.ticket_number} enviada. Autorización confirmada por Supabase: ${ticket.authorization_code}.`
+            : `Solicitud ${ticket.ticket_number} enviada al equipo técnico sin autorización de inspección.`,
       })
       await loadTickets()
     } catch (err) {
@@ -315,28 +315,7 @@ export default function TechSupport({
       setBusy(false)
     }
   }
-
-  function handleInspectAuthorizedModule(ticket: SupportTicket, simulateUserRole: boolean) {
-    if (!isSessionAuthorizationActive(ticket)) {
-      setFeedback({
-        ok: false,
-        text: 'El usuario no tiene una autorización de sesión activa en este caso.',
-      })
-      return
-    }
-    if (simulateUserRole && isMasterAccount) {
-      const targetCompany =
-        ticket.company_id && ticket.company_name
-          ? { id: ticket.company_id, name: ticket.company_name }
-          : null
-      switchMasterRole(ticket.user_role, targetCompany)
-    }
-    if (onNavigate && ticket.module_page) {
-      onNavigate(ticket.module_page)
-    }
-  }
-
-  const inputCls =
+    const inputCls =
     'w-full px-3 py-2 rounded-lg border border-slate-300 bg-white text-sm text-slate-800 focus:outline-none focus:border-slate-700'
 
   const moduleEntries = useMemo(
@@ -354,13 +333,13 @@ export default function TechSupport({
         <div>
           <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">
             {isTechTeam && mode === 'inbox'
-              ? 'Centro de Soporte Técnico y Sesiones Autorizadas'
+              ? 'Centro de Soporte Técnico y Autorizaciones'
               : 'Soporte técnico y autorización de sesión'}
           </h1>
           <p className="text-xs sm:text-sm text-slate-500 mt-1">
             {isTechTeam && mode === 'inbox'
-              ? 'Bandeja central donde llegan las solicitudes de usuarios con autorización expresa y auditable para solventar incidencias.'
-              : 'Reporta cualquier novedad operativa y otorga autorización temporal revocable al equipo desarrollador técnico.'}
+              ? 'Bandeja central de solicitudes de soporte y seguimiento técnico.'
+              : 'Reporta cualquier novedad operativa y controla las autorizaciones temporales de soporte.'}
           </p>
         </div>
 
@@ -427,7 +406,7 @@ export default function TechSupport({
           <div className="text-xs text-amber-900">
             <p className="font-semibold">Activación de tabla public.support_tickets en Supabase pendiente</p>
             <p className="mt-0.5 text-amber-800">
-              Las solicitudes están operando en modo de respaldo local. Ejecuta la migración 000016 en Supabase SQL Editor para centralizar las autorizaciones en tiempo real.
+              Las solicitudes están operando en modo de respaldo local. Las tablas y funciones de soporte requieren la aplicación coordinada de las nuevas migraciones de seguridad. No ejecutes scripts antiguos desde este aviso.
             </p>
           </div>
           <button
@@ -435,7 +414,7 @@ export default function TechSupport({
             onClick={() => setSqlModalOpen(true)}
             className="px-3 py-1.5 rounded-lg bg-amber-800 text-white text-xs font-medium hover:bg-amber-900 whitespace-nowrap shrink-0"
           >
-            Ver script SQL
+            Ver información SQL
           </button>
         </div>
       )}
@@ -474,13 +453,13 @@ export default function TechSupport({
 
         <div className="bg-white rounded-xl border border-slate-200 p-4">
           <div className="flex items-center justify-between text-xs text-slate-500">
-            <span>Sesiones autorizadas</span>
+            <span>Autorizaciones activas</span>
             <ShieldCheck className="w-4 h-4 text-emerald-600" />
           </div>
           <p className="text-2xl font-bold text-emerald-700 font-mono tabular-nums mt-1.5">
             {kpis.authorizedActive}
           </p>
-          <p className="text-xs text-slate-500 mt-1">Con permiso vigente del usuario</p>
+          <p className="text-xs text-slate-500 mt-1">Registradas en las solicitudes</p>
         </div>
 
         <div className="bg-white rounded-xl border border-slate-200 p-4">
@@ -506,20 +485,17 @@ export default function TechSupport({
         </div>
       </div>
 
-      {/* =====================================================================
-          MODO 1: VISTA DE USUARIO / EMPRESA (CREAR Y AUTORIZAR SESIÓN)
-      ====================================================================== */}
+      {/* MODO 1: VISTA DE USUARIO / EMPRESA */}
       {mode === 'client' && (
         <div className="space-y-5">
-          {/* Explicación transparente de privacidad y control de autorización */}
           <div className="bg-white rounded-xl border border-slate-200 p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div className="space-y-1 max-w-3xl">
               <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
                 <Lock className="w-4 h-4 text-emerald-600 shrink-0" />
-                <span>Tú tienes el control total sobre el acceso técnico a tu sesión</span>
+                <span>Tú tienes el control sobre las autorizaciones de soporte</span>
               </div>
               <p className="text-xs text-slate-600 leading-relaxed">
-                El equipo desarrollador técnico únicamente puede inspeccionar el diagnóstico de tu sesión cuando marcas la autorización expresa al crear un reporte. Cada permiso genera un código único auditable, nunca comparte tu contraseña y puedes revocarlo con un clic en cualquier momento.
+                Puedes registrar una solicitud y expresar tu consentimiento para una asistencia técnica temporal. La autorización del ticket no habilita por sí sola el acceso a los datos privados de la empresa. Ese acceso solo podrá habilitarse cuando las políticas de seguridad de Supabase estén integradas y verificadas.
               </p>
             </div>
             {!showCreateForm && (
@@ -638,7 +614,7 @@ export default function TechSupport({
 
               {/* Bloque de autorización expresa */}
               <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 space-y-3">
-                <label className="flex items-start gap-3 cursor-pointer select-none">
+                                <label className="flex items-start gap-3 cursor-pointer select-none">
                   <input
                     type="checkbox"
                     checked={authorizeSession}
@@ -647,10 +623,10 @@ export default function TechSupport({
                   />
                   <div className="min-w-0">
                     <p className="text-sm font-semibold text-slate-900">
-                      Autorizo al equipo desarrollador técnico a revisar mi sesión para solventar este caso
+                      Expreso mi consentimiento para solicitar asistencia técnica
                     </p>
                     <p className="text-xs text-slate-600 mt-0.5">
-                      Adjunta automáticamente el diagnóstico técnico de tu pantalla actual ({getPageLabel(modulePage)}, bodega {activeWarehouse?.name || 'principal'}, moneda {cur.currency}) y habilita un código temporal revocable.
+                      Se adjunta el contexto de la pantalla actual ({getPageLabel(modulePage)}, bodega {activeWarehouse?.name || 'principal'}, moneda {cur.currency}). Este consentimiento no concede acceso directo a los datos de la empresa mientras no esté integrado con las políticas RLS.
                     </p>
                   </div>
                 </label>
@@ -673,13 +649,13 @@ export default function TechSupport({
                         <option value="2">2 horas</option>
                         <option value="24">24 horas (Recomendado)</option>
                         <option value="72">72 horas</option>
-                        <option value="until_resolved">Hasta resolver la solicitud</option>
+                        <option value="until_resolved">Hasta resolver la solicitud (máximo 168 h)</option>
                       </select>
                     </div>
 
                     <div>
                       <label className="block text-xs font-medium text-slate-600 mb-1">
-                        Alcance permitido al técnico
+                        Alcance solicitado
                       </label>
                       <select
                         value={authScope}
@@ -687,10 +663,10 @@ export default function TechSupport({
                         className={inputCls}
                       >
                         <option value="intervencion_asistida">
-                          Diagnóstico y corrección asistida en sesión
+                          Diagnóstico y corrección asistida
                         </option>
                         <option value="lectura_diagnostico">
-                          Solo lectura y diagnóstico técnico
+                          Solo lectura y diagnóstico
                         </option>
                       </select>
                     </div>
@@ -712,7 +688,7 @@ export default function TechSupport({
                   disabled={busy || !subject.trim() || !description.trim()}
                   className="px-4 py-2 rounded-lg bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800 disabled:opacity-50 whitespace-nowrap"
                 >
-                  {busy ? 'Enviando solicitud...' : 'Enviar solicitud y registrar permiso'}
+                  {busy ? 'Enviando solicitud...' : 'Enviar solicitud'}
                 </button>
               </div>
             </form>
@@ -739,7 +715,7 @@ export default function TechSupport({
                   No has registrado solicitudes técnicas todavía
                 </p>
                 <p className="text-xs text-slate-500 max-w-md mx-auto">
-                  Cuando necesites asistencia en tu cuenta o sesión, crea una solicitud aquí y decide por cuánto tiempo autorizas la revisión.
+                  Cuando necesites asistencia en tu cuenta o sesión, crea una solicitud aquí y decide por cuánto tiempo autorizas la asistencia.
                 </p>
               </div>
             ) : (
@@ -807,11 +783,11 @@ export default function TechSupport({
                         <span className="text-slate-300">·</span>
                         {authActive ? (
                           <span className="text-emerald-700 font-medium font-mono tabular-nums">
-                            Sesión autorizada ({t.authorization_code}) · {formatRemainingTime(t.authorized_until)}
+                            Autorización registrada ({t.authorization_code}) · {formatRemainingTime(t.authorized_until)}
                           </span>
                         ) : t.revoked_at ? (
                           <span className="text-slate-500">
-                            Autorización revocada por el usuario el {fmtDateTime(t.revoked_at)}
+                            Autorización revocada el {fmtDateTime(t.revoked_at)}
                           </span>
                         ) : (
                           <span>Sin autorización activa de sesión</span>
@@ -849,9 +825,7 @@ export default function TechSupport({
         </div>
       )}
 
-      {/* =====================================================================
-          MODO 2: BANDEJA TÉCNICA (ROL TÉCNICO Y ADMINISTRADOR GLOBAL)
-      ====================================================================== */}
+      {/* MODO 2: BANDEJA TÉCNICA */}
       {isTechTeam && mode === 'inbox' && (
         <div className="grid grid-cols-1 xl:grid-cols-12 gap-5 items-start">
           {/* Columna izquierda: Cola filtrable de tickets */}
@@ -935,7 +909,7 @@ export default function TechSupport({
                                 : st.tone
                           }`}
                         >
-                          {authActive ? 'Sesión autorizada' : st.label}
+                          {authActive ? 'Autorización registrada' : st.label}
                         </span>
                       </div>
 
@@ -966,12 +940,11 @@ export default function TechSupport({
               </div>
             )}
           </div>
-
-          {/* Columna derecha: Inspector técnico de sesión autorizada y resolución */}
+                    {/* Columna derecha: Detalle del ticket y resolución técnica */}
           <div className="xl:col-span-7">
             {!selectedTicket ? (
               <div className="bg-white rounded-xl border border-slate-200 p-10 text-center text-sm text-slate-400">
-                Selecciona una solicitud de la bandeja para revisar su autorización de sesión y registrar el diagnóstico técnico.
+                Selecciona una solicitud de la bandeja para revisar su información y registrar el diagnóstico técnico.
               </div>
             ) : (
               <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
@@ -1017,49 +990,49 @@ export default function TechSupport({
                   </p>
                 </div>
 
-                {/* Estado de Autorización de Sesión */}
+                {/* Estado de autorización: informativo, no habilita inspección */}
                 <div className="p-5 border-b border-slate-200 space-y-3">
                   {isSessionAuthorizationActive(selectedTicket) ? (
-                    <div className="rounded-xl border border-emerald-200 bg-emerald-50/70 p-4 space-y-3">
+                    <div className="rounded-xl border border-amber-200 bg-amber-50/70 p-4 space-y-3">
                       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-                        <div className="flex items-center gap-2 text-sm font-semibold text-emerald-900">
-                          <ShieldCheck className="w-4 h-4 text-emerald-700 shrink-0" />
-                          <span>Autorización expresa de sesión ACTIVA</span>
+                        <div className="flex items-center gap-2 text-sm font-semibold text-amber-900">
+                          <ShieldCheck className="w-4 h-4 text-amber-700 shrink-0" />
+                          <span>Consentimiento registrado en el ticket</span>
                         </div>
-                        <span className="font-mono text-xs font-semibold text-emerald-800 tabular-nums">
-                          Código {selectedTicket.authorization_code || 'AUT-VERIFICADO'} ·{' '}
+                        <span className="font-mono text-xs font-semibold text-amber-800 tabular-nums">
+                          Código {selectedTicket.authorization_code || 'AUT-REGISTRADO'} ·{' '}
                           {formatRemainingTime(selectedTicket.authorized_until)}
                         </span>
                       </div>
 
-                      <p className="text-xs text-emerald-800">
-                        Alcance concedido por el usuario:{' '}
+                      <p className="text-xs text-amber-900">
+                        Alcance solicitado por el usuario:{' '}
                         <strong>
                           {selectedTicket.authorization_scope === 'intervencion_asistida'
-                            ? 'Diagnóstico de sesión e intervención técnica asistida'
-                            : 'Lectura y diagnóstico técnico de sesión'}
+                            ? 'Diagnóstico y corrección asistida'
+                            : 'Lectura y diagnóstico técnico'}
                         </strong>
                         {selectedTicket.authorized_until
-                          ? ` · Vigente hasta ${fmtDateTime(selectedTicket.authorized_until)}`
+                          ? ` · Vence ${fmtDateTime(selectedTicket.authorized_until)}`
                           : ''}
                       </p>
 
                       {selectedTicket.session_snapshot && (
-                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 pt-2 border-t border-emerald-200/70 text-xs">
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 pt-2 border-t border-amber-200/70 text-xs">
                           <div>
-                            <span className="text-emerald-700 block">Pantalla reportada</span>
+                            <span className="text-amber-800 block">Pantalla reportada</span>
                             <strong className="text-slate-900">
                               {selectedTicket.session_snapshot.active_page_label}
                             </strong>
                           </div>
                           <div>
-                            <span className="text-emerald-700 block">Bodega / Sede activa</span>
+                            <span className="text-amber-800 block">Bodega / Sede activa</span>
                             <strong className="text-slate-900">
                               {selectedTicket.session_snapshot.warehouse_name || 'Principal'}
                             </strong>
                           </div>
                           <div>
-                            <span className="text-emerald-700 block">Entorno cliente</span>
+                            <span className="text-amber-800 block">Entorno cliente</span>
                             <strong className="text-slate-900">
                               {selectedTicket.session_snapshot.platform || 'Web'} ·{' '}
                               {selectedTicket.session_snapshot.currency || 'USD'}
@@ -1068,28 +1041,11 @@ export default function TechSupport({
                         </div>
                       )}
 
-                      <div className="flex flex-wrap items-center gap-2 pt-1">
-                        {selectedTicket.module_page && onNavigate && (
-                          <button
-                            type="button"
-                            onClick={() => handleInspectAuthorizedModule(selectedTicket, false)}
-                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white border border-emerald-300 text-xs font-medium text-emerald-900 hover:bg-emerald-100 whitespace-nowrap"
-                          >
-                            <ExternalLink className="w-3.5 h-3.5" />
-                            Abrir pantalla ({getPageLabel(selectedTicket.module_page)})
-                          </button>
-                        )}
-
-                        {isMasterAccount && selectedTicket.module_page && onNavigate && (
-                          <button
-                            type="button"
-                            onClick={() => handleInspectAuthorizedModule(selectedTicket, true)}
-                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-medium hover:bg-slate-800 whitespace-nowrap"
-                          >
-                            <UserCheck className="w-3.5 h-3.5" />
-                            Inspeccionar con rol {getRoleLabel(selectedTicket.user_role)}
-                          </button>
-                        )}
+                      <div className="rounded-lg border border-amber-300 bg-white p-3 text-xs text-amber-950">
+                        <strong>Inspección de datos protegida.</strong>
+                        <p className="mt-1">
+                          Aunque un ticket tenga autorización, esta no concede por sí sola acceso a los datos de la empresa. La inspección directa permanece deshabilitada hasta integrar y verificar el permiso en las políticas RLS de cada tabla operativa.
+                        </p>
                       </div>
                     </div>
                   ) : (
@@ -1101,10 +1057,10 @@ export default function TechSupport({
                             ? 'El usuario revocó la autorización de sesión'
                             : selectedTicket.authorized_until
                               ? 'La autorización temporal de sesión expiró'
-                              : 'Solicitud enviada sin autorización de inspección de sesión'}
+                              : 'Solicitud sin autorización de sesión activa'}
                         </p>
                         <p>
-                          Puedes responder y orientar al usuario desde este panel. Para inspeccionar parámetros de su sesión, solicita al usuario reactivar la autorización desde su pantalla de Soporte.
+                          Puedes responder y orientar al usuario desde este panel. No se permite inspeccionar datos privados desde esta pantalla.
                         </p>
                       </div>
                     </div>

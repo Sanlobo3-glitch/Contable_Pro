@@ -1,196 +1,222 @@
+-- ============================================================
+-- 000008: AISLAMIENTO DEL ADMINISTRADOR CENTRAL EN INVENTARIO
+-- Dependencia: funciones y tablas existentes de Contable_Pro.
+--
+-- El administrador de plataforma no obtiene acceso operativo
+-- a una empresa por tener company_id en su perfil.
+--
+-- Se preservan los roles operativos de empresa.
+-- ============================================================
 
 BEGIN;
 
--- =========================================================
--- 000008: SOPORTE TEMPORAL DE LECTURA
--- VENTAS, COMPRAS Y GASTOS
---
--- Requiere la migración 000003.
--- No concede permisos de escritura al equipo técnico.
--- No modifica las RPC operativas.
--- =========================================================
+-- ------------------------------------------------------------
+-- 1. PREVALIDACIÓN
+-- ------------------------------------------------------------
 
--- 1. PREVALIDACIONES
 DO $$
 BEGIN
-  IF to_regclass('public.sales') IS NULL
-     OR to_regclass('public.purchases') IS NULL
-     OR to_regclass('public.expenses') IS NULL THEN
-    RAISE EXCEPTION 'Faltan tablas operativas requeridas';
+  IF to_regprocedure('public.is_platform_admin()') IS NULL THEN
+    RAISE EXCEPTION 'No existe public.is_platform_admin().';
   END IF;
 
-  IF NOT EXISTS (
-    SELECT 1
-    FROM pg_proc p
-    JOIN pg_namespace n ON n.oid = p.pronamespace
-    WHERE n.nspname = 'public'
-      AND p.proname = 'support_has_active_authorization'
-      AND pg_get_function_identity_arguments(p.oid) =
-          'p_company_id uuid, p_module text, p_scope text'
-  ) THEN
-    RAISE EXCEPTION
-      'Falta public.support_has_active_authorization(uuid,text,text). Aplicar primero 000003';
+  IF to_regprocedure('public.current_company_id()') IS NULL THEN
+    RAISE EXCEPTION 'No existe public.current_company_id().';
   END IF;
 
-  IF NOT (
-    SELECT relrowsecurity
-    FROM pg_class
-    WHERE oid = 'public.sales'::regclass
-  ) OR NOT (
-    SELECT relrowsecurity
-    FROM pg_class
-    WHERE oid = 'public.purchases'::regclass
-  ) OR NOT (
-    SELECT relrowsecurity
-    FROM pg_class
-    WHERE oid = 'public.expenses'::regclass
-  ) THEN
-    RAISE EXCEPTION 'RLS debe estar habilitado en las tres tablas';
+  IF to_regprocedure('public.can_manage_inventory()') IS NULL THEN
+    RAISE EXCEPTION 'No existe public.can_manage_inventory().';
   END IF;
 
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_policies
-    WHERE schemaname = 'public'
-      AND tablename = 'sales'
-      AND policyname = 'sales_select'
-  ) THEN
-    RAISE EXCEPTION 'No se encontró la política original sales_select';
+  IF to_regclass('public.inventory_transfer_items') IS NULL
+     OR to_regclass('public.inventory_transfers') IS NULL THEN
+    RAISE EXCEPTION 'Faltan tablas de traslados de inventario.';
   END IF;
 END;
 $$;
 
--- 2. VENTAS
--- Eliminar el acceso global del administrador de plataforma.
-DROP POLICY IF EXISTS platform_admin_all ON public.sales;
+-- ------------------------------------------------------------
+-- 2. AISLAR current_company_id()
+-- ------------------------------------------------------------
 
--- Conservar el acceso de la empresa:
--- administradores/gerentes y vendedor propietario de la venta.
--- Se elimina únicamente el bypass global is_platform_admin().
-DROP POLICY IF EXISTS sales_select ON public.sales;
+CREATE OR REPLACE FUNCTION public.current_company_id()
+RETURNS uuid
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path TO ''
+AS $function$
+  SELECT
+    CASE
+      WHEN public.is_platform_admin() THEN NULL::uuid
+      ELSE (
+        SELECT p.company_id
+        FROM public.profiles p
+        WHERE p.id = auth.uid()
+          AND p.active = true
+        LIMIT 1
+      )
+    END;
+$function$;
 
-CREATE POLICY sales_select
-ON public.sales
-FOR SELECT
+-- ------------------------------------------------------------
+-- 3. RESTRINGIR GESTIÓN DE INVENTARIO
+-- ------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION public.can_manage_inventory()
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path TO ''
+AS $function$
+  SELECT
+    auth.uid() IS NOT NULL
+    AND NOT public.is_platform_admin()
+    AND EXISTS (
+      SELECT 1
+      FROM public.profiles p
+      WHERE p.id = auth.uid()
+        AND p.active = true
+        AND p.company_id IS NOT NULL
+        AND p.role IN (
+          'dueno',
+          'admin_empresa',
+          'gerente',
+          'almacen'
+        )
+    );
+$function$;
+
+-- ------------------------------------------------------------
+-- 4. CORREGIR VALIDACIÓN DE DETALLES DE TRASLADOS
+-- ------------------------------------------------------------
+
+DROP POLICY IF EXISTS inventory_transfer_items_insert_draft
+ON public.inventory_transfer_items;
+
+CREATE POLICY inventory_transfer_items_insert_draft
+ON public.inventory_transfer_items
+FOR INSERT
 TO authenticated
-USING (
-  company_id = (SELECT public.current_company_id())
-  AND (
-    public.is_manager()
-    OR seller_id = (SELECT auth.uid())
+WITH CHECK (
+  company_id = public.current_company_id()
+  AND public.can_manage_inventory()
+  AND EXISTS (
+    SELECT 1
+    FROM public.inventory_transfers t
+    WHERE t.id = inventory_transfer_items.transfer_id
+      AND t.company_id = inventory_transfer_items.company_id
+      AND t.company_id = public.current_company_id()
+      AND t.status = 'draft'
   )
 );
 
--- Lectura temporal para soporte autorizado.
-CREATE POLICY support_sales_select
-ON public.sales
-FOR SELECT
+DROP POLICY IF EXISTS inventory_transfer_items_update_draft
+ON public.inventory_transfer_items;
+
+CREATE POLICY inventory_transfer_items_update_draft
+ON public.inventory_transfer_items
+FOR UPDATE
 TO authenticated
 USING (
-  public.support_has_active_authorization(
-    company_id,
-    'sales',
-    'lectura_diagnostico'
+  company_id = public.current_company_id()
+  AND public.can_manage_inventory()
+  AND EXISTS (
+    SELECT 1
+    FROM public.inventory_transfers t
+    WHERE t.id = inventory_transfer_items.transfer_id
+      AND t.company_id = inventory_transfer_items.company_id
+      AND t.company_id = public.current_company_id()
+      AND t.status = 'draft'
   )
-  OR
-  public.support_has_active_authorization(
-    company_id,
-    'sales',
-    'intervencion_asistida'
+)
+WITH CHECK (
+  company_id = public.current_company_id()
+  AND public.can_manage_inventory()
+  AND EXISTS (
+    SELECT 1
+    FROM public.inventory_transfers t
+    WHERE t.id = inventory_transfer_items.transfer_id
+      AND t.company_id = inventory_transfer_items.company_id
+      AND t.company_id = public.current_company_id()
+      AND t.status = 'draft'
   )
 );
 
--- 3. COMPRAS
-DROP POLICY IF EXISTS platform_admin_all ON public.purchases;
+DROP POLICY IF EXISTS inventory_transfer_items_delete_draft
+ON public.inventory_transfer_items;
 
-CREATE POLICY support_purchases_select
-ON public.purchases
-FOR SELECT
+CREATE POLICY inventory_transfer_items_delete_draft
+ON public.inventory_transfer_items
+FOR DELETE
 TO authenticated
 USING (
-  public.support_has_active_authorization(
-    company_id,
-    'purchases',
-    'lectura_diagnostico'
-  )
-  OR
-  public.support_has_active_authorization(
-    company_id,
-    'purchases',
-    'intervencion_asistida'
+  company_id = public.current_company_id()
+  AND public.can_manage_inventory()
+  AND EXISTS (
+    SELECT 1
+    FROM public.inventory_transfers t
+    WHERE t.id = inventory_transfer_items.transfer_id
+      AND t.company_id = inventory_transfer_items.company_id
+      AND t.company_id = public.current_company_id()
+      AND t.status = 'draft'
   )
 );
 
--- 4. GASTOS
-DROP POLICY IF EXISTS platform_admin_all ON public.expenses;
+-- ------------------------------------------------------------
+-- 5. VALIDACIONES DE SEGURIDAD
+-- ------------------------------------------------------------
 
--- Se conserva expenses_select original:
--- solo roles admin/dueno de su propia empresa.
--- Esta política adicional permite lectura temporal autorizada.
-CREATE POLICY support_expenses_select
-ON public.expenses
-FOR SELECT
-TO authenticated
-USING (
-  public.support_has_active_authorization(
-    company_id,
-    'expenses',
-    'lectura_diagnostico'
-  )
-  OR
-  public.support_has_active_authorization(
-    company_id,
-    'expenses',
-    'intervencion_asistida'
-  )
-);
-
--- 5. VERIFICACIÓN
 DO $$
 DECLARE
-  v_support_policies integer;
-  v_global_policies integer;
-  v_sales_qual text;
+  v_admin_company uuid;
 BEGIN
-  SELECT count(*)
-  INTO v_support_policies
-  FROM pg_policies
-  WHERE schemaname = 'public'
-    AND (
-      (tablename = 'sales' AND policyname = 'support_sales_select')
-      OR
-      (tablename = 'purchases' AND policyname = 'support_purchases_select')
-      OR
-      (tablename = 'expenses' AND policyname = 'support_expenses_select')
-    );
-
-  IF v_support_policies <> 3 THEN
+  IF public.can_manage_inventory() THEN
     RAISE EXCEPTION
-      'Verificación fallida: se esperaban 3 políticas de soporte, encontradas %',
-      v_support_policies;
+      'El usuario actual no debe obtener gestión de inventario como administrador central.';
   END IF;
 
-  SELECT count(*)
-  INTO v_global_policies
-  FROM pg_policies
-  WHERE schemaname = 'public'
-    AND tablename IN ('sales', 'purchases', 'expenses')
-    AND policyname = 'platform_admin_all';
-
-  IF v_global_policies <> 0 THEN
+  IF public.current_company_id() IS NOT NULL
+     AND public.is_platform_admin() THEN
     RAISE EXCEPTION
-      'Persisten políticas platform_admin_all en ventas/compras/gastos';
+      'El administrador central sigue obteniendo una empresa operativa.';
   END IF;
 
-  SELECT qual
-  INTO v_sales_qual
-  FROM pg_policies
-  WHERE schemaname = 'public'
-    AND tablename = 'sales'
-    AND policyname = 'sales_select';
-
-  IF v_sales_qual ILIKE '%is_platform_admin%' THEN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_policies
+    WHERE schemaname = 'public'
+      AND tablename = 'inventory_transfer_items'
+      AND policyname = 'inventory_transfer_items_insert_draft'
+      AND cmd = 'INSERT'
+  ) THEN
     RAISE EXCEPTION
-      'La política sales_select todavía contiene bypass de administrador global';
+      'No quedó creada la política INSERT de detalles de traslados.';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_policies
+    WHERE schemaname = 'public'
+      AND tablename = 'inventory_transfer_items'
+      AND policyname = 'inventory_transfer_items_update_draft'
+      AND cmd = 'UPDATE'
+  ) THEN
+    RAISE EXCEPTION
+      'No quedó creada la política UPDATE de detalles de traslados.';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_policies
+    WHERE schemaname = 'public'
+      AND tablename = 'inventory_transfer_items'
+      AND policyname = 'inventory_transfer_items_delete_draft'
+      AND cmd = 'DELETE'
+  ) THEN
+    RAISE EXCEPTION
+      'No quedó creada la política DELETE de detalles de traslados.';
   END IF;
 END;
 $$;

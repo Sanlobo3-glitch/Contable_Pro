@@ -1,16 +1,12 @@
-
 -- ============================================================
 -- MIGRACION 000014
 -- PROTECCION Y SOPORTE DE LECTURA DE NOMINA
+-- Fecha: 2026-11-05
 --
--- Modulo: sellers (Equipo y nomina)
---
--- - Elimina bypass global de platform_admin_all.
--- - Conserva las politicas normales de empresa.
--- - Habilita lectura temporal de soporte en movimientos y pagos.
--- - No permite escritura al soporte.
--- - Revoca todos los privilegios anon sobre tablas de nomina.
--- - No expone staff_details al equipo de soporte.
+-- Administrador central: CRUD aislado por empresa.
+-- Soporte: lectura temporal autorizada.
+-- staff_details: sin acceso de soporte.
+-- anon: sin privilegios en las tres tablas.
 -- ============================================================
 
 BEGIN;
@@ -61,11 +57,11 @@ BEGIN
         END IF;
     END LOOP;
 
-    IF to_regprocedure(
-        'public.support_has_active_authorization(uuid,text,text)'
-    ) IS NULL THEN
+    IF to_regprocedure('public.support_has_active_authorization(uuid,text,text)') IS NULL
+       OR to_regprocedure('public.is_platform_admin()') IS NULL
+       OR to_regprocedure('public.current_company_id()') IS NULL THEN
         RAISE EXCEPTION
-            'Migracion cancelada: falta support_has_active_authorization. Aplicar primero 000003.';
+            'Migracion cancelada: faltan funciones de seguridad requeridas.';
     END IF;
 END;
 $$;
@@ -86,7 +82,62 @@ ON public.staff_details;
 
 
 -- ============================================================
--- 3. SOPORTE: LECTURA DE MOVIMIENTOS DE NOMINA
+-- 3. ADMINISTRADOR CENTRAL AISLADO POR EMPRESA
+-- ============================================================
+
+DROP POLICY IF EXISTS platform_admin_company_all
+ON public.payroll_movements;
+
+CREATE POLICY platform_admin_company_all
+ON public.payroll_movements
+FOR ALL
+TO authenticated
+USING (
+    public.is_platform_admin()
+    AND company_id = (SELECT public.current_company_id())
+)
+WITH CHECK (
+    public.is_platform_admin()
+    AND company_id = (SELECT public.current_company_id())
+);
+
+
+DROP POLICY IF EXISTS platform_admin_company_all
+ON public.payroll_payments;
+
+CREATE POLICY platform_admin_company_all
+ON public.payroll_payments
+FOR ALL
+TO authenticated
+USING (
+    public.is_platform_admin()
+    AND company_id = (SELECT public.current_company_id())
+)
+WITH CHECK (
+    public.is_platform_admin()
+    AND company_id = (SELECT public.current_company_id())
+);
+
+
+DROP POLICY IF EXISTS platform_admin_company_all
+ON public.staff_details;
+
+CREATE POLICY platform_admin_company_all
+ON public.staff_details
+FOR ALL
+TO authenticated
+USING (
+    public.is_platform_admin()
+    AND company_id = (SELECT public.current_company_id())
+)
+WITH CHECK (
+    public.is_platform_admin()
+    AND company_id = (SELECT public.current_company_id())
+);
+
+
+-- ============================================================
+-- 4. SOPORTE: LECTURA DE MOVIMIENTOS DE NOMINA
 -- ============================================================
 
 DROP POLICY IF EXISTS support_read_payroll_movements
@@ -112,7 +163,7 @@ USING (
 
 
 -- ============================================================
--- 4. SOPORTE: LECTURA DE PAGOS DE NOMINA
+-- 5. SOPORTE: LECTURA DE PAGOS DE NOMINA
 -- ============================================================
 
 DROP POLICY IF EXISTS support_read_payroll_payments
@@ -138,7 +189,7 @@ USING (
 
 
 -- ============================================================
--- 5. REVOCAR PRIVILEGIOS ANON
+-- 6. REVOCAR PRIVILEGIOS ANON EN LAS TRES TABLAS
 -- ============================================================
 
 REVOKE ALL PRIVILEGES
@@ -149,19 +200,25 @@ REVOKE ALL PRIVILEGES
 ON TABLE public.payroll_payments
 FROM anon;
 
+REVOKE ALL PRIVILEGES
+ON TABLE public.staff_details
+FROM anon;
+
 
 -- ============================================================
--- 6. VERIFICACIONES FINALES
+-- 7. VERIFICACIONES FINALES
 -- ============================================================
 
 DO $$
 DECLARE
     v_global_count INTEGER;
+    v_admin_count INTEGER;
     v_support_count INTEGER;
     v_anon_access BOOLEAN;
+    v_rls_count INTEGER;
 BEGIN
 
-    -- No deben quedar politicas globales.
+    -- No deben quedar bypass globales.
     SELECT COUNT(*)
     INTO v_global_count
     FROM pg_policies
@@ -180,51 +237,57 @@ BEGIN
     END IF;
 
 
+    -- Deben existir exactamente tres politicas centrales.
+    SELECT COUNT(*)
+    INTO v_admin_count
+    FROM pg_policies
+    WHERE schemaname = 'public'
+      AND tablename IN (
+          'payroll_movements',
+          'payroll_payments',
+          'staff_details'
+      )
+      AND policyname = 'platform_admin_company_all'
+      AND cmd = 'ALL'
+      AND qual LIKE '%is_platform_admin()%'
+      AND qual LIKE '%current_company_id()%'
+      AND with_check LIKE '%is_platform_admin()%'
+      AND with_check LIKE '%current_company_id()%';
+
+    IF v_admin_count <> 3 THEN
+        RAISE EXCEPTION
+            'Verificacion fallida: se esperaban 3 politicas centrales aisladas; existen %.',
+            v_admin_count;
+    END IF;
+
+
     -- Deben existir exactamente dos politicas de soporte.
     SELECT COUNT(*)
     INTO v_support_count
     FROM pg_policies
     WHERE schemaname = 'public'
       AND (
-          (tablename = 'payroll_movements'
-           AND policyname = 'support_read_payroll_movements')
+          (
+              tablename = 'payroll_movements'
+              AND policyname = 'support_read_payroll_movements'
+              AND cmd = 'SELECT'
+          )
           OR
-          (tablename = 'payroll_payments'
-           AND policyname = 'support_read_payroll_payments')
+          (
+              tablename = 'payroll_payments'
+              AND policyname = 'support_read_payroll_payments'
+              AND cmd = 'SELECT'
+          )
       );
 
     IF v_support_count <> 2 THEN
         RAISE EXCEPTION
-            'Verificacion fallida: se esperaban 2 politicas de soporte y existen %.',
+            'Verificacion fallida: se esperaban 2 politicas de soporte; existen %.',
             v_support_count;
     END IF;
 
 
-    -- anon no debe conservar privilegios sobre movimientos.
-    SELECT
-        has_table_privilege('anon', 'public.payroll_movements', 'SELECT')
-        OR has_table_privilege('anon', 'public.payroll_movements', 'INSERT')
-        OR has_table_privilege('anon', 'public.payroll_movements', 'UPDATE')
-        OR has_table_privilege('anon', 'public.payroll_movements', 'DELETE')
-        OR has_table_privilege('anon', 'public.payroll_movements', 'TRUNCATE')
-        OR has_table_privilege('anon', 'public.payroll_movements', 'REFERENCES')
-        OR has_table_privilege('anon', 'public.payroll_movements', 'TRIGGER')
-        OR has_table_privilege('anon', 'public.payroll_payments', 'SELECT')
-        OR has_table_privilege('anon', 'public.payroll_payments', 'INSERT')
-        OR has_table_privilege('anon', 'public.payroll_payments', 'UPDATE')
-        OR has_table_privilege('anon', 'public.payroll_payments', 'DELETE')
-        OR has_table_privilege('anon', 'public.payroll_payments', 'TRUNCATE')
-        OR has_table_privilege('anon', 'public.payroll_payments', 'REFERENCES')
-        OR has_table_privilege('anon', 'public.payroll_payments', 'TRIGGER')
-    INTO v_anon_access;
-
-    IF v_anon_access THEN
-        RAISE EXCEPTION
-            'Verificacion fallida: anon conserva privilegios sobre tablas de nomina.';
-    END IF;
-
-
-    -- staff_details no debe recibir politicas de soporte.
+    -- staff_details nunca debe tener politica de soporte.
     IF EXISTS (
         SELECT 1
         FROM pg_policies
@@ -234,6 +297,50 @@ BEGIN
     ) THEN
         RAISE EXCEPTION
             'Verificacion fallida: staff_details tiene una politica de soporte.';
+    END IF;
+
+
+    -- Las tres tablas deben conservar RLS.
+    SELECT COUNT(*)
+    INTO v_rls_count
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = 'public'
+      AND c.relname IN (
+          'payroll_movements',
+          'payroll_payments',
+          'staff_details'
+      )
+      AND c.relrowsecurity = TRUE;
+
+    IF v_rls_count <> 3 THEN
+        RAISE EXCEPTION
+            'Verificacion fallida: RLS no esta activo en las tres tablas.';
+    END IF;
+
+
+    -- anon no debe conservar ningun privilegio.
+    SELECT
+        bool_or(
+            has_table_privilege('anon', 'public.' || quote_ident(t.table_name), 'SELECT')
+            OR has_table_privilege('anon', 'public.' || quote_ident(t.table_name), 'INSERT')
+            OR has_table_privilege('anon', 'public.' || quote_ident(t.table_name), 'UPDATE')
+            OR has_table_privilege('anon', 'public.' || quote_ident(t.table_name), 'DELETE')
+            OR has_table_privilege('anon', 'public.' || quote_ident(t.table_name), 'TRUNCATE')
+            OR has_table_privilege('anon', 'public.' || quote_ident(t.table_name), 'REFERENCES')
+            OR has_table_privilege('anon', 'public.' || quote_ident(t.table_name), 'TRIGGER')
+        )
+    INTO v_anon_access
+    FROM (
+        VALUES
+            ('payroll_movements'),
+            ('payroll_payments'),
+            ('staff_details')
+    ) AS t(table_name);
+
+    IF coalesce(v_anon_access, false) THEN
+        RAISE EXCEPTION
+            'Verificacion fallida: anon conserva privilegios sobre nomina.';
     END IF;
 
 

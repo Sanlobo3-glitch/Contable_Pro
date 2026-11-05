@@ -108,6 +108,10 @@ BEGIN
             'No puedes desactivar ni quitar permisos de administrador a tu propia cuenta';
     END IF;
 
+    -- Importante:
+    -- No modificar subscription_status.
+    -- La suscripción conserva su estado actual.
+
     UPDATE public.profiles
     SET
         full_name = coalesce(
@@ -116,12 +120,7 @@ BEGIN
         ),
         role = v_new_role,
         company_id = v_company,
-        active = v_new_active,
-        subscription_status = CASE
-            WHEN v_new_role IN ('admin', 'tecnico')
-                THEN 'active'
-            ELSE subscription_status
-        END
+        active = v_new_active
     WHERE id = v_target.id
       AND company_id = v_company;
 

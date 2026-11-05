@@ -72,9 +72,9 @@ END;
 $$;
 
 -- 2. PRIVILEGIOS SQL
--- Estas tres tablas tenían únicamente SELECT para authenticated.
--- Los permisos SQL son necesarios para que RLS pueda autorizar
--- las operaciones CRUD del administrador central.
+-- Las tres tablas de cartera tenían únicamente SELECT
+-- para authenticated. RLS restringe las escrituras al
+-- administrador central de su propia empresa.
 GRANT SELECT, INSERT, UPDATE, DELETE
 ON TABLE
   public.customer_credit,
@@ -82,7 +82,7 @@ ON TABLE
   public.credit_allocations
 TO authenticated;
 
--- Retirar privilegios directos a usuarios anónimos.
+-- Retirar todos los privilegios directos de anon.
 REVOKE ALL PRIVILEGES
 ON TABLE
   public.customer_credit,
@@ -285,8 +285,7 @@ ON public.purchases;
 DROP POLICY IF EXISTS platform_admin_company_all
 ON public.purchases;
 
--- Sustituir la política anterior si utilizaba otro nombre
--- de módulo para la autorización de soporte.
+-- Sustituir la política anterior de soporte.
 DROP POLICY IF EXISTS support_purchases_select
 ON public.purchases;
 
@@ -328,6 +327,7 @@ DECLARE
   v_qual text;
   v_check text;
   v_support_count integer;
+  v_privilege text;
 BEGIN
   -- Seis políticas CRUD del administrador central.
   SELECT count(*)
@@ -351,7 +351,7 @@ BEGIN
       v_count;
   END IF;
 
-  -- Seis políticas de lectura de soporte.
+  -- Seis políticas SELECT de soporte.
   SELECT count(*)
   INTO v_support_count
   FROM pg_policies
@@ -421,40 +421,57 @@ BEGIN
   END IF;
 
   -- Verificar privilegios CRUD SQL de authenticated.
-  IF NOT has_table_privilege(
-    'authenticated', 'public.customer_credit', 'SELECT,INSERT,UPDATE,DELETE'
-  ) OR NOT has_table_privilege(
-    'authenticated', 'public.credit_payments', 'SELECT,INSERT,UPDATE,DELETE'
-  ) OR NOT has_table_privilege(
-    'authenticated', 'public.credit_allocations', 'SELECT,INSERT,UPDATE,DELETE'
-  ) OR NOT has_table_privilege(
-    'authenticated', 'public.supplier_payments', 'SELECT,INSERT,UPDATE,DELETE'
-  ) OR NOT has_table_privilege(
-    'authenticated', 'public.supplier_allocations', 'SELECT,INSERT,UPDATE,DELETE'
-  ) OR NOT has_table_privilege(
-    'authenticated', 'public.purchases', 'SELECT,INSERT,UPDATE,DELETE'
-  ) THEN
-    RAISE EXCEPTION
-      'Faltan privilegios CRUD SQL para authenticated en alguna tabla';
-  END IF;
+  FOREACH v_table IN ARRAY ARRAY[
+    'customer_credit',
+    'credit_payments',
+    'credit_allocations',
+    'supplier_payments',
+    'supplier_allocations',
+    'purchases'
+  ]
+  LOOP
+    FOREACH v_privilege IN ARRAY ARRAY[
+      'SELECT', 'INSERT', 'UPDATE', 'DELETE'
+    ]
+    LOOP
+      IF NOT has_table_privilege(
+        'authenticated',
+        format('public.%I', v_table),
+        v_privilege
+      ) THEN
+        RAISE EXCEPTION
+          'Falta privilegio % para authenticated en public.%',
+          v_privilege, v_table;
+      END IF;
+    END LOOP;
+  END LOOP;
 
   -- Confirmar que anon no conserva privilegios directos.
-  IF has_table_privilege(
-    'anon', 'public.customer_credit', 'SELECT'
-  ) OR has_table_privilege(
-    'anon', 'public.credit_payments', 'SELECT'
-  ) OR has_table_privilege(
-    'anon', 'public.credit_allocations', 'SELECT'
-  ) OR has_table_privilege(
-    'anon', 'public.supplier_payments', 'SELECT'
-  ) OR has_table_privilege(
-    'anon', 'public.supplier_allocations', 'SELECT'
-  ) OR has_table_privilege(
-    'anon', 'public.purchases', 'SELECT'
-  ) THEN
-    RAISE EXCEPTION
-      'anon conserva privilegios SELECT en una tabla protegida';
-  END IF;
+  FOREACH v_table IN ARRAY ARRAY[
+    'customer_credit',
+    'credit_payments',
+    'credit_allocations',
+    'supplier_payments',
+    'supplier_allocations',
+    'purchases'
+  ]
+  LOOP
+    FOREACH v_privilege IN ARRAY ARRAY[
+      'SELECT', 'INSERT', 'UPDATE', 'DELETE',
+      'TRUNCATE', 'REFERENCES', 'TRIGGER'
+    ]
+    LOOP
+      IF has_table_privilege(
+        'anon',
+        format('public.%I', v_table),
+        v_privilege
+      ) THEN
+        RAISE EXCEPTION
+          'anon conserva privilegio % en public.%',
+          v_privilege, v_table;
+      END IF;
+    END LOOP;
+  END LOOP;
 
   RAISE NOTICE
     '000011 validada: CRUD central aislado, soporte SELECT y privilegios anon revocados';

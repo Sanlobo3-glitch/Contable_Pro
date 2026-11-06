@@ -51,6 +51,8 @@ SELECT jsonb_build_object(
         ('cpa_working_papers', 'Papeles de trabajo y firma CPC'),
         ('acc_accounts', 'Plan de cuentas contables'),
         ('acc_entries', 'Libro diario y comprobantes'),
+        ('platform_staff', 'Equipo interno de plataforma (Migración 000045)'),
+        ('platform_admin_audit', 'Auditoría comercial global (Migración 000045)'),
         ('sql_migration_log', 'Bitácora de migraciones SQL')
     ) AS t(tbl, lbl)
   ),
@@ -71,7 +73,16 @@ SELECT jsonb_build_object(
     FROM (
       VALUES
         ('is_tech_support', 'Validador RLS de soporte técnico'),
+        ('is_platform_staff', 'Validador de personal de plataforma (000045)'),
         ('admin_guardar_usuario_completo', 'Gestión integral de roles (11 perfiles)'),
+        ('admin_listar_empresas_comerciales', 'Listado comercial multiempresa (000045)'),
+        ('admin_activar_plan_empresa', 'Activación de planes por empresa (000045)'),
+        ('admin_reactivar_prueba_empresa', 'Reactivación de prueba comercial (000045)'),
+        ('admin_cambiar_estado_empresa', 'Suspensión/reactivación comercial (000045)'),
+        ('admin_listar_equipo_plataforma', 'Listado de equipo de plataforma (000045)'),
+        ('admin_asignar_personal_plataforma', 'Asignación de equipo de plataforma (000045)'),
+        ('admin_estado_personal_plataforma', 'Estado de integrantes de plataforma (000045)'),
+        ('admin_listar_auditoria_plataforma', 'Lectura de auditoría global (000045)'),
         ('actualizar_imagen_producto', 'Sincronización de imágenes POS/Catálogo'),
         ('obtener_catalogo_publico', 'Lectura pública de catálogo digital'),
         ('resolver_catalogo_publico', 'Resolución de enlace propio (/tienda/empresa)'),

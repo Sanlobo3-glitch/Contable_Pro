@@ -115,6 +115,95 @@ interface NavItem {
   allowed: boolean
 }
 
+// Menú cerrado por perfil. Se aplica también a demo y Paso Maestro.
+const ROLE_MENU_ACCESS: Record<Role, readonly string[]> = {
+  admin: ['companies','adminplans','users','support','sqlcenter','manual'],
+  tecnico: ['support','manual'],
+
+  dueno: [
+    'dashboard','command','summary','copilot','ask','ai_actions',
+    'pos','omnichannel','catalog','catorders','sales','dispatch_history',
+    'layaways','cartera','quotations','customers','devolutions','exchanges',
+    'sellers','employee_portal','routeplan','dispatch','goals',
+    'purchaseorders','purchases','payables','buyplan','suppliers','supplier_intel',
+    'products','priceshield','blindcount','warehouses','branch_balance',
+    'equipment_assets','categories','lots','kardex','labels',
+    'treasury','bankrecon','cash','expenses','anomaly_detector','compliance',
+    'reports','profit','predict','stats','map','history',
+    'cpa','accounting','accstate','costcenters','accsetup','accclose',
+    'taxes','erpbridge','support','api_ecosystem','team','subscription',
+    'settings','manual',
+  ],
+
+  admin_empresa: [
+    'dashboard','command','summary','copilot','ask','ai_actions',
+    'pos','omnichannel','catalog','catorders','sales','dispatch_history',
+    'layaways','cartera','quotations','customers','devolutions','exchanges',
+    'sellers','employee_portal','routeplan','dispatch','goals',
+    'purchaseorders','purchases','payables','buyplan','suppliers','supplier_intel',
+    'products','priceshield','blindcount','warehouses','branch_balance',
+    'equipment_assets','categories','lots','kardex','labels',
+    'treasury','bankrecon','cash','expenses','anomaly_detector','compliance',
+    'reports','profit','predict','stats','map','history',
+    'cpa','accounting','accstate','costcenters','accsetup','accclose',
+    'taxes','erpbridge','support','api_ecosystem','team','subscription',
+    'settings','manual',
+  ],
+
+  gerente: [
+    'dashboard','command','summary','copilot','ask','ai_actions',
+    'pos','omnichannel','catalog','catorders','sales','dispatch_history',
+    'layaways','cartera','quotations','customers','devolutions','exchanges',
+    'employee_portal','routeplan','dispatch','goals',
+    'purchaseorders','purchases','payables','buyplan','suppliers','supplier_intel',
+    'products','priceshield','blindcount','warehouses','branch_balance',
+    'equipment_assets','categories','lots','kardex','labels',
+    'cash','treasury','bankrecon','expenses','anomaly_detector','compliance',
+    'reports','profit','predict','stats','map','history','support','team','manual',
+  ],
+
+  contador: [
+    'dashboard','command','summary','copilot','ask',
+    'sales','dispatch_history','cartera','customers',
+    'purchaseorders','purchases','payables','suppliers',
+    'products','kardex','blindcount','treasury','bankrecon',
+    'cash','expenses','anomaly_detector','compliance',
+    'reports','profit','stats','history','cpa','accounting',
+    'accstate','costcenters','accsetup','accclose','taxes',
+    'erpbridge','manual',
+  ],
+
+  vendedor: [
+    'sales','catalog','catorders','customers','quotations',
+    'layaways','cartera','devolutions','exchanges',
+    'employee_portal','routeplan','dispatch','goals',
+    'products','dispatch_history','manual',
+  ],
+
+  cajero: [
+    'pos','sales','customers','devolutions','exchanges',
+    'layaways','cash','history','products','manual',
+  ],
+
+  almacen: [
+    'summary','products','warehouses','categories','kardex',
+    'lots','labels','priceshield','blindcount','branch_balance',
+    'purchaseorders','purchases','suppliers','buyplan',
+    'dispatch','dispatch_history','map','equipment_assets',
+    'predict','manual',
+  ],
+
+  comprador: [
+    'purchases','purchaseorders','payables','buyplan',
+    'suppliers','supplier_intel','products','categories',
+    'predict','manual',
+  ],
+
+  transportador: [
+    'routeplan','dispatch','dispatch_history','map',
+  ],
+}
+
 const DEMO_ROLES: { id: DemoRole; label: string }[] = [
   { id: 'dueno', label: 'Dueño' },
   { id: 'admin_empresa', label: 'Admin. Empresa' },
@@ -165,8 +254,16 @@ export default function AppLayout({
     resetDemo,
     exitDemo,
   } = useAuth()
+
   const cur = useCurrency()
-  const { activeWarehouses, activeWarehouseId, activeWarehouse, activeBranch, setActiveWarehouseId, refreshWarehouses } = useWarehouse()
+  const {
+    activeWarehouses,
+    activeWarehouseId,
+    activeWarehouse,
+    activeBranch,
+    setActiveWarehouseId,
+    refreshWarehouses,
+  } = useWarehouse()
 
   const [mobileOpen, setMobileOpen] = useState(false)
   const [navSearch, setNavSearch] = useState('')
@@ -190,8 +287,6 @@ export default function AppLayout({
   const cp = useCopilot()
   const alertCount = pendingCount(cp)
 
-  // En móvil/navegador, si el menú lateral, el buscador rápido o el modal de perfil están abiertos,
-  // presionar «Atrás» cierra primero el cajón/modal sin abandonar el módulo actual.
   useBackOverlay(
     mobileOpen || paletteOpen || (profileModalOpen && !savingProfile),
     () => {
@@ -218,7 +313,6 @@ export default function AppLayout({
     }
   }
 
-  // Atajo global Ctrl+K / Cmd+K para paleta de comandos
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
@@ -230,7 +324,6 @@ export default function AppLayout({
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
-  // Copiloto: revisa el negocio al entrar y se actualiza solo.
   useEffect(() => {
     const id = user?.id
     if (!id) return
@@ -241,7 +334,6 @@ export default function AppLayout({
     }
   }, [user?.id])
 
-  // Envío automático de lo guardado sin señal.
   useEffect(() => {
     const id = user?.id
     if (!id) return
@@ -257,7 +349,6 @@ export default function AppLayout({
     }
   }, [user?.id])
 
-  // Exclusivo cuenta maestra (sanlobo3@hotmail.com): carga directorio de empresas para cambio de contexto
   useEffect(() => {
     let active = true
     if (!isMasterAccount || isDemo) {
@@ -325,7 +416,6 @@ export default function AppLayout({
 
   const navItems: NavItem[] = useMemo(
     () => [
-      // Inicio y mando
       { id: 'dashboard', label: 'Panel ejecutivo', section: 'Principal', keywords: 'inicio kpi resumen', icon: <LayoutDashboard className="w-4 h-4 shrink-0" />, allowed: true },
       { id: 'command', label: 'Centro de mando', section: 'Principal', keywords: 'cfo coo finanzas vivo pulso sedes', icon: <Gauge className="w-4 h-4 shrink-0" />, allowed: isCompanyManager(role) || canViewAccounting(role) },
       { id: 'summary', label: 'Resumen del día', section: 'Principal', keywords: 'cierre diario corte', icon: <CalendarDays className="w-4 h-4 shrink-0" />, allowed: isCompanyManager(role) || canManageInventory(role) || canViewAccounting(role) },
@@ -333,13 +423,12 @@ export default function AppLayout({
       { id: 'ask', label: 'Pregúntale al Copiloto', section: 'Principal', keywords: 'asistente consulta', icon: <MessageCircleQuestion className="w-4 h-4 shrink-0" />, allowed: true },
       { id: 'ai_actions', label: 'Acciones de IA (Aprobaciones)', section: 'Principal', keywords: 'ia human in the loop aprobacion sugerencias ordenes compra precios', icon: <Sparkles className="w-4 h-4 shrink-0" />, allowed: true },
 
-      // Ventas y cobros
       { id: 'pos', label: 'Mostrador (POS)', section: 'Ventas y cobros', keywords: 'caja rapida cobrar facturar', icon: <Store className="w-4 h-4 shrink-0" />, allowed: canRegisterSales(role) },
       { id: 'omnichannel', label: 'Pedidos omnicanal', section: 'Ventas y cobros', keywords: 'pedidos whatsapp catalogo web ruta omnicanal alistamiento empaque epod', icon: <Boxes className="w-4 h-4 shrink-0" />, allowed: canRegisterSales(role) || isCompanyManager(role) },
       { id: 'catalog', label: 'Catálogo comercial', section: 'Ventas y cobros', keywords: 'catalogo pdf whatsapp fotos precios lista vendedor vitrina compartir', icon: <BookOpen className="w-4 h-4 shrink-0" />, allowed: true },
       { id: 'catorders', label: 'Pedidos de catálogo', section: 'Ventas y cobros', keywords: 'pedidos catalogo web capture comprobante pagomovil nequi zelle verificar autogestion', icon: <ClipboardCheck className="w-4 h-4 shrink-0" />, allowed: canRegisterSales(role) || isCompanyManager(role) || canViewAccounting(role) },
       { id: 'sales', label: 'Ventas', section: 'Ventas y cobros', keywords: 'facturas historial ventas', icon: <ShoppingCart className="w-4 h-4 shrink-0" />, allowed: canRegisterSales(role) || canViewAccounting(role) },
-      { id: 'dispatch_history', label: 'Trazabilidad y despachos', section: 'Ventas y cobros', keywords: 'despachos trazabilidad producto cliente tienda sucursal historial imprimir reporte remisiones salidas auditar', icon: <History className="w-4 h-4 shrink-0" />, allowed: canRegisterSales(role) || canManageInventory(role) || canViewAccounting(role) || isCompanyManager(role) },
+      { id: 'dispatch_history', label: 'Trazabilidad y despachos', section: 'Ventas y cobros', keywords: 'despachos trazabilidad producto cliente tienda sucursal historial imprimir reporte remisiones salidas auditar', icon: <History className="w-4 h-4 shrink-0" />, allowed: canRegisterSales(role) || canManageInventory(role) || canViewAccounting(role) || isCompanyManager(role) || canManageTransport(role) },
       { id: 'layaways', label: 'Plan Separe y apartados', section: 'Ventas y cobros', keywords: 'plan separe apartados anticipos abonos reservar mercancia whatsapp', icon: <CalendarClock className="w-4 h-4 shrink-0" />, allowed: canRegisterSales(role) },
       { id: 'cartera', label: 'Cartera (fiado)', section: 'Ventas y cobros', keywords: 'cxc cuentas por cobrar abonos deudores', icon: <Banknote className="w-4 h-4 shrink-0" />, allowed: canRegisterSales(role) || canViewAccounting(role) },
       { id: 'quotations', label: 'Cotizaciones', section: 'Ventas y cobros', keywords: 'presupuestos proformas', icon: <FileText className="w-4 h-4 shrink-0" />, allowed: canRegisterSales(role) },
@@ -348,11 +437,10 @@ export default function AppLayout({
       { id: 'exchanges', label: 'Cambios y garantías', section: 'Ventas y cobros', keywords: 'cambios mano a mano talla referencia excedente garantias posventa', icon: <ArrowLeftRight className="w-4 h-4 shrink-0" />, allowed: canRegisterSales(role) || canManageInventory(role) },
       { id: 'sellers', label: 'Equipo y nómina', section: 'Ventas y cobros', keywords: 'vendedores comisiones vales pagos', icon: <BadgeCheck className="w-4 h-4 shrink-0" />, allowed: canManageTeam(role) || canViewAccounting(role) },
       { id: 'employee_portal', label: 'Portal de vendedor', section: 'Ventas y cobros', keywords: 'autoservicio comisiones metas vendedor cartera saldo', icon: <UserCheck className="w-4 h-4 shrink-0" />, allowed: true },
-            { id: 'routeplan', label: role === 'vendedor' ? 'Mi ruta' : 'Planificar rutas', section: 'Ventas y cobros', keywords: 'paradas visitas', icon: <RouteIcon className="w-4 h-4 shrink-0" />, allowed: canRegisterSales(role) || canManageTransport(role) },
+      { id: 'routeplan', label: role === 'vendedor' ? 'Mi ruta' : 'Planificar rutas', section: 'Ventas y cobros', keywords: 'paradas visitas', icon: <RouteIcon className="w-4 h-4 shrink-0" />, allowed: canRegisterSales(role) || canManageTransport(role) },
       { id: 'dispatch', label: role === 'vendedor' ? 'Mi carga de ruta' : 'Despacho de ruta', section: 'Ventas y cobros', keywords: 'camion liquidacion carga', icon: <Truck className="w-4 h-4 shrink-0" />, allowed: canRegisterSales(role) || canManageTransport(role) || canManageInventory(role) },
       { id: 'goals', label: 'Metas', section: 'Ventas y cobros', keywords: 'objetivos cuotas', icon: <Target className="w-4 h-4 shrink-0" />, allowed: canRegisterSales(role) || isCompanyManager(role) },
 
-      // Compras y obligaciones
       { id: 'purchaseorders', label: 'Órdenes de compra', section: 'Compras y pagos', keywords: 'oc pedidos proveedor recepcion bodega backorder', icon: <ClipboardCheck className="w-4 h-4 shrink-0" />, allowed: canManagePurchases(role) || canManageInventory(role) || canViewAccounting(role) },
       { id: 'purchases', label: 'Compras', section: 'Compras y pagos', keywords: 'entradas mercancia facturas compra', icon: <Truck className="w-4 h-4 shrink-0" />, allowed: canManagePurchases(role) || canViewAccounting(role) },
       { id: 'payables', label: 'Cuentas por pagar', section: 'Compras y pagos', keywords: 'cxp deuda proveedores pagos', icon: <Receipt className="w-4 h-4 shrink-0" />, allowed: canManagePurchases(role) || canViewAccounting(role) },
@@ -360,7 +448,6 @@ export default function AppLayout({
       { id: 'suppliers', label: 'Proveedores', section: 'Compras y pagos', keywords: 'fabricantes distribuidores', icon: <Truck className="w-4 h-4 shrink-0" />, allowed: canManagePurchases(role) || canManageInventory(role) },
       { id: 'supplier_intel', label: 'Evaluación proveedores', section: 'Compras y pagos', keywords: 'otif inflacion costos ranking compras demoras calidad', icon: <Award className="w-4 h-4 shrink-0" />, allowed: canManagePurchases(role) || canManageInventory(role) },
 
-      // Inventario y sedes
       { id: 'products', label: 'Productos', section: 'Inventario', keywords: 'catalogo precios stock sku', icon: <Package className="w-4 h-4 shrink-0" />, allowed: true },
       { id: 'priceshield', label: 'Escudo de precios', section: 'Inventario', keywords: 'escudo margenes actualizar precios masivo redondeo inflacion etiquetas', icon: <ShieldCheck className="w-4 h-4 shrink-0" />, allowed: canManageInventory(role) },
       { id: 'blindcount', label: 'Toma física ciega', section: 'Inventario', keywords: 'toma fisica ciega conteo auditoria faltantes sobrantes inventario', icon: <EyeOff className="w-4 h-4 shrink-0" />, allowed: canManageInventory(role) || canViewAccounting(role) || isCompanyManager(role) },
@@ -372,7 +459,6 @@ export default function AppLayout({
       { id: 'kardex', label: 'Kardex', section: 'Inventario', keywords: 'movimientos auditoria entradas salidas', icon: <ClipboardList className="w-4 h-4 shrink-0" />, allowed: true },
       { id: 'labels', label: 'Etiquetas', section: 'Inventario', keywords: 'codigos barras qr impresion', icon: <QrCode className="w-4 h-4 shrink-0" />, allowed: canManageInventory(role) },
 
-      // Caja, tesorería y gastos
       { id: 'treasury', label: 'Tesorería y presupuesto', section: 'Caja y gastos', keywords: 'flujo caja liquidez proyeccion 30 60 90 presupuesto cfo', icon: <Landmark className="w-4 h-4 shrink-0" />, allowed: isCompanyManager(role) || canViewAccounting(role) },
       { id: 'bankrecon', label: 'Conciliación bancaria', section: 'Caja y gastos', keywords: 'conciliacion bancaria extracto nequi bancolombia 4x1000 gmf comisiones banco', icon: <FileSpreadsheet className="w-4 h-4 shrink-0" />, allowed: isCompanyManager(role) || canViewAccounting(role) },
       { id: 'cash', label: 'Caja y arqueos', section: 'Caja y gastos', keywords: 'efectivo apertura cierre turno', icon: <Wallet className="w-4 h-4 shrink-0" />, allowed: canAccessCashAndAudit(role) },
@@ -380,7 +466,6 @@ export default function AppLayout({
       { id: 'anomaly_detector', label: 'Detección de anomalías', section: 'Caja y gastos', keywords: 'fraude mermas descuentos caja devolucion auditoria perdida riesgo', icon: <ShieldAlert className="w-4 h-4 shrink-0" />, allowed: canAccessCashAndAudit(role) || isCompanyManager(role) },
       { id: 'compliance', label: 'Vencimientos legales', section: 'Caja y gastos', keywords: 'soat camara comercio bomberos impuestos contratos calendario legal licencias', icon: <Scale className="w-4 h-4 shrink-0" />, allowed: isCompanyManager(role) || canViewAccounting(role) },
 
-      // Análisis y reportes
       { id: 'reports', label: 'Reportes', section: 'Análisis', keywords: 'exportar csv imprimir', icon: <FileBarChart className="w-4 h-4 shrink-0" />, allowed: canViewStats(role) },
       { id: 'profit', label: 'Rentabilidad', section: 'Análisis', keywords: 'margen utilidad ganancia', icon: <PieChart className="w-4 h-4 shrink-0" />, allowed: isCompanyManager(role) || canViewAccounting(role) },
       { id: 'predict', label: 'Predicciones', section: 'Análisis', keywords: 'demanda proyeccion agotamiento', icon: <TrendingUp className="w-4 h-4 shrink-0" />, allowed: canManageInventory(role) || canManagePurchases(role) },
@@ -388,7 +473,6 @@ export default function AppLayout({
       { id: 'map', label: 'Mapa y rutas', section: 'Análisis', keywords: 'gps ubicacion geocerca', icon: <MapPin className="w-4 h-4 shrink-0" />, allowed: isCompanyManager(role) || canManageTransport(role) },
       { id: 'history', label: 'Historial de auditoría', section: 'Análisis', keywords: 'bitacora trazabilidad cambios', icon: <History className="w-4 h-4 shrink-0" />, allowed: canAccessCashAndAudit(role) },
 
-      // Contabilidad e impuestos
       { id: 'cpa', label: 'Despacho contable', section: 'Contabilidad', keywords: 'contador publico cpc hoja trabajo 8 columnas razones niif auditoria firma cedula iva conciliacion', icon: <Calculator className="w-4 h-4 shrink-0" />, allowed: canViewAccounting(role) },
       { id: 'accounting', label: 'Contabilidad', section: 'Contabilidad', keywords: 'plan cuentas asientos diario mayor balance comprobacion', icon: <BookOpen className="w-4 h-4 shrink-0" />, allowed: canViewAccounting(role) },
       { id: 'accstate', label: 'Estados financieros', section: 'Contabilidad', keywords: 'estado resultados balance general pyg vertical', icon: <FileBarChart className="w-4 h-4 shrink-0" />, allowed: canViewAccounting(role) },
@@ -398,7 +482,6 @@ export default function AppLayout({
       { id: 'taxes', label: 'Impuestos', section: 'Contabilidad', keywords: 'iva fiscal tributario', icon: <Percent className="w-4 h-4 shrink-0" />, allowed: canViewAccounting(role) },
       { id: 'erpbridge', label: 'Migración Siigo / Loggro', section: 'Contabilidad', keywords: 'siigo loggro migrar importar exportar puc terceros comprobantes contable pro', icon: <ArrowLeftRight className="w-4 h-4 shrink-0" />, allowed: isCompanyManager(role) || canViewAccounting(role) },
 
-      // Administración y soporte técnico
       { id: 'support', label: canManageTechSupport(role) ? 'Bandeja soporte técnico' : 'Soporte y autorización', section: 'Administración', keywords: 'soporte tecnico autorizar sesion ticket ayuda desarrollador aut', icon: <LifeBuoy className="w-4 h-4 shrink-0" />, allowed: true },
       { id: 'api_ecosystem', label: 'API y Webhooks', section: 'Administración', keywords: 'api token keys desarrollador woocommerce shopify webhooks integracion', icon: <Code className="w-4 h-4 shrink-0" />, allowed: canManageSettings(role) || isCompanyManager(role) },
       { id: 'sqlcenter', label: 'Scripts SQL y Supabase', section: 'Administración', keywords: 'sql supabase migraciones base datos tablas ejecutar diagnostico', icon: <Database className="w-4 h-4 shrink-0" />, allowed: isPlatformAdmin || isMasterAccount || isDemo },
@@ -413,7 +496,10 @@ export default function AppLayout({
     [role, isPlatformAdmin, isCompanyOwner, isMasterAccount, isDemo]
   )
 
-  const allowedItems = useMemo(() => navItems.filter(n => n.allowed), [navItems])
+  const allowedItems = useMemo(
+    () => navItems.filter(n => n.allowed && !!role && ROLE_MENU_ACCESS[role]?.includes(n.id)),
+    [navItems, role]
+  )
 
   const paletteItems: PaletteItem[] = useMemo(
     () =>
@@ -432,7 +518,6 @@ export default function AppLayout({
     [navItems, current]
   )
 
-  // Asegura que la sección del módulo actual siempre esté desplegada al navegar
   useEffect(() => {
     if (currentNavItem?.section) {
       setCollapsedSections(prev =>
@@ -637,19 +722,21 @@ export default function AppLayout({
             </select>
           )}
 
-          <button
-            type="button"
-            onClick={() => handleNav('sqlcenter')}
-            className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border text-xs font-medium whitespace-nowrap shrink-0 transition-colors ${
-              current === 'sqlcenter'
-                ? 'border-emerald-400 bg-emerald-500/20 text-emerald-200'
-                : 'border-slate-700 bg-slate-800 hover:bg-slate-700 text-slate-200'
-            }`}
-            title="Abrir Centro de Scripts SQL y Diagnóstico Supabase"
-          >
-            <Database className="w-3 h-3" />
-            Scripts SQL
-          </button>
+          {activeEffectiveRole === 'admin' && (
+            <button
+              type="button"
+              onClick={() => handleNav('sqlcenter')}
+              className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border text-xs font-medium whitespace-nowrap shrink-0 transition-colors ${
+                current === 'sqlcenter'
+                  ? 'border-emerald-400 bg-emerald-500/20 text-emerald-200'
+                  : 'border-slate-700 bg-slate-800 hover:bg-slate-700 text-slate-200'
+              }`}
+              title="Abrir Centro de Scripts SQL y Diagnóstico Supabase"
+            >
+              <Database className="w-3 h-3" />
+              Scripts SQL
+            </button>
+          )}
 
           {hasOverride && (
             <button
@@ -705,7 +792,8 @@ export default function AppLayout({
       </div>
     )
   }
-    function renderSupportPassBanner() {
+
+  function renderSupportPassBanner() {
     if (!activeSupportPass) return null
     return (
       <div className="bg-red-700 text-white px-4 py-2 text-xs flex flex-wrap items-center justify-between gap-3 shadow-md border-b border-red-800">
@@ -798,19 +886,21 @@ export default function AppLayout({
             </kbd>
           </button>
 
-          <button
-            type="button"
-            onClick={() => handleNav('copilot')}
-            title="Alertas del Copiloto"
-            className="relative p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 transition-colors"
-          >
-            <Bell className="w-4 h-4" />
-            {alertCount > 0 && (
-              <span className="ml-1 text-[11px] font-bold tabular-nums text-red-600">
-                {alertCount}
-              </span>
-            )}
-          </button>
+          {allowedItems.some(item => item.id === 'copilot') && (
+            <button
+              type="button"
+              onClick={() => handleNav('copilot')}
+              title="Alertas del Copiloto"
+              className="relative p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 transition-colors"
+            >
+              <Bell className="w-4 h-4" />
+              {alertCount > 0 && (
+                <span className="ml-1 text-[11px] font-bold tabular-nums text-red-600">
+                  {alertCount}
+                </span>
+              )}
+            </button>
+          )}
         </div>
       </div>
     )
@@ -995,18 +1085,20 @@ export default function AppLayout({
             <Search className="w-5 h-5" />
           </button>
 
-          <button
-            onClick={() => handleNav('copilot')}
-            title="Copiloto"
-            className="relative p-2 rounded-lg hover:bg-slate-100"
-          >
-            <Bell className="w-5 h-5 text-slate-600" />
-            {alertCount > 0 && (
-              <span className="absolute top-1 right-1 text-[10px] font-bold tabular-nums text-red-600">
-                {alertCount}
-              </span>
-            )}
-          </button>
+          {allowedItems.some(item => item.id === 'copilot') && (
+            <button
+              onClick={() => handleNav('copilot')}
+              title="Copiloto"
+              className="relative p-2 rounded-lg hover:bg-slate-100"
+            >
+              <Bell className="w-5 h-5 text-slate-600" />
+              {alertCount > 0 && (
+                <span className="absolute top-1 right-1 text-[10px] font-bold tabular-nums text-red-600">
+                  {alertCount}
+                </span>
+              )}
+            </button>
+          )}
 
           <button
             onClick={() => setMobileOpen(!mobileOpen)}
@@ -1041,7 +1133,8 @@ export default function AppLayout({
                 </div>
                 <Camera className="w-3.5 h-3.5 text-slate-400 shrink-0" />
               </button>
-                            {!isDemo && isMasterAccount && user && (
+
+              {!isDemo && isMasterAccount && user && (
                 <div className="mb-2.5 pb-2.5 border-b border-slate-100 space-y-1.5">
                   <div className="flex items-center justify-between gap-2 text-[11px]">
                     <span className="inline-flex items-center gap-1 font-semibold text-slate-800">
@@ -1160,7 +1253,6 @@ export default function AppLayout({
         </div>
       </main>
 
-      {/* Paleta rápida de módulos y bodegas (Ctrl+K / Cmd+K) */}
       <CommandPalette
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
@@ -1171,7 +1263,6 @@ export default function AppLayout({
         onSelectWarehouse={setActiveWarehouseId}
       />
 
-      {/* Modal propio: Mi perfil y foto */}
       {profileModalOpen && (
         <div
           className="fixed inset-0 z-50 bg-slate-950/50 flex items-center justify-center p-4 overflow-y-auto"

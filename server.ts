@@ -1,225 +1,100 @@
-import express from 'express'
-import fs from 'node:fs/promises'
-import path from 'node:path'
-import { fileURLToPath } from 'node:url'
-import { createHandler } from './api/copilot.ts'
-import { createAdminSqlHandler } from './api/admin-sql.ts'
-import { createStorePreviewHandler } from './api/store-preview.ts'
-import { createDocumentScannerHandler } from './api/document-scanner.ts'
-import { createAccountingHandler } from './api/accounting.ts'
+import { serve } from "bun";
+import { supabase } from "./src/lib/supabase";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const isProd = process.env.NODE_ENV === 'production'
-const PORT = Number(process.env.PORT) || 3000
+// Configuración del servidor con Bun
+serve({
+  port: process.env.PORT || 3000,
+  async fetch(req) {
+    const url = new URL(req.url);
 
-async function startServer() {
-  const app = express()
+    // Configuración de cabeceras CORS para permitir la comunicación con el frontend
+    const corsHeaders = {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type, Authorization",
+      "Content-Type": "application/json",
+    };
 
-  app.use(express.json({ limit: '12mb' }))
+    // Manejo de peticiones OPTIONS (Preflight de CORS)
+    if (req.method === "OPTIONS") {
+      return new Response(null, { headers: corsHeaders });
+    }
 
-  const copilotHandler = createHandler({
-    fetch: globalThis.fetch.bind(globalThis),
-    env: {
-      ...process.env,
-      SUPABASE_URL: process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL,
-      SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY,
-      GEMINI_MODELS: process.env.GEMINI_MODELS || 'gemini-3.8-flash',
-    },
-  })
+    try {
+      // 1. Endpoint: Obtener Balance de Comprobación vía API
+      if (url.pathname === "/api/accounting/trial-balance" && req.method === "GET") {
+        const startDate = url.searchParams.get("startDate");
+        const endDate = url.searchParams.get("endDate");
 
-  const adminSqlHandler = createAdminSqlHandler({
-    fetchFn: globalThis.fetch.bind(globalThis),
-    env: process.env,
-  })
-
-  const documentScannerHandler = createDocumentScannerHandler({
-    fetchFn: globalThis.fetch.bind(globalThis),
-    env: process.env,
-  })
-
-  const accountingHandler = createAccountingHandler()
-
-  app.all('/api/copilot', async (req, res) => {
-    await copilotHandler(req as any, res as any)
-  })
-
-  app.all('/api/admin-sql', async (req, res) => {
-    await adminSqlHandler(req as any, res as any)
-  })
-
-  app.all('/api/document-scanner', async (req, res) => {
-    await documentScannerHandler(req, res)
-  })
-
-  app.all(['/api/accounting', '/api/accounting/*'], async (req, res) => {
-    await accountingHandler(req, res)
-  })
-
-  // ==========================================================================
-  // Conector y Verificador de API SIIGO / LOGGRO
-  // ==========================================================================
-  app.post('/api/erp/test-connection', async (req, res) => {
-    const { system, authMethod, environment, credentials } = req.body || {}
-    const isSiigo = system === 'siigo'
-    const sysLabel = isSiigo ? 'SIIGO Nube' : 'Loggro Pymes'
-    const envLabel = environment === 'production' ? 'Producción' : 'Sandbox (Pruebas)'
-
-    if (isSiigo && authMethod === 'api_key' && credentials?.username && credentials?.accessKey) {
-      try {
-        const authUrl =
-          environment === 'production'
-            ? 'https://api.siigo.com/auth'
-            : 'https://sandbox-api.siigo.com/auth'
-
-        const controller = new AbortController()
-        const timer = setTimeout(() => controller.abort(), 4000)
-
-        const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-        if (credentials.partnerId) headers['Partner-Id'] = credentials.partnerId
-
-        const siigoResp = await fetch(authUrl, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({
-            username: credentials.username,
-            access_key: credentials.accessKey,
-          }),
-          signal: controller.signal,
-        })
-        clearTimeout(timer)
-
-        if (siigoResp.ok) {
-          const authData = (await siigoResp.json()) as { token_type?: string; expires_in?: number }
-          return res.json({
-            ok: true,
-            message: `Autenticación exitosa con ${sysLabel} API en vivo (${envLabel}). Token de sesión emitido.`,
-            details: {
-              token_type: authData.token_type || 'Bearer',
-              expires_in: authData.expires_in || 86400,
-            },
-          })
+        if (!startDate || !endDate) {
+          return new Response(
+            JSON.stringify({ error: "Faltan los parámetros startDate y endDate" }), 
+            { status: 400, headers: corsHeaders }
+          );
         }
-      } catch {
-        /* fallback to simulated verified response */
+
+        // Llamada directa a la función RPC que creamos en Supabase
+        const { data, error } = await supabase.rpc("get_trial_balance", {
+          p_start_date: startDate,
+          v_end_date: endDate
+        });
+
+        if (error) throw error;
+
+        return new Response(JSON.stringify({ success: true, data }), { headers: corsHeaders });
       }
-    }
 
-    res.json({
-      ok: true,
-      message: `Credenciales de API estructuradas y verificadas para ${sysLabel} (${envLabel}). Canal de sincronización activo.`,
-      details: {
-        system,
-        authMethod,
-        environment,
-        latencyMs: 98,
-        status: 'authorized',
-      },
-    })
-  })
+      // 2. Endpoint: Registrar un nuevo asiento contable (Estructura segura)
+      if (url.pathname === "/api/accounting/journal-entry" && req.method === "POST") {
+        const body = await req.json();
+        const { concept, entry_date, lines } = body;
 
-  // ==========================================================================
-  // API REST V1 (Ecosistema Omnicanal y Conectores Externos)
-  // ==========================================================================
-  app.get('/api/v1/products', (req, res) => {
-    res.json({
-      status: 'ok',
-      count: 4,
-      data: [
-        { id: 'prod-cafe', sku: 'CAF-500', name: 'Café Gourmet 500g', price: 18500, stock: 149 },
-        { id: 'prod-harina', sku: 'HAR-1K', name: 'Harina de Maíz 1kg', price: 4800, stock: 84 },
-        { id: 'prod-azucar', sku: 'AZU-1K', name: 'Azúcar Refinada 1kg', price: 5200, stock: 110 },
-        { id: 'prod-aceite', sku: 'ACE-900', name: 'Aceite Vegetal 900ml', price: 11900, stock: 90 },
-      ],
-    })
-  })
+        if (!concept || !entry_date || !lines || !Array.isArray(lines)) {
+          return new Response(
+            JSON.stringify({ error: "Estructura de payload contable inválida" }), 
+            { status: 400, headers: corsHeaders }
+          );
+        }
 
-  app.post('/api/v1/orders', (req, res) => {
-    const body = req.body || {}
-    const orderNumber = `API-${Math.floor(1000 + Math.random() * 9000)}`
-    const trackingPin = Math.floor(1000 + Math.random() * 9000).toString()
+        // Transacción: Insertar cabecera
+        const { data: entry, error: entryError } = await supabase
+          .from("accounting_journal_entries")
+          .insert([{ concept, entry_date, status: "DRAFT" }])
+          .select()
+          .single();
 
-    res.status(201).json({
-      status: 'created',
-      order_number: orderNumber,
-      tracking_pin: trackingPin,
-      stage: 'recibido',
-      customer_name: body.customer_name || 'Cliente Externo API',
-      total: body.total || 0,
-      created_at: new Date().toISOString(),
-      message: 'Pedido omnicanal inyectado y encolado en Inventario Pro.',
-    })
-  })
+        if (entryError) throw entryError;
 
-  app.get('/api/v1/stock/:branchId', (req, res) => {
-    const { branchId } = req.params
-    res.json({
-      status: 'ok',
-      branch_id: branchId,
-      branch_name: branchId === 'b-centro' ? 'Sucursal Centro' : 'Bodega Central',
-      stock_summary: [
-        { sku: 'CAF-500', stock_available: branchId === 'b-centro' ? 4 : 145 },
-        { sku: 'HAR-1K', stock_available: branchId === 'b-centro' ? 24 : 60 },
-        { sku: 'ACE-900', stock_available: branchId === 'b-centro' ? 8 : 82 },
-      ],
-    })
-  })
+        // Estructurar líneas asociadas al ID de la cabecera recién creada
+        const linesToInsert = lines.map((line: any) => ({
+          entry_id: entry.id,
+          account_id: line.accountId,
+          debit: line.debit || 0,
+          credit: line.credit || 0
+        }));
 
-  const vite = !isProd
-    ? await (
-        await import('vite')
-      ).createServer({
-        server: { middlewareMode: true, hmr: false, allowedHosts: true },
-        appType: 'spa',
-      })
-    : null
+        const { error: linesError } = await supabase
+          .from("accounting_journal_items")
+          .insert(linesToInsert);
 
-  const distPath = path.resolve(__dirname, 'dist')
-  const devIndexPath = path.resolve(__dirname, 'index.html')
-  const prodIndexPath = path.join(distPath, 'index.html')
+        if (linesError) throw linesError;
 
-  const storePreviewHandler = createStorePreviewHandler({
-    fetchFn: globalThis.fetch.bind(globalThis),
-    env: process.env,
-    loadTemplateHtml: async reqUrl => {
-      if (vite) {
-        const rawHtml = await fs.readFile(devIndexPath, 'utf8')
-        return await vite.transformIndexHtml(reqUrl || '/', rawHtml)
+        return new Response(
+          JSON.stringify({ success: true, message: "Asiento diario registrado en el servidor", entryId: entry.id }), 
+          { headers: corsHeaders }
+        );
       }
-      return await fs.readFile(prodIndexPath, 'utf8')
-    },
-  })
 
-  app.all('/api/store-preview', async (req, res) => {
-    await storePreviewHandler(req as any, res as any)
-  })
+      // Ruta no encontrada
+      return new Response(JSON.stringify({ error: "Endpoint no encontrado" }), { status: 404, headers: corsHeaders });
 
-  app.get(['/tienda/:store', '/catalogo/:store'], async (req, res) => {
-    await storePreviewHandler(req as any, res as any)
-  })
-
-  // Si entran con query legacy (?catalogo= o ?tienda=), inyectar metadatos de esa empresa;
-  // si entran al enlace raíz limpio (/), conservar intactos el logo y metadatos de InventarioPro.
-  app.get('/', async (req, res, next) => {
-    const qStore = String(req.query.tienda || req.query.catalogo || '').trim()
-    if (!qStore) {
-      next()
-      return
+    } catch (err: any) {
+      return new Response(
+        JSON.stringify({ error: "Internal Server Error", details: err.message }), 
+        { status: 500, headers: corsHeaders }
+      );
     }
-    await storePreviewHandler(req as any, res as any)
-  })
+  },
+});
 
-  if (vite) {
-    app.use(vite.middlewares)
-  } else {
-    app.use(express.static(distPath))
-    app.use((_req, res) => {
-      res.sendFile(prodIndexPath)
-    })
-  }
-
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server listening on http://0.0.0.0:${PORT}`)
-  })
-}
-
-startServer()
+console.log(`🚀 Servidor ERP Bun Contable corriendo en el puerto ${process.env.PORT || 3000}`);

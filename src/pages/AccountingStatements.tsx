@@ -19,7 +19,6 @@ export default function AccountingStatements() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Rango de fechas por defecto: Mes actual
   const today = new Date();
   const firstDay = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().split('T')[0];
   const lastDay = new Date(today.getFullYear(), today.getMonth() + 1, 0).toISOString().split('T')[0];
@@ -35,12 +34,10 @@ export default function AccountingStatements() {
     try {
       setLoading(true);
       setError(null);
-
       const { data, error: rpcError } = await supabase.rpc('get_trial_balance', {
         p_start_date: startDate,
         v_end_date: endDate
       });
-
       if (rpcError) throw rpcError;
       if (data) setBalanceData(data as TrialBalanceRow[]);
     } catch (err: any) {
@@ -60,7 +57,6 @@ export default function AccountingStatements() {
 
   const netUtility = totalIncome - totalExpenses;
 
-  // Lógica nativa de exportación a Excel
   const exportToExcel = () => {
     if (!balanceData || balanceData.length === 0) return;
     const worksheetData = balanceData.map(row => ({
@@ -85,7 +81,6 @@ export default function AccountingStatements() {
     XLSX.writeFile(wb, `Balance_Comprobacion_${startDate}_a_${endDate}.xlsx`);
   };
 
-  // Lógica nativa de generación de PDF Corporativo
   const exportToPDF = () => {
     if (!balanceData || balanceData.length === 0) return;
     const doc = new jsPDF();
@@ -123,7 +118,6 @@ export default function AccountingStatements() {
   };
   return (
     <div className="container mx-auto p-6 max-w-6xl space-y-6">
-      {/* Encabezado Principal Integrado */}
       <div className="md:flex justify-between items-center bg-slate-900 text-white p-6 rounded-2xl shadow-lg">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Centro de Estados Financieros</h1>
@@ -162,7 +156,6 @@ export default function AccountingStatements() {
         </div>
       </div>
 
-      {/* KPI Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="bg-white p-5 rounded-xl border border-slate-100 shadow-sm flex justify-between items-center">
           <div>
@@ -193,11 +186,10 @@ export default function AccountingStatements() {
         </div>
       </div>
 
-      {/* Tabla del Balance */}
       <div className="bg-white rounded-xl shadow-md border border-slate-100 overflow-hidden">
         <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
           <h2 className="font-bold text-slate-800 text-sm uppercase tracking-wider">Balance de Comprobación por Subcuentas</h2>
-          <span className="text-xs font-mono text-slate-500">Registros procesados: {balanceData.length}</span>
+          <span className="text-xs font-mono text-slate-500">Registros procesados: {balanceData ? balanceData.length : 0}</span>
         </div>
 
         {loading ? (
@@ -220,7 +212,7 @@ export default function AccountingStatements() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-sm">
-                {balanceData.map((row) => (
+                {balanceData && balanceData.map((row) => (
                   <tr key={row.account_code} className="hover:bg-slate-50/60 transition-colors">
                     <td className="p-3 pl-6 font-mono font-semibold text-slate-500">{row.account_code}</td>
                     <td className="p-3 text-slate-700 font-medium">{row.account_name}</td>

@@ -1,531 +1,170 @@
-import { useEffect, useState } from 'react'
-import { supabase } from '../lib/supabase'
-import { useAuth, canViewAccounting } from '../lib/auth'
-import {
-  Printer,
-  CheckCircle2,
-  AlertTriangle,
-  Download,
-  Calculator,
-  ArrowUpRight,
-} from 'lucide-react'
-import { useCurrency, fmtNum } from '../lib/currency'
-import { downloadCsv } from '../lib/csv'
-import { readLocalCpaProfile } from '../lib/cpaStorage'
-import type { CpaProfessionalProfile } from '../types'
+import React, { useEffect, useState } from 'react';
+import { supabase } from '../lib/supabase';
 
-interface Row {
-  account_id: string | null
-  code: string
-  name: string
-  type: string
-  amount: number
+interface TrialBalanceRow {
+  account_code: string;
+  account_name: string;
+  account_type: string;
+  total_debit: number;
+  total_credit: number;
+  initial_balance: number;
+  final_balance: number;
 }
 
-interface Reason {
-  kind: 'bloqueo' | 'nota'
-  reason: string
-}
+export default function AccountingStatements() {
+  const [balanceData, setBalanceData] = useState<TrialBalanceRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-const money = (n: number) => fmtNum(Number(n) || 0, 2, 2)
-const pctOf = (value: number, base: number) =>
-  base > 0.005 ? `${((Number(value) / base) * 100).toFixed(1)}%` : '—'
-const iso = (d: Date) => d.toLocaleDateString('sv-SE')
+  // Rango de fechas por defecto: Mes actual
+  const today = new Date();
+  const firstDay = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().split('T')[0];
+  const lastDay = new Date(today.getFullYear(), today.getMonth() + 1, 0).toISOString().split('T')[0];
 
-const PRINT_CSS = `
-@media print {
-  body * { visibility: hidden !important; }
-  .print-area, .print-area * { visibility: visible !important; }
-  .print-area { position: absolute; left: 0; top: 0; width: 100%; border: none !important; padding: 0 !important; }
-  .no-print { display: none !important; }
-}
-`
-
-export default function AccountingStatements({
-  onNavigate,
-}: {
-  onNavigate?: (page: string) => void
-}) {
-  const { user } = useAuth()
-  const { currency } = useCurrency()
-  const isManager = canViewAccounting(user?.role)
-  const now = new Date()
-
-  const [tab, setTab] = useState<'er' | 'bs'>('er')
-  const [from, setFrom] = useState(iso(new Date(now.getFullYear(), 0, 1)))
-  const [to, setTo] = useState(iso(now))
-  const [rows, setRows] = useState<Row[]>([])
-  const [reasons, setReasons] = useState<Reason[]>([])
-  const [companyHeader, setCompanyHeader] = useState<{ name: string; rif: string }>({
-    name: user?.company_name || 'Empresa',
-    rif: '',
-  })
-  const [cpaProfile, setCpaProfile] = useState<CpaProfessionalProfile>(() =>
-    readLocalCpaProfile(user?.company_id, user ?? undefined)
-  )
-  const [err, setErr] = useState<string | null>(null)
+  const [startDate, setStartDate] = useState(firstDay);
+  const [endDate, setEndDate] = useState(lastDay);
 
   useEffect(() => {
-    setCpaProfile(readLocalCpaProfile(user?.company_id, user ?? undefined))
-  }, [user?.company_id, user?.full_name, user?.email, user?.phone])
+    loadTrialBalance();
+  }, [startDate, endDate]);
 
-  useEffect(() => {
-    if (!isManager) return
-    supabase
-      .from('company_config')
-      .select('name, rif')
-      .limit(1)
-      .maybeSingle()
-      .then(({ data }) => {
-        if (data) {
-          const rec = data as { name?: string; rif?: string }
-          setCompanyHeader({
-            name: rec.name || user?.company_name || 'Empresa',
-            rif: rec.rif || '',
-          })
-        }
-      })
-  }, [isManager, user?.company_name])
+  // 1. Consumo de la función RPC de Supabase que compilamos antes
+  const loadTrialBalance = async () => {
+    try {
+      setLoading(true);
+      setError(null);
 
-  useEffect(() => {
-    if (!isManager) return
-    setErr(null)
-    const companyId = user?.company_id || '00000000-0000-4000-8000-000000000001'
-    const q =
-      tab === 'er'
-        ? supabase.rpc('acc_income_statement', { p_from: from, p_to: to })
-        : supabase.rpc('acc_balance_sheet', { p_to: to })
+      const { data, error: rpcError } = await supabase.rpc('get_trial_balance', {
+        p_start_date: startDate,
+        v_end_date: endDate
+      });
 
-    q.then(async ({ data, error }) => {
-      if (!error && Array.isArray(data) && data.length > 0) {
-        setRows(data as Row[])
-        return
-      }
-
-      try {
-        if (tab === 'er') {
-          const res = await supabase.rpc('fn_income_statement', {
-            p_company_id: companyId,
-            p_start_date: from,
-            p_end_date: to,
-          })
-          if (res.data) {
-            const rowsMapped: Row[] = []
-            res.data.revenues?.items?.forEach((i: any) =>
-              rowsMapped.push({ account_id: i.id, code: i.code, name: i.name, type: 'ingreso', amount: i.amount })
-            )
-            res.data.costs?.items?.forEach((i: any) =>
-              rowsMapped.push({ account_id: i.id, code: i.code, name: i.name, type: 'costo', amount: i.amount })
-            )
-            res.data.expenses?.items?.forEach((i: any) =>
-              rowsMapped.push({ account_id: i.id, code: i.code, name: i.name, type: 'gasto', amount: i.amount })
-            )
-            setRows(rowsMapped)
-            return
-          }
-        } else {
-          const res = await supabase.rpc('fn_balance_sheet', {
-            p_company_id: companyId,
-            p_as_of_date: to,
-          })
-          if (res.data) {
-            const rowsMapped: Row[] = []
-            res.data.assets?.accounts?.forEach((i: any) =>
-              rowsMapped.push({ account_id: i.id, code: i.code, name: i.name, type: 'activo', amount: i.balance })
-            )
-            res.data.liabilities?.accounts?.forEach((i: any) =>
-              rowsMapped.push({ account_id: i.id, code: i.code, name: i.name, type: 'pasivo', amount: i.balance })
-            )
-            res.data.equity?.accounts?.forEach((i: any) =>
-              rowsMapped.push({ account_id: i.id, code: i.code, name: i.name, type: 'patrimonio', amount: i.balance })
-            )
-            setRows(rowsMapped)
-            return
-          }
-        }
-      } catch {
-        /* proceed to standard error */
-      }
-
-      if (error) setErr(error.message)
-      else setRows((data as Row[]) || [])
-    })
-
-    supabase.rpc('acc_statement_status', { p_to: to }).then(({ data }) => {
-      setReasons((data as Reason[]) || [])
-    })
-  }, [isManager, tab, from, to, user?.company_id])
-
-  if (!isManager) {
-    return <p className="text-sm text-slate-500">No tienes permiso para ver esta página.</p>
-  }
-
-  const of = (t: string) => rows.filter(r => r.type === t)
-  const sum = (t: string) => of(t).reduce((s, r) => s + Number(r.amount), 0)
-  const blockers = reasons.filter(r => r.kind === 'bloqueo')
-  const notes = reasons.filter(r => r.kind === 'nota')
-
-  const input =
-    'px-3 py-2 rounded-lg border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-slate-700'
-
-  const tabBtn = (id: 'er' | 'bs', label: string) => (
-    <button
-      onClick={() => setTab(id)}
-      className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-colors ${
-        tab === id ? 'bg-slate-800 text-white' : 'text-slate-600 hover:bg-slate-100'
-      }`}
-    >
-      {label}
-    </button>
-  )
-
-  const ingresos = sum('ingreso')
-  const costos = sum('costo')
-  const gastos = sum('gasto')
-  const bruta = ingresos - costos
-  const neta = bruta - gastos
-
-  const activo = sum('activo')
-  const pasivo = sum('pasivo')
-  const patr = sum('patrimonio')
-  const res = sum('resultado')
-  const pasivoMasPatrimonio = pasivo + patr + res
-  const cuadra = Math.abs(activo - pasivoMasPatrimonio) < 0.005
-
-  const verticalBase = tab === 'er' ? ingresos : activo
-
-  const Section = ({
-    title,
-    type,
-    total,
-    label,
-  }: {
-    title: string
-    type: string
-    total: number
-    label?: string
-  }) => (
-    <div>
-      <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1.5">
-        <span>{title}</span>
-        <span className="text-[11px] font-normal normal-case text-slate-400">
-          Monto ({currency}) · % Vertical
-        </span>
-      </div>
-      {of(type).map(r => (
-        <div
-          key={r.code}
-          className="flex items-center justify-between gap-3 py-1.5 text-sm text-slate-700 border-b border-slate-50"
-        >
-          <span className="min-w-0 truncate">
-            <span className="font-mono text-xs text-slate-400 mr-2">{r.code}</span>
-            {r.name}
-          </span>
-          <div className="flex items-center gap-4 shrink-0 font-mono tabular-nums">
-            <span>{money(r.amount)}</span>
-            <span className="w-14 text-right text-xs text-slate-400">
-              {pctOf(Number(r.amount), verticalBase)}
-            </span>
-          </div>
-        </div>
-      ))}
-      {of(type).length === 0 && (
-        <p className="text-xs text-slate-400 py-1.5">Sin movimientos contabilizados</p>
-      )}
-      <div className="flex items-center justify-between gap-3 py-2 border-t border-slate-200 text-sm font-semibold text-slate-800">
-        <span>{label || `Total ${title.toLowerCase()}`}</span>
-        <div className="flex items-center gap-4 shrink-0 font-mono tabular-nums">
-          <span>{money(total)}</span>
-          <span className="w-14 text-right text-xs text-slate-500">
-            {pctOf(total, verticalBase)}
-          </span>
-        </div>
-      </div>
-    </div>
-  )
-
-  function exportExcel() {
-    if (tab === 'er') {
-      const csvRows: (string | number)[][] = [
-        ...of('ingreso').map(r => [
-          'Ingresos',
-          r.code,
-          r.name,
-          Number(r.amount),
-          pctOf(Number(r.amount), ingresos),
-        ]),
-        ['Subtotal', '', 'Total ingresos', ingresos, pctOf(ingresos, ingresos)],
-        ...of('costo').map(r => [
-          'Costos',
-          r.code,
-          r.name,
-          Number(r.amount),
-          pctOf(Number(r.amount), ingresos),
-        ]),
-        ['Subtotal', '', 'Total costos', costos, pctOf(costos, ingresos)],
-        ['Resultado', '', 'Utilidad bruta', bruta, pctOf(bruta, ingresos)],
-        ...of('gasto').map(r => [
-          'Gastos',
-          r.code,
-          r.name,
-          Number(r.amount),
-          pctOf(Number(r.amount), ingresos),
-        ]),
-        ['Subtotal', '', 'Total gastos', gastos, pctOf(gastos, ingresos)],
-        ['Resultado', '', 'Resultado neto del periodo', neta, pctOf(neta, ingresos)],
-      ]
-      downloadCsv(
-        `estado_resultados_${from}_${to}.csv`,
-        ['Sección', 'Código', 'Cuenta', `Monto (${currency})`, '% Vertical'],
-        csvRows
-      )
-      return
+      if (rpcError) throw rpcError;
+      if (data) setBalanceData(data as TrialBalanceRow[]);
+    } catch (err: any) {
+      setError(err.message || 'Error calculando el balance de comprobación');
+    } finally {
+      setLoading(false);
     }
-    const csvRows: (string | number)[][] = [
-      ...of('activo').map(r => [
-        'Activos',
-        r.code,
-        r.name,
-        Number(r.amount),
-        pctOf(Number(r.amount), activo),
-      ]),
-      ['Subtotal', '', 'Total activos', activo, pctOf(activo, activo)],
-      ...of('pasivo').map(r => [
-        'Pasivos',
-        r.code,
-        r.name,
-        Number(r.amount),
-        pctOf(Number(r.amount), activo),
-      ]),
-      ['Subtotal', '', 'Total pasivos', pasivo, pctOf(pasivo, activo)],
-      ...of('patrimonio').map(r => [
-        'Patrimonio',
-        r.code,
-        r.name,
-        Number(r.amount),
-        pctOf(Number(r.amount), activo),
-      ]),
-      ['Subtotal', '', 'Total patrimonio', patr, pctOf(patr, activo)],
-      ...of('resultado').map(r => [
-        'Resultado acumulado',
-        r.code,
-        r.name,
-        Number(r.amount),
-        pctOf(Number(r.amount), activo),
-      ]),
-      [
-        'Total',
-        '',
-        'Pasivo + patrimonio + resultado',
-        pasivoMasPatrimonio,
-        pctOf(pasivoMasPatrimonio, activo),
-      ],
-    ]
-    downloadCsv(
-      `balance_general_${to}.csv`,
-      ['Sección', 'Código', 'Cuenta', `Monto (${currency})`, '% Vertical'],
-      csvRows
-    )
-  }
+  };
+
+  // 2. Lógica Financiera en Tiempo Real (Agregaciones dinámicas en Frontend)
+  const totalDebits = balanceData.reduce((sum, row) => sum + Number(row.total_debit), 0);
+  const totalCredits = balanceData.reduce((sum, row) => sum + Number(row.total_credit), 0);
+
+  // Filtrado dinámico por tipo de cuenta bajo estándares NIIF
+  const totalAssets = balanceData.filter(r => r.account_type === 'asset' || r.account_code.startsWith('1')).reduce((sum, r) => sum + Number(r.final_balance), 0);
+  const totalLiabilities = balanceData.filter(r => r.account_type === 'liability' || r.account_code.startsWith('2')).reduce((sum, r) => sum + Number(r.final_balance), 0);
+  const totalIncome = balanceData.filter(r => r.account_type === 'income' || r.account_code.startsWith('4')).reduce((sum, r) => sum + Number(r.final_balance), 0);
+  const totalExpenses = balanceData.filter(r => r.account_type === 'expense' || r.account_code.startsWith('5') || r.account_code.startsWith('6')).reduce((sum, r) => sum + Number(r.final_balance), 0);
+
+  // Ecuación matemática: Ingresos - Gastos/Costos
+  const netUtility = totalIncome - totalExpenses;
 
   return (
-    <div className="space-y-4 max-w-4xl">
-      <style>{PRINT_CSS}</style>
-
-      <div className="no-print flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+    <div className="container mx-auto p-6 max-w-6xl space-y-6">
+      {/* Encabezado Principal */}
+      <div className="md:flex justify-between items-center bg-slate-900 text-white p-6 rounded-2xl shadow-lg">
         <div>
-          <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">
-            Estados financieros NIIF
-          </h1>
-          <p className="text-xs sm:text-sm text-slate-500 mt-1">
-            Estado de resultados y situación financiera con análisis vertical automático y bloque de firma CPC.
-          </p>
+          <h1 className="text-2xl font-bold tracking-tight">Centro de Estados Financieros</h1>
+          <p className="text-slate-400 text-sm">Monitoreo y auditoría transaccional en tiempo real</p>
         </div>
-
-        {onNavigate && (
-          <button
-            type="button"
-            onClick={() => onNavigate('cpa')}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-xs font-medium text-white whitespace-nowrap shrink-0 self-start sm:self-auto"
-          >
-            <Calculator className="w-3.5 h-3.5" />
-            Despacho y firma CPC
-            <ArrowUpRight className="w-3.5 h-3.5" />
-          </button>
-        )}
-      </div>
-
-      <div className="no-print flex gap-1 p-1 bg-white rounded-xl border border-slate-200 overflow-x-auto">
-        {tabBtn('er', 'Estado de resultados integrales')}
-        {tabBtn('bs', 'Estado de situación financiera (Balance general)')}
-      </div>
-
-      <div className="no-print grid grid-cols-2 gap-3">
-        {tab === 'er' ? (
-          <input
-            type="date"
-            value={from}
-            onChange={e => setFrom(e.target.value)}
-            className={input}
+        <div className="flex gap-2 mt-4 md:mt-0 bg-slate-800 p-2 rounded-xl border border-slate-700">
+          <input 
+            type="date" value={startDate} onChange={e => setStartDate(e.target.value)}
+            className="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs font-mono text-white focus:outline-emerald-500"
           />
-        ) : (
-          <p className="text-sm text-slate-500 self-center">Fecha de corte:</p>
-        )}
-        <input
-          type="date"
-          value={to}
-          onChange={e => setTo(e.target.value)}
-          className={input}
-        />
+          <span className="text-slate-500 self-center text-xs">a</span>
+          <input 
+            type="date" value={endDate} onChange={e => setEndDate(e.target.value)}
+            className="bg-slate-900 border border-slate-700 rounded px-2 py-1 text-xs font-mono text-white focus:outline-emerald-500"
+          />
+        </div>
       </div>
 
-      {err && (
-        <p className="no-print text-sm text-red-600 bg-red-50 px-3 py-2 rounded-lg">
-          {err}
-        </p>
-      )}
-
-      {blockers.length > 0 ? (
-        <div className="no-print bg-amber-50 border border-amber-200 rounded-xl p-3 space-y-1">
-          <p className="flex items-center gap-2 text-sm font-semibold text-amber-800">
-            <AlertTriangle className="w-4 h-4 shrink-0" /> Borrador preliminar: existen comprobantes o cierres pendientes
-          </p>
-          {blockers.map(r => (
-            <p key={r.reason} className="text-xs text-amber-800">
-              • {r.reason}
-            </p>
-          ))}
-        </div>
-      ) : (
-        <p className="no-print flex items-center gap-2 text-sm font-semibold text-emerald-700 bg-emerald-50 px-3 py-2 rounded-lg">
-          <CheckCircle2 className="w-4 h-4 shrink-0" /> Periodos conciliados y asientos contabilizados
-        </p>
-      )}
-
-      <div className="print-area bg-white rounded-xl border border-slate-200 p-6 space-y-5">
-        <div className="flex items-start justify-between gap-3 flex-wrap pb-4 border-b border-slate-200">
+      {/* 2. KPI Cards de Alto Impacto Visual */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="bg-white p-5 rounded-xl border border-slate-100 shadow-sm flex justify-between items-center">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-              {companyHeader.name}
-              {companyHeader.rif ? ` · ${companyHeader.rif}` : ''}
-            </p>
-            <h2 className="text-lg font-bold text-slate-900 mt-0.5">
-              {tab === 'er'
-                ? 'Estado de Resultados'
-                : 'Estado de Situación Financiera (Balance General)'}
-            </h2>
-            <p className="text-xs text-slate-500 mt-0.5 tabular-nums">
-              {tab === 'er' ? `Período del ${from} al ${to}` : `Al corte del ${to}`} · Expresado en{' '}
-              {currency}
-              {blockers.length > 0 ? ' · PRELIMINAR' : ''}
-            </p>
+            <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Activos Totales</p>
+            <h3 className="text-2xl font-bold text-slate-800 mt-1">${totalAssets.toLocaleString('es-CO', { minimumFractionDigits: 2 })}</h3>
           </div>
-          <div className="no-print flex items-center gap-2">
-            <button
-              onClick={exportExcel}
-              className="flex items-center gap-1.5 text-xs font-medium bg-white border border-slate-200 text-slate-700 px-3 py-1.5 rounded-lg hover:bg-slate-50 whitespace-nowrap"
-            >
-              <Download className="w-3.5 h-3.5" /> Exportar CSV
-            </button>
-            <button
-              onClick={() => window.print()}
-              className="flex items-center gap-1.5 text-xs font-medium bg-slate-900 hover:bg-slate-800 text-white px-3 py-1.5 rounded-lg whitespace-nowrap"
-            >
-              <Printer className="w-3.5 h-3.5" /> Imprimir / PDF
-            </button>
-          </div>
+          <span className="p-3 bg-blue-50 text-blue-600 rounded-lg font-bold text-lg">🏦</span>
         </div>
 
-        {tab === 'er' ? (
-          <>
-            <Section title="Ingresos operacionales" type="ingreso" total={ingresos} />
-            <Section title="Costo de ventas" type="costo" total={costos} />
-            <div className="flex items-center justify-between gap-3 py-2.5 border-y-2 border-slate-300 text-sm font-bold text-slate-900">
-              <span>Utilidad bruta en ventas</span>
-              <div className="flex items-center gap-4 shrink-0 font-mono tabular-nums">
-                <span>{money(bruta)}</span>
-                <span className="w-14 text-right text-xs font-semibold text-slate-600">
-                  {pctOf(bruta, ingresos)}
-                </span>
-              </div>
-            </div>
-            <Section title="Gastos operacionales y administrativos" type="gasto" total={gastos} />
-            <div
-              className={`flex items-center justify-between gap-3 py-2.5 border-y-2 border-slate-300 text-sm font-bold ${
-                neta >= 0 ? 'text-emerald-700' : 'text-red-700'
-              }`}
-            >
-              <span>Resultado neto del ejercicio</span>
-              <div className="flex items-center gap-4 shrink-0 font-mono tabular-nums">
-                <span>{money(neta)}</span>
-                <span className="w-14 text-right text-xs font-semibold">
-                  {pctOf(neta, ingresos)}
-                </span>
-              </div>
-            </div>
-          </>
+        <div className="bg-white p-5 rounded-xl border border-slate-100 shadow-sm flex justify-between items-center">
+          <div>
+            <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Pasivos / Obligaciones</p>
+            <h3 className="text-2xl font-bold text-slate-800 mt-1">${totalLiabilities.toLocaleString('es-CO', { minimumFractionDigits: 2 })}</h3>
+          </div>
+          <span className="p-3 bg-purple-50 text-purple-600 rounded-lg font-bold text-lg">📉</span>
+        </div>
+
+        <div className="bg-white p-5 rounded-xl border border-slate-100 shadow-sm flex justify-between items-center (${netUtility >= 0 ? 'border-l-4 border-l-emerald-500' : 'border-l-4 border-l-rose-500'})">
+          <div>
+            <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Utilidad Neta del Periodo</p>
+            <h3 className={`text-2xl font-bold mt-1 ${netUtility >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+              ${netUtility.toLocaleString('es-CO', { minimumFractionDigits: 2 })}
+            </h3>
+          </div>
+          <span className={`p-3 rounded-lg font-bold text-lg ${netUtility >= 0 ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>
+            {netUtility >= 0 ? '💰' : '⚠️'}
+          </span>
+        </div>
+      </div>
+
+      {/* 3. Tabla del Balance de Comprobación */}
+      <div className="bg-white rounded-xl shadow-md border border-slate-100 overflow-hidden">
+        <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+          <h2 className="font-bold text-slate-800 text-sm uppercase tracking-wider">Balance de Comprobación por Subcuentas</h2>
+          <span className="text-xs font-mono text-slate-500">Registros procesados: {balanceData.length}</span>
+        </div>
+
+        {loading ? (
+          <div className="p-12 flex flex-col items-center justify-center">
+            <div className="h-8 w-8 animate-spin rounded-full border-4 border-slate-800 border-t-transparent"></div>
+            <p className="text-sm text-slate-500 font-medium mt-2">Calculando saldos financieros...</p>
+          </div>
+        ) : error ? (
+          <div className="p-6 text-red-600 font-medium text-sm text-center">{error}</div>
         ) : (
-          <>
-            <Section title="Activos" type="activo" total={activo} />
-            <Section title="Pasivos" type="pasivo" total={pasivo} />
-            <Section title="Patrimonio" type="patrimonio" total={patr} />
-            <Section
-              title="Resultado acumulado del ejercicio"
-              type="resultado"
-              total={res}
-              label="Resultado acumulado pendiente de cierre"
-            />
-            <div
-              className={`flex items-center justify-between gap-3 py-2.5 border-y-2 border-slate-300 text-sm font-bold ${
-                cuadra ? 'text-slate-900' : 'text-red-700'
-              }`}
-            >
-              <span>Total Pasivo + Patrimonio + Resultado</span>
-              <div className="flex items-center gap-4 shrink-0 font-mono tabular-nums">
-                <span>{money(pasivoMasPatrimonio)}</span>
-                <span className="w-14 text-right text-xs font-semibold text-slate-600">
-                  {pctOf(pasivoMasPatrimonio, activo)}
-                </span>
-              </div>
-            </div>
-            <p className={`text-xs font-medium ${cuadra ? 'text-emerald-700' : 'text-red-700'}`}>
-              {cuadra
-                ? 'Ecuación patrimonial verificada: Activos = Pasivos + Patrimonio + Resultado.'
-                : 'Descuadre detectado en la ecuación patrimonial: revisa los asientos en el Despacho Contable.'}
-            </p>
-          </>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="bg-slate-100/70 text-slate-600 font-mono text-[11px] uppercase border-b border-slate-200">
+                  <th className="p-3 pl-6">Código</th>
+                  <th className="p-3">Cuenta Contable</th>
+                  <th className="p-3 text-right">Débitos (Mov)</th>
+                  <th className="p-3 text-right">Créditos (Mov)</th>
+                  <th className="p-3 text-right pr-6">Saldo Final</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 text-sm">
+                {balanceData.map((row) => (
+                  <tr key={row.account_code} className="hover:bg-slate-50/60 transition-colors">
+                    <td className="p-3 pl-6 font-mono font-semibold text-slate-500">{row.account_code}</td>
+                    <td className="p-3 text-slate-700 font-medium">{row.account_name}</td>
+                    <td className="p-3 text-right font-mono text-slate-600">${Number(row.total_debit).toFixed(2)}</td>
+                    <td className="p-3 text-right font-mono text-slate-600">${Number(row.total_credit).toFixed(2)}</td>
+                    <td className={`p-3 text-right font-mono pr-6 font-bold ${Number(row.final_balance) < 0 ? 'text-rose-600' : 'text-slate-800'}`}>
+                      ${Number(row.final_balance).toFixed(2)}
+                    </td>
+                  </tr>
+                ))}
+                {/* Fila de Totales de Control */}
+                <tr className="bg-slate-900 text-white font-semibold font-mono text-sm">
+                  <td className="p-4 pl-6" colSpan={2}>TOTALES DE CONTROL (PARTIDA DOBLE)</td>
+                  <td className="p-4 text-right">${totalDebits.toFixed(2)}</td>
+                  <td className="p-4 text-right">${totalCredits.toFixed(2)}</td>
+                  <td className="p-4 text-right pr-6 text-emerald-400">
+                    ${(totalDebits - totalCredits).toFixed(2)}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         )}
-
-        {notes.map(n => (
-          <p key={n.reason} className="text-[11px] text-slate-400">
-            Nota: {n.reason}.
-          </p>
-        ))}
-
-        {/* Bloque formal de firmas de Contador Público y Representación Legal */}
-        <div className="pt-10 mt-6 border-t border-slate-200 grid grid-cols-1 sm:grid-cols-2 gap-8 text-xs text-slate-700">
-          <div className="pt-8 border-t border-slate-300 text-center">
-            <p className="font-semibold text-slate-900">
-              {cpaProfile.full_name || 'Contador Público Responsable'}
-            </p>
-            <p className="text-slate-600 mt-0.5">
-              {cpaProfile.title_label || 'Contador Público Colegiado'}
-              {cpaProfile.license_number ? ` · ${cpaProfile.license_number}` : ''}
-            </p>
-            {cpaProfile.firm_name && (
-              <p className="text-[11px] text-slate-500 mt-0.5">{cpaProfile.firm_name}</p>
-            )}
-          </div>
-
-          <div className="pt-8 border-t border-slate-300 text-center">
-            <p className="font-semibold text-slate-900">{companyHeader.name}</p>
-            <p className="text-slate-600 mt-0.5">Representante Legal / Gerencia General</p>
-            {companyHeader.rif && (
-              <p className="text-[11px] text-slate-500 mt-0.5 font-mono">{companyHeader.rif}</p>
-            )}
-          </div>
-        </div>
       </div>
     </div>
-  )
+  );
 }

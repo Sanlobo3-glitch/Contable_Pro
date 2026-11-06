@@ -5,7 +5,7 @@ import { useCurrency, formatMoney } from '../lib/currency'
 import { useWarehouse } from '../lib/warehouseContext'
 import { downloadCsv } from '../lib/csv'
 import { buildDocHtml, printHtml, type DocData } from '../lib/documents'
-import type { Customer, Product, Sale, CompanyConfig } from '../types'
+import type { Customer, Product, Sale, CompanyConfig, Purchase } from '../types'
 import {
   Search,
   Printer,
@@ -28,6 +28,15 @@ import {
   Building2,
   Receipt,
   ArrowRight,
+  ShieldAlert,
+  AlertTriangle,
+  History,
+  ArrowUpRight,
+  ArrowDownRight,
+  UserCheck,
+  RefreshCw,
+  FolderTree,
+  FileSearch,
 } from 'lucide-react'
 
 interface DispatchItemRow {
@@ -54,6 +63,36 @@ interface DispatchItemRow {
   rawSale: Sale
 }
 
+export interface ForensicAuditEvent {
+  id: string
+  date: string
+  type:
+    | 'ingreso_compra'
+    | 'traslado_salida'
+    | 'traslado_entrada'
+    | 'devolucion_cliente'
+    | 'ajuste_toma_fisica'
+    | 'merma_averia'
+    | 'despacho_venta'
+    | 'correccion_manual'
+  typeLabel: string
+  referenceCode: string
+  userResponsible: string
+  userRole?: string
+  sourceLocation: string
+  targetLocation?: string
+  quantityDelta: number // Positivo (ingreso) o negativo (salida/merma)
+  stockResulting?: number
+  reasonNotes: string
+  isConflictOrDiscrepancy: boolean
+  discrepancyType?:
+    | 'faltante_sospechoso'
+    | 'sobrante_descuadre'
+    | 'averia_defectuoso'
+    | 'correccion_inconsistencia'
+    | 'devolucion_reclamo'
+}
+
 const PAYMENT_LABEL: Record<string, string> = {
   efectivo: 'Efectivo',
   tarjeta: 'Tarjeta',
@@ -70,18 +109,26 @@ export default function DispatchHistory({
   const cur = useCurrency()
   const { branches, warehouses } = useWarehouse()
 
+  // Pestaña activa: 'despachos' | 'forense'
+  const [activeTab, setActiveTab] = useState<'despachos' | 'forense'>('despachos')
+
   const [sales, setSales] = useState<Sale[]>([])
+  const [purchases, setPurchases] = useState<Purchase[]>([])
   const [products, setProducts] = useState<Product[]>([])
   const [customers, setCustomers] = useState<Customer[]>([])
   const [config, setConfig] = useState<CompanyConfig | null>(null)
+  const [transfers, setTransfers] = useState<any[]>([])
+  const [transferItems, setTransferItems] = useState<any[]>([])
+  const [kardexEntries, setKardexEntries] = useState<any[]>([])
+  const [devolutions, setDevolutions] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
 
-  // Filtros
+  // Filtros Pestaña Despachos
   const [selectedProductId, setSelectedProductId] = useState<string>('all')
   const [productSearch, setProductSearch] = useState('')
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>('all')
   const [customerSearch, setCustomerSearch] = useState('')
-  const [selectedLocation, setSelectedLocation] = useState<string>('all') // 'all' | 'branch:ID' | 'channel:mostrador' | 'channel:ruta'
+  const [selectedLocation, setSelectedLocation] = useState<string>('all')
   const [dateFrom, setDateFrom] = useState<string>(() => {
     const d = new Date()
     d.setDate(d.getDate() - 30)
@@ -90,6 +137,11 @@ export default function DispatchHistory({
   const [dateTo, setDateTo] = useState<string>(() => new Date().toISOString().split('T')[0])
   const [statusFilter, setStatusFilter] = useState<'all' | 'completada' | 'pendiente' | 'anulada'>('all')
   const [freeSearch, setFreeSearch] = useState('')
+
+  // Filtros Pestaña Auditoría Forense
+  const [forensicProductId, setForensicProductId] = useState<string>('')
+  const [forensicSearch, setForensicSearch] = useState('')
+  const [forensicOnlyConflicts, setForensicOnlyConflicts] = useState(false)
 
   // Modal de detalle de venta
   const [detailSale, setDetailSale] = useState<Sale | null>(null)
@@ -101,19 +153,35 @@ export default function DispatchHistory({
   async function loadData() {
     setLoading(true)
     try {
-      const [rs, rp, rc, rcfg] = await Promise.all([
+      const [rs, rp, rc, rcfg, rpur, rtrf, rtrfi, rkdx, rdev] = await Promise.all([
         supabase.from('sales').select('*').order('created_at', { ascending: false }).limit(2000),
         supabase.from('products').select('*').order('name'),
         supabase.from('customers').select('*').order('name'),
         supabase.from('company_config').select('*').limit(1),
+        supabase.from('purchases').select('*').order('created_at', { ascending: false }).limit(500),
+        supabase.from('inventory_transfers').select('*').order('created_at', { ascending: false }).limit(300),
+        supabase.from('inventory_transfer_items').select('*').limit(1000),
+        supabase.from('kardex').select('*').order('created_at', { ascending: false }).limit(1000),
+        supabase.from('devolutions').select('*').order('created_at', { ascending: false }).limit(200),
       ])
 
       if (rs.data) setSales(rs.data as Sale[])
-      if (rp.data) setProducts(rp.data as Product[])
+      if (rp.data) {
+        const prods = rp.data as Product[]
+        setProducts(prods)
+        if (prods.length > 0 && !forensicProductId) {
+          setForensicProductId(prods[0].id)
+        }
+      }
       if (rc.data) setCustomers(rc.data as Customer[])
       if (rcfg.data && rcfg.data.length > 0) setConfig(rcfg.data[0] as CompanyConfig)
+      if (rpur.data) setPurchases(rpur.data as Purchase[])
+      if (rtrf.data) setTransfers(rtrf.data)
+      if (rtrfi.data) setTransferItems(rtrfi.data)
+      if (rkdx.data) setKardexEntries(rkdx.data)
+      if (rdev.data) setDevolutions(rdev.data)
     } catch (err) {
-      console.error('Error cargando historial de despachos:', err)
+      console.error('Error cargando historial y auditoría forense:', err)
     } finally {
       setLoading(false)
     }
@@ -137,6 +205,12 @@ export default function DispatchHistory({
     branches.forEach((b) => map.set(b.id, b.name))
     return map
   }, [branches])
+
+  const warehousesMap = useMemo(() => {
+    const map = new Map<string, string>()
+    warehouses.forEach((w) => map.set(w.id, w.name))
+    return map
+  }, [warehouses])
 
   // Desglosar ventas en filas individuales por producto despachado
   const dispatchRows = useMemo<DispatchItemRow[]>(() => {
@@ -185,32 +259,23 @@ export default function DispatchHistory({
     return rows
   }, [sales, customersMap, productsMap, branchesMap])
 
-  // Filtrado de las filas
+  // Filtrado de las filas de despachos
   const filteredRows = useMemo(() => {
     return dispatchRows.filter((row) => {
-      // 1. Filtro de producto
-      if (selectedProductId !== 'all' && row.productId !== selectedProductId) {
-        return false
-      }
+      if (selectedProductId !== 'all' && row.productId !== selectedProductId) return false
       if (productSearch.trim()) {
         const term = productSearch.toLowerCase().trim()
         const matchesName = row.productName.toLowerCase().includes(term)
         const matchesSku = row.productSku?.toLowerCase().includes(term)
         if (!matchesName && !matchesSku) return false
       }
-
-      // 2. Filtro de cliente
-      if (selectedCustomerId !== 'all' && row.customerId !== selectedCustomerId) {
-        return false
-      }
+      if (selectedCustomerId !== 'all' && row.customerId !== selectedCustomerId) return false
       if (customerSearch.trim()) {
         const term = customerSearch.toLowerCase().trim()
         const matchesCust = row.customerName.toLowerCase().includes(term)
         const matchesDoc = row.customerDocument?.toLowerCase().includes(term)
         if (!matchesCust && !matchesDoc) return false
       }
-
-      // 3. Filtro de tienda / sede / canal
       if (selectedLocation !== 'all') {
         if (selectedLocation.startsWith('branch:')) {
           const bId = selectedLocation.replace('branch:', '')
@@ -221,13 +286,7 @@ export default function DispatchHistory({
           if (row.channel !== 'mostrador' && row.channel !== null) return false
         }
       }
-
-      // 4. Filtro de estado
-      if (statusFilter !== 'all' && row.status !== statusFilter) {
-        return false
-      }
-
-      // 5. Filtro de fechas
+      if (statusFilter !== 'all' && row.status !== statusFilter) return false
       if (dateFrom) {
         const fromIso = `${dateFrom}T00:00:00`
         if (new Date(row.createdAt) < new Date(fromIso)) return false
@@ -236,8 +295,6 @@ export default function DispatchHistory({
         const toIso = `${dateTo}T23:59:59`
         if (new Date(row.createdAt) > new Date(toIso)) return false
       }
-
-      // 6. Buscador libre
       if (freeSearch.trim()) {
         const term = freeSearch.toLowerCase().trim()
         const matchesDoc = row.saleNumber.toLowerCase().includes(term)
@@ -246,7 +303,6 @@ export default function DispatchHistory({
         const matchesBranch = row.branchName.toLowerCase().includes(term)
         if (!matchesDoc && !matchesProd && !matchesCust && !matchesBranch) return false
       }
-
       return true
     })
   }, [
@@ -287,20 +343,219 @@ export default function DispatchHistory({
     }
   }, [filteredRows])
 
-  // Restablecer filtros
-  function handleResetFilters() {
-    setSelectedProductId('all')
-    setProductSearch('')
-    setSelectedCustomerId('all')
-    setCustomerSearch('')
-    setSelectedLocation('all')
-    setStatusFilter('all')
-    setFreeSearch('')
-    const d = new Date()
-    d.setDate(d.getDate() - 30)
-    setDateFrom(d.toISOString().split('T')[0])
-    setDateTo(new Date().toISOString().split('T')[0])
-  }
+  // ==========================================================================
+  // MOTOR DE AUDITORÍA FORENSE Y CADENA DE CUSTODIA (CONFLICTOS, MERMAS, ROBOS)
+  // ==========================================================================
+  const forensicEvents = useMemo<ForensicAuditEvent[]>(() => {
+    if (!forensicProductId) return []
+
+    const selectedProd = productsMap.get(forensicProductId)
+    const events: ForensicAuditEvent[] = []
+
+    // 1. Ingresos por Compras
+    for (const pur of purchases) {
+      if (Array.isArray(pur.items)) {
+        for (const item of pur.items) {
+          if (item.product_id === forensicProductId) {
+            events.push({
+              id: `pur-${pur.id}-${item.product_id}`,
+              date: pur.created_at,
+              type: 'ingreso_compra',
+              typeLabel: 'Entrada por Compra',
+              referenceCode: 'COMP-' + pur.id.slice(0, 6).toUpperCase(),
+              userResponsible: (pur as any).created_by_name || 'Comprador / Recepción',
+              userRole: 'Compras y Almacén',
+              sourceLocation: `Proveedor: ${pur.supplier_name || 'Proveedor General'}`,
+              targetLocation: pur.branch_id ? branchesMap.get(pur.branch_id) || 'Almacén' : 'Bodega Central',
+              quantityDelta: Number(item.quantity) || 0,
+              reasonNotes: `Ingreso oficial al inventario con costo unitario ${formatMoney(item.cost, cur)}`,
+              isConflictOrDiscrepancy: false,
+            })
+          }
+        }
+      }
+    }
+
+    // 2. Movimientos y Traslados entre Sedes / Bodegas
+    const transfersMap = new Map<string, any>()
+    transfers.forEach((t) => transfersMap.set(t.id, t))
+
+    for (const tItem of transferItems) {
+      if (tItem.product_id === forensicProductId) {
+        const parentTrf = transfersMap.get(tItem.transfer_id)
+        const srcWh = parentTrf?.source_warehouse_id ? warehousesMap.get(parentTrf.source_warehouse_id) || 'Bodega A' : 'Bodega A'
+        const dstWh = parentTrf?.destination_warehouse_id ? warehousesMap.get(parentTrf.destination_warehouse_id) || 'Bodega B' : 'Bodega B'
+
+        const damaged = Number(tItem.damaged_quantity) || 0
+        const missing = Number(tItem.missing_quantity) || 0
+
+        events.push({
+          id: `trf-${tItem.id}`,
+          date: parentTrf?.created_at || new Date().toISOString(),
+          type: 'traslado_salida',
+          typeLabel: 'Traslado Multisede',
+          referenceCode: 'TRF-' + (parentTrf?.id?.slice(0, 6).toUpperCase() || '000'),
+          userResponsible: parentTrf?.created_by || 'Operador de Logística',
+          userRole: 'Logística / Despacho',
+          sourceLocation: srcWh,
+          targetLocation: dstWh,
+          quantityDelta: -(Number(tItem.quantity) || 0),
+          reasonNotes: parentTrf?.notes || 'Movimiento de rebalanceo entre almacenes',
+          isConflictOrDiscrepancy: damaged > 0 || missing > 0,
+          discrepancyType: missing > 0 ? 'faltante_sospechoso' : damaged > 0 ? 'averia_defectuoso' : undefined,
+        })
+
+        if (missing > 0 || damaged > 0) {
+          events.push({
+            id: `trf-incident-${tItem.id}`,
+            date: parentTrf?.received_at || parentTrf?.created_at || new Date().toISOString(),
+            type: 'merma_averia',
+            typeLabel: missing > 0 ? '🚨 Faltante en Traslado' : '⚠️ Mercancía Dañada',
+            referenceCode: 'INC-' + (parentTrf?.id?.slice(0, 6).toUpperCase() || '000'),
+            userResponsible: parentTrf?.received_by || 'Receptor de Bodega',
+            userRole: 'Recepción y Control',
+            sourceLocation: srcWh,
+            targetLocation: dstWh,
+            quantityDelta: -(missing + damaged),
+            reasonNotes: `Incidencia en tránsito: ${missing} uds faltantes, ${damaged} uds dañadas/defectuosas. Notas: ${tItem.receipt_notes || parentTrf?.notes || 'Sin nota explicativa'}`,
+            isConflictOrDiscrepancy: true,
+            discrepancyType: missing > 0 ? 'faltante_sospechoso' : 'averia_defectuoso',
+          })
+        }
+      }
+    }
+
+    // 3. Devoluciones de Clientes / Cambios
+    for (const dev of devolutions) {
+      if (dev.product_id === forensicProductId) {
+        events.push({
+          id: `dev-${dev.id}`,
+          date: dev.created_at,
+          type: 'devolucion_cliente',
+          typeLabel: 'Devolución de Cliente',
+          referenceCode: 'DEV-' + dev.id.slice(0, 6).toUpperCase(),
+          userResponsible: dev.handled_by || 'Atención al Cliente / Mostrador',
+          userRole: 'Ventas y Posventa',
+          sourceLocation: `Cliente: ${dev.customer_name || 'Cliente'}`,
+          targetLocation: dev.reenter_stock ? 'Reingresó a Stock' : 'Separado para Baja / Garantía',
+          quantityDelta: dev.reenter_stock ? Number(dev.quantity) || 0 : 0,
+          reasonNotes: `Devuelto por motivo: ${dev.reason || 'Producto defectuoso / inconforme'}. Acción: ${dev.reenter_stock ? 'Apto para venta' : 'Dado de baja por defecto'}`,
+          isConflictOrDiscrepancy: true,
+          discrepancyType: 'devolucion_reclamo',
+        })
+      }
+    }
+
+    // 4. Kardex (Tomas físicas, ajustes manuales, mermas)
+    for (const k of kardexEntries) {
+      if (k.product_id === forensicProductId || k.product_name === selectedProd?.name) {
+        if (k.reference_type === 'ajuste' || k.reference_type === 'conteo_ciego' || k.reference_type === 'merma') {
+          const isNegative = k.type === 'salida'
+          events.push({
+            id: `kdx-${k.id}`,
+            date: k.created_at,
+            type: k.reference_type === 'merma' ? 'merma_averia' : 'ajuste_toma_fisica',
+            typeLabel: k.reference_type === 'merma' ? 'Baja por Merma / Rotura' : 'Corrección por Conteo Físico',
+            referenceCode: 'AJU-' + k.id.slice(0, 6).toUpperCase(),
+            userResponsible: k.user_name || 'Auditor de Inventario',
+            userRole: 'Auditoría / Control',
+            sourceLocation: 'Inventario del Sistema',
+            quantityDelta: isNegative ? -Math.abs(Number(k.quantity)) : Math.abs(Number(k.quantity)),
+            stockResulting: Number(k.balance) || undefined,
+            reasonNotes: k.notes || (isNegative ? 'Ajuste por faltante no localizado en bodega' : 'Ajuste de regularización'),
+            isConflictOrDiscrepancy: isNegative,
+            discrepancyType: isNegative ? 'faltante_sospechoso' : 'sobrante_descuadre',
+          })
+        }
+      }
+    }
+
+    // 5. Ventas y Despachos Oficiales
+    for (const r of dispatchRows) {
+      if (r.productId === forensicProductId) {
+        events.push({
+          id: `sale-item-${r.saleId}-${r.productId}`,
+          date: r.createdAt,
+          type: 'despacho_venta',
+          typeLabel: 'Salida por Venta / Despacho',
+          referenceCode: r.saleNumber,
+          userResponsible: (r.rawSale as any).seller_name || (r.rawSale as any).created_by_name || 'Cajero / Vendedor',
+          userRole: 'Ventas y Reparto',
+          sourceLocation: r.branchName,
+          targetLocation: `Cliente: ${r.customerName}`,
+          quantityDelta: -r.quantity,
+          reasonNotes: `Despachado a ${r.customerName} (${formatMoney(r.subtotal, cur)} - ${r.paymentMethod})`,
+          isConflictOrDiscrepancy: r.status === 'anulada',
+          discrepancyType: r.status === 'anulada' ? 'correccion_inconsistencia' : undefined,
+        })
+      }
+    }
+
+    // Ordenar cronológicamente descendente
+    return events.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+  }, [
+    forensicProductId,
+    purchases,
+    transfers,
+    transferItems,
+    devolutions,
+    kardexEntries,
+    dispatchRows,
+    productsMap,
+    branchesMap,
+    warehousesMap,
+    cur,
+  ])
+
+  // Eventos forenses filtrados por búsqueda o solo conflictos
+  const filteredForensicEvents = useMemo(() => {
+    return forensicEvents.filter((e) => {
+      if (forensicOnlyConflicts && !e.isConflictOrDiscrepancy) return false
+      if (forensicSearch.trim()) {
+        const q = forensicSearch.toLowerCase().trim()
+        const matchUser = e.userResponsible.toLowerCase().includes(q)
+        const matchReason = e.reasonNotes.toLowerCase().includes(q)
+        const matchRef = e.referenceCode.toLowerCase().includes(q)
+        const matchLoc = e.sourceLocation.toLowerCase().includes(q)
+        if (!matchUser && !matchReason && !matchRef && !matchLoc) return false
+      }
+      return true
+    })
+  }, [forensicEvents, forensicOnlyConflicts, forensicSearch])
+
+  // Diagnóstico de Trazabilidad y Conflictos
+  const forensicSummary = useMemo(() => {
+    let totalIn = 0
+    let totalOut = 0
+    let totalDiscrepancies = 0
+    let totalLossesQty = 0
+
+    const usersInvolved = new Set<string>()
+
+    for (const e of forensicEvents) {
+      if (e.quantityDelta > 0) totalIn += e.quantityDelta
+      if (e.quantityDelta < 0) totalOut += Math.abs(e.quantityDelta)
+      if (e.userResponsible) usersInvolved.add(e.userResponsible)
+
+      if (e.isConflictOrDiscrepancy) {
+        totalDiscrepancies++
+        if (e.discrepancyType === 'faltante_sospechoso' || e.discrepancyType === 'averia_defectuoso') {
+          totalLossesQty += Math.abs(e.quantityDelta)
+        }
+      }
+    }
+
+    const currentStock = forensicProductId ? productsMap.get(forensicProductId)?.stock ?? 0 : 0
+
+    return {
+      totalIn,
+      totalOut,
+      totalDiscrepancies,
+      totalLossesQty,
+      uniqueUsersCount: usersInvolved.size,
+      currentStock,
+    }
+  }, [forensicEvents, forensicProductId, productsMap])
 
   // Preajustes rápidos de fecha
   function setDatePreset(type: 'today' | '7days' | 'month' | '30days' | 'all') {
@@ -327,7 +582,22 @@ export default function DispatchHistory({
     }
   }
 
-  // Exportar a CSV
+  // Restablecer filtros de despachos
+  function handleResetFilters() {
+    setSelectedProductId('all')
+    setProductSearch('')
+    setSelectedCustomerId('all')
+    setCustomerSearch('')
+    setSelectedLocation('all')
+    setStatusFilter('all')
+    setFreeSearch('')
+    const d = new Date()
+    d.setDate(d.getDate() - 30)
+    setDateFrom(d.toISOString().split('T')[0])
+    setDateTo(new Date().toISOString().split('T')[0])
+  }
+
+  // Exportar a CSV de despachos
   function handleExportCsv() {
     const headers = [
       'Fecha',
@@ -371,7 +641,40 @@ export default function DispatchHistory({
     downloadCsv(fileName, headers, rows)
   }
 
-  // Generar reporte formal imprimible
+  // Exportar reporte forense a CSV
+  function handleExportForensicCsv() {
+    const pName = productsMap.get(forensicProductId)?.name || 'producto'
+    const headers = [
+      'Fecha',
+      'Tipo de Operacion',
+      'Comprobante / Referencia',
+      'Usuario Responsable',
+      'Rol del Usuario',
+      'Origen',
+      'Destino',
+      'Variacion de Cantidad',
+      'Alerta / Discrepancia',
+      'Detalle y Justificacion',
+    ]
+
+    const rows = filteredForensicEvents.map((e) => [
+      new Date(e.date).toLocaleString(),
+      e.typeLabel,
+      e.referenceCode,
+      e.userResponsible,
+      e.userRole || '',
+      e.sourceLocation,
+      e.targetLocation || '',
+      e.quantityDelta > 0 ? `+${e.quantityDelta}` : e.quantityDelta.toString(),
+      e.isConflictOrDiscrepancy ? (e.discrepancyType || 'DISCREPANCIA').toUpperCase() : 'CONFORME',
+      e.reasonNotes,
+    ])
+
+    const fileName = `auditoria_forense_${pName.replace(/\s+/g, '_').toLowerCase()}_${new Date().toISOString().split('T')[0]}.csv`
+    downloadCsv(fileName, headers, rows)
+  }
+
+  // Imprimir Reporte de Despachos Oficial
   function handlePrintReport() {
     const activeProdLabel =
       selectedProductId !== 'all'
@@ -546,6 +849,115 @@ export default function DispatchHistory({
     printHtml(htmlContent)
   }
 
+  // Imprimir Acta Forense de Auditoría de Producto
+  function handlePrintForensicReport() {
+    const prod = productsMap.get(forensicProductId)
+    const companyName = config?.name || 'INVENTARIOPRO'
+    const companyNit = config?.rif ? `RIF / NIT: ${config.rif}` : ''
+
+    const rowsHtml = filteredForensicEvents
+      .map((e, idx) => {
+        const isConflict = e.isConflictOrDiscrepancy
+        return `
+        <tr style="border-bottom: 1px solid #e2e8f0; background: ${isConflict ? '#fff1f2' : idx % 2 === 0 ? '#ffffff' : '#f8fafc'};">
+          <td style="padding: 7px 8px; font-size: 11px;">${new Date(e.date).toLocaleString()}</td>
+          <td style="padding: 7px 8px; font-size: 11px; font-weight: 700; color: ${isConflict ? '#b91c1c' : '#0f172a'};">${e.typeLabel}</td>
+          <td style="padding: 7px 8px; font-size: 11px; font-family: monospace;">${e.referenceCode}</td>
+          <td style="padding: 7px 8px; font-size: 11px;">
+            <strong>${e.userResponsible}</strong><br/>
+            <span style="font-size: 10px; color: #64748b;">${e.userRole || ''}</span>
+          </td>
+          <td style="padding: 7px 8px; font-size: 11px;">${e.sourceLocation} ${e.targetLocation ? ` &rarr; ${e.targetLocation}` : ''}</td>
+          <td style="padding: 7px 8px; font-size: 11px; text-align: center; font-weight: 800; color: ${e.quantityDelta > 0 ? '#15803d' : '#b91c1c'};">
+            ${e.quantityDelta > 0 ? `+${e.quantityDelta}` : e.quantityDelta} uds
+          </td>
+          <td style="padding: 7px 8px; font-size: 11px; color: ${isConflict ? '#991b1b' : '#334155'};">${e.reasonNotes}</td>
+        </tr>
+      `
+      })
+      .join('')
+
+    const htmlContent = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8" />
+        <title>Acta de Auditoría Forense y Trazabilidad - ${prod?.name}</title>
+        <style>
+          @page { size: landscape; margin: 12mm; }
+          body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; color: #1e293b; margin: 0; padding: 12px; }
+          .header { border-bottom: 2px solid #0f172a; padding-bottom: 12px; margin-bottom: 14px; display: flex; justify-content: space-between; align-items: flex-start; }
+          .title { font-size: 18px; font-weight: 800; text-transform: uppercase; color: #0f172a; margin: 0; }
+          .box-summary { background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 6px; padding: 10px; margin-bottom: 14px; display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; font-size: 11px; }
+          table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+          th { background: #0f172a; color: #ffffff; text-align: left; padding: 7px 8px; font-size: 10px; text-transform: uppercase; }
+          .signatures { margin-top: 40px; display: flex; justify-content: space-between; page-break-inside: avoid; }
+          .sig-box { width: 28%; border-top: 1px solid #0f172a; text-align: center; padding-top: 6px; font-size: 11px; color: #334155; }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <div>
+            <h1 class="title">Acta Oficial de Auditoría Forense de Inventario</h1>
+            <div style="font-size: 12px; color: #475569; margin-top: 2px;">
+              Trazabilidad de Cadena de Custodia, Mermas, Traslados y Descuadres para Resolución de Conflictos
+            </div>
+          </div>
+          <div style="text-align: right; font-size: 11px; color: #475569;">
+            <strong style="font-size: 13px; color: #0f172a;">${companyName}</strong><br/>
+            ${companyNit}<br/>
+            <span>Fecha de Emisión: ${new Date().toLocaleString()}</span>
+          </div>
+        </div>
+
+        <div class="box-summary">
+          <div><strong>Producto auditado:</strong> ${prod?.name || 'N/A'} (SKU: ${prod?.sku || 'N/A'})</div>
+          <div><strong>Stock actual en sistema:</strong> ${forensicSummary.currentStock} uds</div>
+          <div><strong>Total Entradas (Compras):</strong> +${forensicSummary.totalIn} uds</div>
+          <div><strong>Total Salidas (Ventas/Mov):</strong> -${forensicSummary.totalOut} uds</div>
+          <div style="color: ${forensicSummary.totalLossesQty > 0 ? '#b91c1c' : '#15803d'};">
+            <strong>Faltantes / Mermas / Alertas:</strong> ${forensicSummary.totalLossesQty} uds (${forensicSummary.totalDiscrepancies} alertas)
+          </div>
+        </div>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 14%;">Fecha y Hora</th>
+              <th style="width: 14%;">Tipo de Operación</th>
+              <th style="width: 11%;">Comprobante</th>
+              <th style="width: 15%;">Usuario Responsable</th>
+              <th style="width: 16%;">Ubicación / Flujo</th>
+              <th style="width: 8%; text-align: center;">Cantidad</th>
+              <th style="width: 22%;">Justificación / Incidencia</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rowsHtml || '<tr><td colspan="7" style="text-align: center; padding: 20px; color: #94a3b8;">No se registraron movimientos para este producto.</td></tr>'}
+          </tbody>
+        </table>
+
+        <div class="signatures">
+          <div class="sig-box">
+            <strong>Auditor de Inventario / Control Interno</strong><br/>
+            Firma y Dictamen
+          </div>
+          <div class="sig-box">
+            <strong>Jefe de Almacén y Custodia</strong><br/>
+            Revisión y Conformidad
+          </div>
+          <div class="sig-box">
+            <strong>Gerencia General / Representante Legal</strong><br/>
+            Visto Bueno Oficial
+          </div>
+        </div>
+      </body>
+      </html>
+    `
+
+    printHtml(htmlContent)
+  }
+
   // Imprimir comprobante individual de venta
   function handlePrintSaleDoc(sale: Sale) {
     const cust = sale.customer_id ? customersMap.get(sale.customer_id) : undefined
@@ -576,7 +988,7 @@ export default function DispatchHistory({
 
   return (
     <div className="space-y-6 pb-12">
-      {/* Encabezado y Acciones Principales */}
+      {/* Encabezado Principal */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
@@ -584,493 +996,832 @@ export default function DispatchHistory({
               <FileSpreadsheet className="w-5 h-5" />
             </span>
             <h1 className="text-xl sm:text-2xl font-bold text-slate-800">
-              Historial de Despachos y Trazabilidad
+              Trazabilidad, Despachos y Auditoría Forense
             </h1>
           </div>
           <p className="text-xs sm:text-sm text-slate-500 mt-1">
-            Búsqueda cruzada por <strong>Producto</strong>, <strong>Cliente</strong> y <strong>Tienda/Sucursal</strong> para auditar a quién y cuándo se le despachó cada artículo.
+            Control integral de salidas a clientes, cadena de custodia, quién metió o movió mercancía, devoluciones y resolución de conflictos por pérdidas o descuadres.
           </p>
         </div>
 
-        <div className="flex items-center gap-2 flex-wrap">
+        {/* Pestañas Superiores */}
+        <div className="flex items-center gap-2 bg-slate-100 p-1 rounded-2xl border border-slate-200">
           <button
             type="button"
-            onClick={handlePrintReport}
-            disabled={filteredRows.length === 0}
-            className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-xs disabled:opacity-40 transition-colors cursor-pointer"
+            onClick={() => setActiveTab('despachos')}
+            className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+              activeTab === 'despachos'
+                ? 'bg-white text-slate-900 shadow-xs'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
           >
-            <Printer className="w-4 h-4" />
-            Imprimir Reporte
+            <Truck className="w-3.5 h-3.5 text-indigo-600" />
+            Despachos a Clientes
           </button>
 
           <button
             type="button"
-            onClick={handleExportCsv}
-            disabled={filteredRows.length === 0}
-            className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 text-xs font-semibold shadow-xs disabled:opacity-40 transition-colors cursor-pointer"
+            onClick={() => setActiveTab('forense')}
+            className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+              activeTab === 'forense'
+                ? 'bg-white text-slate-900 shadow-xs'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
           >
-            <Download className="w-4 h-4 text-emerald-600" />
-            Exportar CSV
-          </button>
-
-          <button
-            type="button"
-            onClick={handleResetFilters}
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-medium transition-colors cursor-pointer"
-            title="Restablecer todos los filtros"
-          >
-            <RotateCcw className="w-3.5 h-3.5 text-slate-400" />
-            Limpiar
+            <ShieldAlert className="w-3.5 h-3.5 text-red-600" />
+            Auditoría Forense & Conflictos
           </button>
         </div>
       </div>
 
-      {/* Tarjetas KPI de Resumen */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-        <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs">
-          <div className="flex items-center justify-between text-slate-500 text-xs mb-1">
-            <span className="font-medium">Unidades Despachadas</span>
-            <Package className="w-4 h-4 text-indigo-500" />
-          </div>
-          <div className="text-xl sm:text-2xl font-bold text-slate-900 tabular-nums">
-            {metrics.totalQty.toLocaleString()}{' '}
-            <span className="text-xs font-normal text-slate-500">uds</span>
-          </div>
-          <p className="text-[11px] text-slate-400 mt-1">
-            En {metrics.itemsCount} partida(s) entregada(s)
-          </p>
-        </div>
+      {/* ==================================================================== */}
+      {/* PESTAÑA 1: DESPACHOS A CLIENTES Y SALIDAS */}
+      {/* ==================================================================== */}
+      {activeTab === 'despachos' && (
+        <div className="space-y-6">
+          {/* Barra de Acciones y Botones */}
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div className="text-xs text-slate-500">
+              Filtra por producto, cliente y tienda para verificar remisiones y exportar o imprimir.
+            </div>
 
-        <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs">
-          <div className="flex items-center justify-between text-slate-500 text-xs mb-1">
-            <span className="font-medium">Importe Total Despachado</span>
-            <Receipt className="w-4 h-4 text-emerald-500" />
-          </div>
-          <div className="text-xl sm:text-2xl font-bold text-emerald-700 tabular-nums">
-            {formatMoney(metrics.totalAmount, cur)}
-          </div>
-          <p className="text-[11px] text-slate-400 mt-1">
-            Excluyendo ventas anuladas
-          </p>
-        </div>
-
-        <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs">
-          <div className="flex items-center justify-between text-slate-500 text-xs mb-1">
-            <span className="font-medium">Clientes Atendidos</span>
-            <Users className="w-4 h-4 text-blue-500" />
-          </div>
-          <div className="text-xl sm:text-2xl font-bold text-slate-900 tabular-nums">
-            {metrics.customerCount}
-          </div>
-          <p className="text-[11px] text-slate-400 mt-1">
-            Destinatarios con entregas
-          </p>
-        </div>
-
-        <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs">
-          <div className="flex items-center justify-between text-slate-500 text-xs mb-1">
-            <span className="font-medium">Comprobantes / Despachos</span>
-            <Store className="w-4 h-4 text-amber-500" />
-          </div>
-          <div className="text-xl sm:text-2xl font-bold text-slate-900 tabular-nums">
-            {metrics.salesCount}
-          </div>
-          <p className="text-[11px] text-slate-400 mt-1">
-            Facturas y remisiones registradas
-          </p>
-        </div>
-      </div>
-
-      {/* Panel de Filtros Cruzados */}
-      <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-xs space-y-4">
-        <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-          <div className="flex items-center gap-2 text-xs font-semibold text-slate-800 uppercase tracking-wider">
-            <Filter className="w-3.5 h-3.5 text-indigo-600" />
-            Filtros Cruzados de Trazabilidad
-          </div>
-          <div className="flex items-center gap-1.5 flex-wrap">
-            <span className="text-[11px] text-slate-400 mr-1 hidden sm:inline">Período rápido:</span>
-            <button
-              type="button"
-              onClick={() => setDatePreset('today')}
-              className="px-2 py-1 rounded-lg text-xs font-medium bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors"
-            >
-              Hoy
-            </button>
-            <button
-              type="button"
-              onClick={() => setDatePreset('7days')}
-              className="px-2 py-1 rounded-lg text-xs font-medium bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors"
-            >
-              7 días
-            </button>
-            <button
-              type="button"
-              onClick={() => setDatePreset('month')}
-              className="px-2 py-1 rounded-lg text-xs font-medium bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors"
-            >
-              Este mes
-            </button>
-            <button
-              type="button"
-              onClick={() => setDatePreset('30days')}
-              className="px-2 py-1 rounded-lg text-xs font-medium bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors"
-            >
-              30 días
-            </button>
-            <button
-              type="button"
-              onClick={() => setDatePreset('all')}
-              className="px-2 py-1 rounded-lg text-xs font-medium bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors"
-            >
-              Todo
-            </button>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-          {/* 1. Selector de Producto */}
-          <div>
-            <label className="block text-xs font-medium text-slate-700 mb-1">
-              Producto específico
-            </label>
-            <div className="space-y-1.5">
-              <select
-                value={selectedProductId}
-                onChange={(e) => setSelectedProductId(e.target.value)}
-                className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                type="button"
+                onClick={handlePrintReport}
+                disabled={filteredRows.length === 0}
+                className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold shadow-xs disabled:opacity-40 transition-colors cursor-pointer"
               >
-                <option value="all">-- Todos los productos --</option>
-                {products.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name} {p.sku ? `(${p.sku})` : ''} - Stock: {p.stock}
-                  </option>
-                ))}
-              </select>
-              <div className="relative">
-                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
-                <input
-                  type="text"
-                  value={productSearch}
-                  onChange={(e) => setProductSearch(e.target.value)}
-                  placeholder="Filtrar por texto de producto..."
-                  className="w-full pl-8 pr-2.5 py-1.5 text-xs rounded-lg border border-slate-200 placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                />
+                <Printer className="w-4 h-4" />
+                Imprimir Reporte
+              </button>
+
+              <button
+                type="button"
+                onClick={handleExportCsv}
+                disabled={filteredRows.length === 0}
+                className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 text-xs font-semibold shadow-xs disabled:opacity-40 transition-colors cursor-pointer"
+              >
+                <Download className="w-4 h-4 text-emerald-600" />
+                Exportar CSV
+              </button>
+
+              <button
+                type="button"
+                onClick={handleResetFilters}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-medium transition-colors cursor-pointer"
+                title="Restablecer todos los filtros"
+              >
+                <RotateCcw className="w-3.5 h-3.5 text-slate-400" />
+                Limpiar
+              </button>
+            </div>
+          </div>
+
+          {/* Tarjetas KPI de Resumen */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+            <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs">
+              <div className="flex items-center justify-between text-slate-500 text-xs mb-1">
+                <span className="font-medium">Unidades Despachadas</span>
+                <Package className="w-4 h-4 text-indigo-500" />
+              </div>
+              <div className="text-xl sm:text-2xl font-bold text-slate-900 tabular-nums">
+                {metrics.totalQty.toLocaleString()}{' '}
+                <span className="text-xs font-normal text-slate-500">uds</span>
+              </div>
+              <p className="text-[11px] text-slate-400 mt-1">
+                En {metrics.itemsCount} partida(s) entregada(s)
+              </p>
+            </div>
+
+            <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs">
+              <div className="flex items-center justify-between text-slate-500 text-xs mb-1">
+                <span className="font-medium">Importe Total Despachado</span>
+                <Receipt className="w-4 h-4 text-emerald-500" />
+              </div>
+              <div className="text-xl sm:text-2xl font-bold text-emerald-700 tabular-nums">
+                {formatMoney(metrics.totalAmount, cur)}
+              </div>
+              <p className="text-[11px] text-slate-400 mt-1">Excluyendo ventas anuladas</p>
+            </div>
+
+            <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs">
+              <div className="flex items-center justify-between text-slate-500 text-xs mb-1">
+                <span className="font-medium">Clientes Atendidos</span>
+                <Users className="w-4 h-4 text-blue-500" />
+              </div>
+              <div className="text-xl sm:text-2xl font-bold text-slate-900 tabular-nums">
+                {metrics.customerCount}
+              </div>
+              <p className="text-[11px] text-slate-400 mt-1">Destinatarios con entregas</p>
+            </div>
+
+            <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs">
+              <div className="flex items-center justify-between text-slate-500 text-xs mb-1">
+                <span className="font-medium">Comprobantes / Despachos</span>
+                <Store className="w-4 h-4 text-amber-500" />
+              </div>
+              <div className="text-xl sm:text-2xl font-bold text-slate-900 tabular-nums">
+                {metrics.salesCount}
+              </div>
+              <p className="text-[11px] text-slate-400 mt-1">Facturas y remisiones registradas</p>
+            </div>
+          </div>
+
+          {/* Panel de Filtros Cruzados */}
+          <div className="bg-white rounded-2xl border border-slate-200 p-4 sm:p-5 shadow-xs space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2 text-xs font-semibold text-slate-800 uppercase tracking-wider">
+                <Filter className="w-3.5 h-3.5 text-indigo-600" />
+                Filtros Cruzados de Trazabilidad
+              </div>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <span className="text-[11px] text-slate-400 mr-1 hidden sm:inline">Período rápido:</span>
+                <button
+                  type="button"
+                  onClick={() => setDatePreset('today')}
+                  className="px-2 py-1 rounded-lg text-xs font-medium bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors"
+                >
+                  Hoy
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDatePreset('7days')}
+                  className="px-2 py-1 rounded-lg text-xs font-medium bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors"
+                >
+                  7 días
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDatePreset('month')}
+                  className="px-2 py-1 rounded-lg text-xs font-medium bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors"
+                >
+                  Este mes
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDatePreset('30days')}
+                  className="px-2 py-1 rounded-lg text-xs font-medium bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors"
+                >
+                  30 días
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDatePreset('all')}
+                  className="px-2 py-1 rounded-lg text-xs font-medium bg-slate-100 text-slate-700 hover:bg-slate-200 transition-colors"
+                >
+                  Todo
+                </button>
               </div>
             </div>
-          </div>
 
-          {/* 2. Selector de Cliente */}
-          <div>
-            <label className="block text-xs font-medium text-slate-700 mb-1">
-              Cliente destinatario
-            </label>
-            <div className="space-y-1.5">
-              <select
-                value={selectedCustomerId}
-                onChange={(e) => setSelectedCustomerId(e.target.value)}
-                className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              >
-                <option value="all">-- Todos los clientes --</option>
-                {customers.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name} {c.document ? `[${c.document}]` : ''}
-                  </option>
-                ))}
-              </select>
-              <div className="relative">
-                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
-                <input
-                  type="text"
-                  value={customerSearch}
-                  onChange={(e) => setCustomerSearch(e.target.value)}
-                  placeholder="Filtrar por nombre o cédula..."
-                  className="w-full pl-8 pr-2.5 py-1.5 text-xs rounded-lg border border-slate-200 placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                />
-              </div>
-            </div>
-          </div>
-
-          {/* 3. Selector de Tienda / Sede / Canal */}
-          <div>
-            <label className="block text-xs font-medium text-slate-700 mb-1">
-              Tienda / Sede de Origen
-            </label>
-            <select
-              value={selectedLocation}
-              onChange={(e) => setSelectedLocation(e.target.value)}
-              className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            >
-              <option value="all">-- Todas las tiendas y sedes --</option>
-              <optgroup label="Sedes y Sucursales">
-                {branches.map((b) => (
-                  <option key={b.id} value={`branch:${b.id}`}>
-                    {b.name} {b.is_main ? '(Principal)' : ''}
-                  </option>
-                ))}
-              </optgroup>
-              <optgroup label="Canales Operativos">
-                <option value="channel:mostrador">Mostrador / Local (POS)</option>
-                <option value="channel:ruta">Ruta de Reparto (Camión / Domicilio)</option>
-              </optgroup>
-            </select>
-
-            <div className="mt-2">
-              <label className="block text-xs font-medium text-slate-700 mb-1">
-                Estado del despacho
-              </label>
-              <select
-                value={statusFilter}
-                onChange={(e) => setStatusFilter(e.target.value as any)}
-                className="w-full px-3 py-1.5 text-xs rounded-xl border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              >
-                <option value="all">Todos los estados</option>
-                <option value="completada">Solo Completadas</option>
-                <option value="pendiente">Pendientes</option>
-                <option value="anulada">Anuladas</option>
-              </select>
-            </div>
-          </div>
-
-          {/* 4. Rango de Fechas y Búsqueda Libre */}
-          <div>
-            <label className="block text-xs font-medium text-slate-700 mb-1">
-              Rango de Fechas
-            </label>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+              {/* 1. Selector de Producto */}
               <div>
-                <span className="text-[10px] text-slate-400 block">Desde</span>
-                <input
-                  type="date"
-                  value={dateFrom}
-                  onChange={(e) => setDateFrom(e.target.value)}
-                  className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-300 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                />
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Producto específico
+                </label>
+                <div className="space-y-1.5">
+                  <select
+                    value={selectedProductId}
+                    onChange={(e) => setSelectedProductId(e.target.value)}
+                    className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  >
+                    <option value="all">-- Todos los productos --</option>
+                    {products.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name} {p.sku ? `(${p.sku})` : ''} - Stock: {p.stock}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="relative">
+                    <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      value={productSearch}
+                      onChange={(e) => setProductSearch(e.target.value)}
+                      placeholder="Filtrar por texto de producto..."
+                      className="w-full pl-8 pr-2.5 py-1.5 text-xs rounded-lg border border-slate-200 placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                    />
+                  </div>
+                </div>
               </div>
+
+              {/* 2. Selector de Cliente */}
               <div>
-                <span className="text-[10px] text-slate-400 block">Hasta</span>
-                <input
-                  type="date"
-                  value={dateTo}
-                  onChange={(e) => setDateTo(e.target.value)}
-                  className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-300 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                />
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Cliente destinatario
+                </label>
+                <div className="space-y-1.5">
+                  <select
+                    value={selectedCustomerId}
+                    onChange={(e) => setSelectedCustomerId(e.target.value)}
+                    className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  >
+                    <option value="all">-- Todos los clientes --</option>
+                    {customers.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name} {c.document ? `[${c.document}]` : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="relative">
+                    <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      value={customerSearch}
+                      onChange={(e) => setCustomerSearch(e.target.value)}
+                      placeholder="Filtrar por nombre o cédula..."
+                      className="w-full pl-8 pr-2.5 py-1.5 text-xs rounded-lg border border-slate-200 placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* 3. Selector de Tienda / Sede / Canal */}
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Tienda / Sede de Origen
+                </label>
+                <select
+                  value={selectedLocation}
+                  onChange={(e) => setSelectedLocation(e.target.value)}
+                  className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                >
+                  <option value="all">-- Todas las tiendas y sedes --</option>
+                  <optgroup label="Sedes y Sucursales">
+                    {branches.map((b) => (
+                      <option key={b.id} value={`branch:${b.id}`}>
+                        {b.name} {b.is_main ? '(Principal)' : ''}
+                      </option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="Canales Operativos">
+                    <option value="channel:mostrador">Mostrador / Local (POS)</option>
+                    <option value="channel:ruta">Ruta de Reparto (Camión / Domicilio)</option>
+                  </optgroup>
+                </select>
+
+                <div className="mt-2">
+                  <label className="block text-xs font-medium text-slate-700 mb-1">
+                    Estado del despacho
+                  </label>
+                  <select
+                    value={statusFilter}
+                    onChange={(e) => setStatusFilter(e.target.value as any)}
+                    className="w-full px-3 py-1.5 text-xs rounded-xl border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  >
+                    <option value="all">Todos los estados</option>
+                    <option value="completada">Solo Completadas</option>
+                    <option value="pendiente">Pendientes</option>
+                    <option value="anulada">Anuladas</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* 4. Rango de Fechas y Búsqueda Libre */}
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Rango de Fechas
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <span className="text-[10px] text-slate-400 block">Desde</span>
+                    <input
+                      type="date"
+                      value={dateFrom}
+                      onChange={(e) => setDateFrom(e.target.value)}
+                      className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-300 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                    />
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-400 block">Hasta</span>
+                    <input
+                      type="date"
+                      value={dateTo}
+                      onChange={(e) => setDateTo(e.target.value)}
+                      className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-300 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                    />
+                  </div>
+                </div>
+
+                <div className="mt-2">
+                  <div className="relative">
+                    <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="text"
+                      value={freeSearch}
+                      onChange={(e) => setFreeSearch(e.target.value)}
+                      placeholder="Buscar N° VTA, nota, etc..."
+                      className="w-full pl-8 pr-2.5 py-1.5 text-xs rounded-lg border border-slate-200 placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                    />
+                  </div>
+                </div>
               </div>
             </div>
+          </div>
 
-            <div className="mt-2">
-              <div className="relative">
-                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
-                <input
-                  type="text"
-                  value={freeSearch}
-                  onChange={(e) => setFreeSearch(e.target.value)}
-                  placeholder="Buscar N° VTA, nota, etc..."
-                  className="w-full pl-8 pr-2.5 py-1.5 text-xs rounded-lg border border-slate-200 placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                />
+          {/* Tabla Principal de Despachos */}
+          <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs">
+            <div className="px-4 py-3 bg-slate-50/70 border-b border-slate-200 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-slate-700">Registros encontrados:</span>
+                <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-indigo-100 text-indigo-700">
+                  {filteredRows.length} partidas
+                </span>
               </div>
+              <span className="text-xs text-slate-400">
+                {metrics.salesCount} comprobantes distintos
+              </span>
             </div>
-          </div>
-        </div>
-      </div>
 
-      {/* Tabla Principal de Despachos */}
-      <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs">
-        <div className="px-4 py-3 bg-slate-50/70 border-b border-slate-200 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-semibold text-slate-700">
-              Registros encontrados:
-            </span>
-            <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-indigo-100 text-indigo-700">
-              {filteredRows.length} partidas
-            </span>
-          </div>
-          <span className="text-xs text-slate-400">
-            {metrics.salesCount} comprobantes distintos
-          </span>
-        </div>
+            {loading ? (
+              <div className="p-12 text-center text-slate-500 text-sm">
+                Cargando historial de despachos...
+              </div>
+            ) : filteredRows.length === 0 ? (
+              <div className="p-12 text-center">
+                <Package className="w-10 h-10 text-slate-300 mx-auto mb-3" />
+                <p className="text-sm font-semibold text-slate-700">
+                  No se encontraron despachos con los filtros seleccionados
+                </p>
+                <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto">
+                  Intenta ampliar el rango de fechas, seleccionar "Todos los productos" o borrar el texto de búsqueda.
+                </p>
+                <button
+                  type="button"
+                  onClick={handleResetFilters}
+                  className="mt-4 px-3.5 py-1.5 rounded-lg bg-indigo-50 text-indigo-700 text-xs font-medium hover:bg-indigo-100 transition-colors"
+                >
+                  Restablecer filtros
+                </button>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-slate-50 text-slate-600 uppercase font-semibold border-b border-slate-200">
+                    <tr>
+                      <th className="px-3.5 py-3">Fecha y Hora</th>
+                      <th className="px-3.5 py-3">Comprobante</th>
+                      <th className="px-3.5 py-3">Cliente Destinatario</th>
+                      <th className="px-3.5 py-3">Tienda / Sede</th>
+                      <th className="px-3.5 py-3">Producto Despachado</th>
+                      <th className="px-3.5 py-3 text-center">Cantidad</th>
+                      <th className="px-3.5 py-3 text-right">P. Unitario</th>
+                      <th className="px-3.5 py-3 text-right">Subtotal</th>
+                      <th className="px-3.5 py-3 text-center">Estado</th>
+                      <th className="px-3.5 py-3 text-right">Acción</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {filteredRows.map((row, idx) => {
+                      const d = new Date(row.createdAt)
+                      const isAnulada = row.status === 'anulada'
 
-        {loading ? (
-          <div className="p-12 text-center text-slate-500 text-sm">
-            Cargando historial de despachos...
-          </div>
-        ) : filteredRows.length === 0 ? (
-          <div className="p-12 text-center">
-            <Package className="w-10 h-10 text-slate-300 mx-auto mb-3" />
-            <p className="text-sm font-semibold text-slate-700">
-              No se encontraron despachos con los filtros seleccionados
-            </p>
-            <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto">
-              Intenta ampliar el rango de fechas, seleccionar "Todos los productos" o borrar el texto de búsqueda.
-            </p>
-            <button
-              type="button"
-              onClick={handleResetFilters}
-              className="mt-4 px-3.5 py-1.5 rounded-lg bg-indigo-50 text-indigo-700 text-xs font-medium hover:bg-indigo-100 transition-colors"
-            >
-              Restablecer filtros
-            </button>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-slate-50 text-slate-600 uppercase font-semibold border-b border-slate-200">
-                <tr>
-                  <th className="px-3.5 py-3">Fecha y Hora</th>
-                  <th className="px-3.5 py-3">Comprobante</th>
-                  <th className="px-3.5 py-3">Cliente Destinatario</th>
-                  <th className="px-3.5 py-3">Tienda / Sede</th>
-                  <th className="px-3.5 py-3">Producto Despachado</th>
-                  <th className="px-3.5 py-3 text-center">Cantidad</th>
-                  <th className="px-3.5 py-3 text-right">P. Unitario</th>
-                  <th className="px-3.5 py-3 text-right">Subtotal</th>
-                  <th className="px-3.5 py-3 text-center">Estado</th>
-                  <th className="px-3.5 py-3 text-right">Acción</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {filteredRows.map((row, idx) => {
-                  const d = new Date(row.createdAt)
-                  const isAnulada = row.status === 'anulada'
-
-                  return (
-                    <tr
-                      key={`${row.saleId}-${row.productId}-${idx}`}
-                      className={`hover:bg-slate-50/80 transition-colors ${
-                        isAnulada ? 'bg-red-50/30 opacity-75' : ''
-                      }`}
-                    >
-                      {/* Fecha y Hora */}
-                      <td className="px-3.5 py-3 whitespace-nowrap text-slate-600">
-                        <div className="font-medium text-slate-800">
-                          {d.toLocaleDateString()}
-                        </div>
-                        <div className="text-[10px] text-slate-400">
-                          {d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        </div>
-                      </td>
-
-                      {/* Comprobante */}
-                      <td className="px-3.5 py-3 whitespace-nowrap">
-                        <button
-                          type="button"
-                          onClick={() => setDetailSale(row.rawSale)}
-                          className="font-mono font-semibold text-indigo-600 hover:text-indigo-800 hover:underline cursor-pointer"
+                      return (
+                        <tr
+                          key={`${row.saleId}-${row.productId}-${idx}`}
+                          className={`hover:bg-slate-50/80 transition-colors ${
+                            isAnulada ? 'bg-red-50/30 opacity-75' : ''
+                          }`}
                         >
-                          {row.saleNumber}
-                        </button>
-                        <div className="text-[10px] text-slate-400 capitalize">
-                          {PAYMENT_LABEL[row.paymentMethod] || row.paymentMethod}
-                        </div>
-                      </td>
+                          <td className="px-3.5 py-3 whitespace-nowrap text-slate-600">
+                            <div className="font-medium text-slate-800">
+                              {d.toLocaleDateString()}
+                            </div>
+                            <div className="text-[10px] text-slate-400">
+                              {d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </div>
+                          </td>
 
-                      {/* Cliente */}
-                      <td className="px-3.5 py-3">
-                        <div className="font-semibold text-slate-900 max-w-[180px] truncate">
-                          {row.customerName}
-                        </div>
-                        {row.customerDocument && (
-                          <div className="text-[10px] text-slate-500">
-                            Doc: {row.customerDocument}
-                          </div>
-                        )}
-                        {row.customerPhone && (
-                          <div className="text-[10px] text-slate-400">
-                            Tel: {row.customerPhone}
-                          </div>
-                        )}
-                      </td>
+                          <td className="px-3.5 py-3 whitespace-nowrap">
+                            <button
+                              type="button"
+                              onClick={() => setDetailSale(row.rawSale)}
+                              className="font-mono font-semibold text-indigo-600 hover:text-indigo-800 hover:underline cursor-pointer"
+                            >
+                              {row.saleNumber}
+                            </button>
+                            <div className="text-[10px] text-slate-400 capitalize">
+                              {PAYMENT_LABEL[row.paymentMethod] || row.paymentMethod}
+                            </div>
+                          </td>
 
-                      {/* Tienda / Sede */}
-                      <td className="px-3.5 py-3 whitespace-nowrap">
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium bg-slate-100 text-slate-700">
-                          {row.channel === 'ruta' ? (
-                            <Truck className="w-3 h-3 text-amber-600 shrink-0" />
-                          ) : (
-                            <Building2 className="w-3 h-3 text-slate-500 shrink-0" />
-                          )}
-                          {row.branchName}
-                        </span>
-                      </td>
+                          <td className="px-3.5 py-3">
+                            <div className="font-semibold text-slate-900 max-w-[180px] truncate">
+                              {row.customerName}
+                            </div>
+                            {row.customerDocument && (
+                              <div className="text-[10px] text-slate-500">
+                                Doc: {row.customerDocument}
+                              </div>
+                            )}
+                            {row.customerPhone && (
+                              <div className="text-[10px] text-slate-400">
+                                Tel: {row.customerPhone}
+                              </div>
+                            )}
+                          </td>
 
-                      {/* Producto */}
-                      <td className="px-3.5 py-3">
-                        <div className="font-semibold text-slate-800 max-w-[200px] truncate">
-                          {row.productName}
-                        </div>
-                        {row.productSku && (
-                          <div className="text-[10px] font-mono text-slate-400">
-                            SKU: {row.productSku}
-                          </div>
-                        )}
-                      </td>
+                          <td className="px-3.5 py-3 whitespace-nowrap">
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-medium bg-slate-100 text-slate-700">
+                              {row.channel === 'ruta' ? (
+                                <Truck className="w-3 h-3 text-amber-600 shrink-0" />
+                              ) : (
+                                <Building2 className="w-3 h-3 text-slate-500 shrink-0" />
+                              )}
+                              {row.branchName}
+                            </span>
+                          </td>
 
-                      {/* Cantidad */}
-                      <td className="px-3.5 py-3 text-center whitespace-nowrap">
-                        <span className="inline-block px-2 py-0.5 rounded-lg text-xs font-bold bg-indigo-50 text-indigo-700 tabular-nums">
-                          {row.quantity} uds
-                        </span>
-                      </td>
+                          <td className="px-3.5 py-3">
+                            <div className="font-semibold text-slate-800 max-w-[200px] truncate">
+                              {row.productName}
+                            </div>
+                            {row.productSku && (
+                              <div className="text-[10px] font-mono text-slate-400">
+                                SKU: {row.productSku}
+                              </div>
+                            )}
+                          </td>
 
-                      {/* Precio Unitario */}
-                      <td className="px-3.5 py-3 text-right whitespace-nowrap text-slate-600 tabular-nums">
-                        {formatMoney(row.price, cur)}
-                      </td>
+                          <td className="px-3.5 py-3 text-center whitespace-nowrap">
+                            <span className="inline-block px-2 py-0.5 rounded-lg text-xs font-bold bg-indigo-50 text-indigo-700 tabular-nums">
+                              {row.quantity} uds
+                            </span>
+                          </td>
 
-                      {/* Subtotal */}
-                      <td className="px-3.5 py-3 text-right whitespace-nowrap font-bold text-slate-900 tabular-nums">
-                        {formatMoney(row.subtotal, cur)}
-                      </td>
+                          <td className="px-3.5 py-3 text-right whitespace-nowrap text-slate-600 tabular-nums">
+                            {formatMoney(row.price, cur)}
+                          </td>
 
-                      {/* Estado */}
-                      <td className="px-3.5 py-3 text-center whitespace-nowrap">
-                        {row.status === 'completada' ? (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                            <CheckCircle2 className="w-2.5 h-2.5" />
-                            Completada
-                          </span>
-                        ) : row.status === 'anulada' ? (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-red-50 text-red-700 border border-red-200">
-                            <Ban className="w-2.5 h-2.5" />
-                            Anulada
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
-                            <Clock className="w-2.5 h-2.5" />
-                            Pendiente
-                          </span>
-                        )}
-                      </td>
+                          <td className="px-3.5 py-3 text-right whitespace-nowrap font-bold text-slate-900 tabular-nums">
+                            {formatMoney(row.subtotal, cur)}
+                          </td>
 
-                      {/* Acciones */}
-                      <td className="px-3.5 py-3 text-right whitespace-nowrap">
-                        <div className="inline-flex items-center gap-1">
-                          <button
-                            type="button"
-                            onClick={() => setDetailSale(row.rawSale)}
-                            className="p-1.5 rounded-lg text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
-                            title="Ver factura completa"
-                          >
-                            <Eye className="w-4 h-4" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handlePrintSaleDoc(row.rawSale)}
-                            className="p-1.5 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-colors"
-                            title="Imprimir comprobante individual"
-                          >
-                            <Printer className="w-4 h-4" />
-                          </button>
-                        </div>
+                          <td className="px-3.5 py-3 text-center whitespace-nowrap">
+                            {row.status === 'completada' ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                <CheckCircle2 className="w-2.5 h-2.5" />
+                                Completada
+                              </span>
+                            ) : row.status === 'anulada' ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-red-50 text-red-700 border border-red-200">
+                                <Ban className="w-2.5 h-2.5" />
+                                Anulada
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+                                <Clock className="w-2.5 h-2.5" />
+                                Pendiente
+                              </span>
+                            )}
+                          </td>
+
+                          <td className="px-3.5 py-3 text-right whitespace-nowrap">
+                            <div className="inline-flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => setDetailSale(row.rawSale)}
+                                className="p-1.5 rounded-lg text-slate-500 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
+                                title="Ver factura completa"
+                              >
+                                <Eye className="w-4 h-4" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handlePrintSaleDoc(row.rawSale)}
+                                className="p-1.5 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100 transition-colors"
+                                title="Imprimir comprobante individual"
+                              >
+                                <Printer className="w-4 h-4" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ==================================================================== */}
+      {/* PESTAÑA 2: AUDITORÍA FORENSE DE PRODUCTO (CONFLICTOS, MERMAS, ROBOS) */}
+      {/* ==================================================================== */}
+      {activeTab === 'forense' && (
+        <div className="space-y-6">
+          {/* Barra de Selección de Producto a Auditar */}
+          <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 rounded-2xl p-5 text-white shadow-lg border border-indigo-900/50 space-y-4">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="p-2 bg-red-500/20 text-red-300 rounded-xl border border-red-500/30">
+                    <ShieldAlert className="w-5 h-5" />
+                  </span>
+                  <h2 className="text-base sm:text-lg font-bold text-white">
+                    Auditoría Forense de Producto y Resolución de Conflictos
+                  </h2>
+                </div>
+                <p className="text-xs text-indigo-200/80 mt-1 max-w-2xl">
+                  Rastrea quién ingresó la mercancía, quién la movió entre sedes, quién corrigió cantidades, devoluciones y bajas por avería para esclarecer pérdidas, mermas o errores de digitación.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  onClick={handlePrintForensicReport}
+                  disabled={!forensicProductId || filteredForensicEvents.length === 0}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white text-slate-950 text-xs font-bold hover:bg-slate-100 transition-colors cursor-pointer"
+                >
+                  <Printer className="w-4 h-4 text-indigo-700" />
+                  Imprimir Acta de Auditoría
+                </button>
+                <button
+                  type="button"
+                  onClick={handleExportForensicCsv}
+                  disabled={!forensicProductId || filteredForensicEvents.length === 0}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-indigo-600/90 hover:bg-indigo-500 text-white text-xs font-semibold transition-colors cursor-pointer"
+                >
+                  <Download className="w-4 h-4" />
+                  Exportar Trazabilidad
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2 border-t border-indigo-900/60">
+              <div className="md:col-span-2">
+                <label className="block text-xs font-medium text-indigo-200 mb-1">
+                  Selecciona el producto a auditar forensemente:
+                </label>
+                <select
+                  value={forensicProductId}
+                  onChange={(e) => setForensicProductId(e.target.value)}
+                  className="w-full px-3 py-2 text-xs font-semibold rounded-xl bg-slate-800 text-white border border-indigo-700/60 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                >
+                  {products.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name} {p.sku ? `(SKU: ${p.sku})` : ''} - Stock actual: {p.stock} uds
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-indigo-200 mb-1">
+                  Filtrar por responsable / notas:
+                </label>
+                <div className="relative">
+                  <Search className="w-3.5 h-3.5 text-indigo-300 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={forensicSearch}
+                    onChange={(e) => setForensicSearch(e.target.value)}
+                    placeholder="Buscar usuario o comprobante..."
+                    className="w-full pl-8 pr-3 py-2 text-xs rounded-xl bg-slate-800 text-white border border-indigo-700/60 placeholder:text-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Tarjetas Forenses de Diagnóstico de Pérdidas */}
+          <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+            <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs">
+              <span className="text-[10px] uppercase font-bold text-slate-400 block">
+                Stock Físico / Sistema
+              </span>
+              <div className="text-xl font-bold text-slate-900 tabular-nums mt-0.5">
+                {forensicSummary.currentStock} uds
+              </div>
+              <p className="text-[11px] text-slate-500 mt-1">Saldo disponible actual</p>
+            </div>
+
+            <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs">
+              <span className="text-[10px] uppercase font-bold text-slate-400 block">
+                Entradas (Compras)
+              </span>
+              <div className="text-xl font-bold text-emerald-700 tabular-nums mt-0.5">
+                +{forensicSummary.totalIn} uds
+              </div>
+              <p className="text-[11px] text-slate-500 mt-1">Ingresadas al almacén</p>
+            </div>
+
+            <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs">
+              <span className="text-[10px] uppercase font-bold text-slate-400 block">
+                Salidas (Ventas/Mov)
+              </span>
+              <div className="text-xl font-bold text-slate-900 tabular-nums mt-0.5">
+                -{forensicSummary.totalOut} uds
+              </div>
+              <p className="text-[11px] text-slate-500 mt-1">Despachos registrados</p>
+            </div>
+
+            <div
+              className={`rounded-2xl border p-4 shadow-xs ${
+                forensicSummary.totalLossesQty > 0
+                  ? 'bg-red-50 border-red-200'
+                  : 'bg-emerald-50 border-emerald-200'
+              }`}
+            >
+              <span
+                className={`text-[10px] uppercase font-bold block ${
+                  forensicSummary.totalLossesQty > 0 ? 'text-red-700' : 'text-emerald-700'
+                }`}
+              >
+                Faltantes / Mermas
+              </span>
+              <div
+                className={`text-xl font-bold tabular-nums mt-0.5 ${
+                  forensicSummary.totalLossesQty > 0 ? 'text-red-700' : 'text-emerald-700'
+                }`}
+              >
+                {forensicSummary.totalLossesQty} uds
+              </div>
+              <p className="text-[11px] text-slate-600 mt-1">
+                {forensicSummary.totalLossesQty > 0
+                  ? '⚠️ Presunta pérdida o merma'
+                  : '✓ Sin faltantes detectados'}
+              </p>
+            </div>
+
+            <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-xs col-span-2 lg:col-span-1">
+              <span className="text-[10px] uppercase font-bold text-slate-400 block">
+                Cadena de Custodia
+              </span>
+              <div className="text-xl font-bold text-indigo-700 tabular-nums mt-0.5">
+                {forensicSummary.uniqueUsersCount} usuarios
+              </div>
+              <p className="text-[11px] text-slate-500 mt-1">Manipularon este ítem</p>
+            </div>
+          </div>
+
+          {/* Filtro rápido: Solo conflictos */}
+          <div className="flex items-center justify-between">
+            <label className="inline-flex items-center gap-2 cursor-pointer text-xs font-semibold text-slate-700">
+              <input
+                type="checkbox"
+                checked={forensicOnlyConflicts}
+                onChange={(e) => setForensicOnlyConflicts(e.target.checked)}
+                className="w-4 h-4 rounded text-red-600 focus:ring-red-500"
+              />
+              <span>Mostrar únicamente eventos con sospecha de conflicto, faltante o merma</span>
+            </label>
+
+            <span className="text-xs text-slate-400">
+              {filteredForensicEvents.length} eventos cronológicos
+            </span>
+          </div>
+
+          {/* Timeline / Tabla Forense */}
+          <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-50 text-slate-600 uppercase font-semibold border-b border-slate-200">
+                  <tr>
+                    <th className="px-3.5 py-3">Fecha y Hora</th>
+                    <th className="px-3.5 py-3">Tipo de Operación</th>
+                    <th className="px-3.5 py-3">Comprobante</th>
+                    <th className="px-3.5 py-3">¿Quién lo Realizó? (Responsable)</th>
+                    <th className="px-3.5 py-3">Ubicación / Flujo</th>
+                    <th className="px-3.5 py-3 text-center">Variación</th>
+                    <th className="px-3.5 py-3">Diagnóstico y Justificación</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {filteredForensicEvents.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="text-center py-10 text-slate-400">
+                        No hay movimientos registrados para este producto o no coinciden con el filtro.
                       </td>
                     </tr>
-                  )
-                })}
-              </tbody>
-            </table>
+                  ) : (
+                    filteredForensicEvents.map((evt) => {
+                      const isNegative = evt.quantityDelta < 0
+                      const isConflict = evt.isConflictOrDiscrepancy
+
+                      return (
+                        <tr
+                          key={evt.id}
+                          className={`hover:bg-slate-50 transition-colors ${
+                            isConflict ? 'bg-red-50/40' : ''
+                          }`}
+                        >
+                          {/* Fecha */}
+                          <td className="px-3.5 py-3 whitespace-nowrap text-slate-600">
+                            <div className="font-medium text-slate-800">
+                              {new Date(evt.date).toLocaleDateString()}
+                            </div>
+                            <div className="text-[10px] text-slate-400">
+                              {new Date(evt.date).toLocaleTimeString([], {
+                                hour: '2-digit',
+                                minute: '2-digit',
+                              })}
+                            </div>
+                          </td>
+
+                          {/* Tipo de Operación */}
+                          <td className="px-3.5 py-3 whitespace-nowrap">
+                            <div className="flex items-center gap-1.5 font-bold text-slate-900">
+                              {evt.type === 'ingreso_compra' && (
+                                <ArrowDownRight className="w-4 h-4 text-emerald-600 shrink-0" />
+                              )}
+                              {evt.type === 'despacho_venta' && (
+                                <ArrowUpRight className="w-4 h-4 text-indigo-600 shrink-0" />
+                              )}
+                              {evt.type === 'traslado_salida' && (
+                                <Truck className="w-4 h-4 text-amber-600 shrink-0" />
+                              )}
+                              {evt.type === 'devolucion_cliente' && (
+                                <History className="w-4 h-4 text-purple-600 shrink-0" />
+                              )}
+                              {evt.type === 'merma_averia' && (
+                                <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
+                              )}
+                              {evt.type === 'ajuste_toma_fisica' && (
+                                <FileSearch className="w-4 h-4 text-blue-600 shrink-0" />
+                              )}
+                              <span>{evt.typeLabel}</span>
+                            </div>
+                          </td>
+
+                          {/* Comprobante */}
+                          <td className="px-3.5 py-3 whitespace-nowrap font-mono font-semibold text-slate-700">
+                            {evt.referenceCode}
+                          </td>
+
+                          {/* Quién lo realizó (Responsable) */}
+                          <td className="px-3.5 py-3">
+                            <div className="font-semibold text-slate-900 flex items-center gap-1.5">
+                              <UserCheck className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                              <span>{evt.userResponsible}</span>
+                            </div>
+                            {evt.userRole && (
+                              <div className="text-[10px] text-slate-500 pl-5">
+                                Rol: {evt.userRole}
+                              </div>
+                            )}
+                          </td>
+
+                          {/* Ubicación / Flujo */}
+                          <td className="px-3.5 py-3">
+                            <div className="text-slate-800 font-medium">
+                              {evt.sourceLocation}
+                            </div>
+                            {evt.targetLocation && (
+                              <div className="text-[10px] text-slate-500 flex items-center gap-1">
+                                <span>&rarr;</span> {evt.targetLocation}
+                              </div>
+                            )}
+                          </td>
+
+                          {/* Variación de Cantidad */}
+                          <td className="px-3.5 py-3 text-center whitespace-nowrap">
+                            <span
+                              className={`inline-block px-2.5 py-0.5 rounded-lg text-xs font-bold tabular-nums ${
+                                evt.quantityDelta > 0
+                                  ? 'bg-emerald-100 text-emerald-800'
+                                  : 'bg-slate-100 text-slate-800'
+                              } ${isConflict ? '!bg-red-100 !text-red-800' : ''}`}
+                            >
+                              {evt.quantityDelta > 0 ? `+${evt.quantityDelta}` : evt.quantityDelta}{' '}
+                              uds
+                            </span>
+                            {evt.stockResulting !== undefined && (
+                              <div className="text-[10px] text-slate-400 mt-0.5">
+                                Saldo: {evt.stockResulting}
+                              </div>
+                            )}
+                          </td>
+
+                          {/* Diagnóstico y Justificación */}
+                          <td className="px-3.5 py-3">
+                            <div className="text-slate-700 text-xs">{evt.reasonNotes}</div>
+                            {evt.isConflictOrDiscrepancy && (
+                              <span className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-red-100 text-red-800 border border-red-200">
+                                <AlertTriangle className="w-3 h-3" />
+                                {evt.discrepancyType === 'faltante_sospechoso'
+                                  ? 'Alerta: Faltante / Sospecha de Robo'
+                                  : evt.discrepancyType === 'averia_defectuoso'
+                                    ? 'Avería / Producto Defectuoso'
+                                    : 'Ajuste / Reclamo'}
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      )
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* Modal de Detalle Completo de la Venta */}
       {detailSale && (
@@ -1092,7 +1843,6 @@ export default function DispatchHistory({
               </button>
             </div>
 
-            {/* Datos del Cliente y Despacho */}
             <div className="bg-slate-50 rounded-xl p-3 grid grid-cols-2 gap-3 text-xs">
               <div>
                 <span className="text-slate-400 block text-[10px] uppercase font-bold">Cliente</span>
@@ -1128,7 +1878,6 @@ export default function DispatchHistory({
               </div>
             </div>
 
-            {/* Listado de Productos de este Despacho */}
             <div>
               <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
                 Mercancía Despachada
@@ -1146,9 +1895,7 @@ export default function DispatchHistory({
                   <tbody className="divide-y divide-slate-100">
                     {(detailSale.items || []).map((it, idx) => (
                       <tr key={idx}>
-                        <td className="px-3 py-2 font-medium text-slate-800">
-                          {it.product_name}
-                        </td>
+                        <td className="px-3 py-2 font-medium text-slate-800">{it.product_name}</td>
                         <td className="px-3 py-2 text-center font-bold text-indigo-700">
                           {it.quantity}
                         </td>
@@ -1175,7 +1922,6 @@ export default function DispatchHistory({
               </div>
             </div>
 
-            {/* Acciones del Modal */}
             <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
               <button
                 type="button"

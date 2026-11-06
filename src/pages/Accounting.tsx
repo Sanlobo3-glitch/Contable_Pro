@@ -1,9 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth, canViewAccounting } from '../lib/auth'
-import JournalEntryForm from '../components/accounting/JournalEntryForm'
-import { accountingService } from '../services/accountingService'
-import type { Account as DomainAccount, CreateJournalEntryPayload } from '../types'
 import {
   Plus,
   ChevronDown,
@@ -19,6 +16,7 @@ import {
 } from 'lucide-react'
 import { fmtDate, fmtNum } from '../lib/currency'
 import { downloadCsv } from '../lib/csv'
+import JournalEntryForm from '../components/JournalEntryForm'
 
 interface Account {
   id: string; code: string; name: string; type: string; nature: string
@@ -84,6 +82,10 @@ export default function Accounting({
   const [journalStatus, setJournalStatus] = useState<'todos' | Entry['status']>('todos')
   const [acc, setAcc] = useState({ code: '', name: '', type: 'activo', nature: 'debito', parent: '', postable: true })
   const [showEntry, setShowEntry] = useState(false)
+  const [showNiifForm, setShowNiifForm] = useState(false)
+  const [date, setDate] = useState(today())
+  const [desc, setDesc] = useState('')
+  const [form, setForm] = useState<FormLine[]>([emptyLine(), emptyLine()])
   const [rangeFrom, setRangeFrom] = useState(monthStart())
   const [rangeTo, setRangeTo] = useState(today())
   const [ledgerAcc, setLedgerAcc] = useState('')
@@ -140,44 +142,16 @@ export default function Accounting({
     setLines((data as unknown as Line[]) || []); setOpen(id)
   }
 
-  const companyId = user?.company_id || '00000000-0000-4000-8000-000000000001'
+  const totalD = form.reduce((s, l) => s + (Number(l.debit) || 0), 0)
+  const totalC = form.reduce((s, l) => s + (Number(l.credit) || 0), 0)
+  const validLines = form.filter(l => l.account_id && (Number(l.debit) > 0 || Number(l.credit) > 0))
+  const balanced = validLines.length >= 2 && Math.abs(totalD - totalC) < 0.005 && totalD > 0
 
-  const domainAccounts = useMemo<DomainAccount[]>(() => {
-    return accounts.map(a => ({
-      id: a.id,
-      company_id: companyId,
-      code: a.code,
-      name: a.name,
-      account_type: ((a as any).account_type || a.type || 'activo') as any,
-      nature: ((a as any).nature || 'debito') as any,
-      parent_id: a.parent_id || null,
-      level: a.code.split('.').length,
-      is_postable: a.is_postable,
-      active: a.active,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    }))
-  }, [accounts, companyId])
-
-  async function handleDynamicEntrySubmit(payload: CreateJournalEntryPayload) {
-    setBusy(true)
-    try {
-      const res = await accountingService.createJournalEntry(payload)
-      if (res && res.ok) {
-        setShowEntry(false)
-        done(
-          `Asiento ${res.entry_number || ''} ${
-            payload.status === 'posteado' ? 'contabilizado e inmutable' : 'guardado como borrador'
-          } exitosamente.`
-        )
-      } else {
-        fail('No se pudo asentar el comprobante.')
-      }
-    } catch (err: any) {
-      fail(err?.message || 'Error al guardar asiento contable.')
-    } finally {
-      setBusy(false)
-    }
+  async function saveEntry(post: boolean) {
+    const payload = validLines.map(l => ({ account_id: l.account_id, debit: Number(l.debit) || 0, credit: Number(l.credit) || 0, memo: l.memo }))
+    const { error } = await supabase.rpc('acc_create_entry', { p_date: date, p_description: desc, p_lines: payload, p_post: post })
+    if (error) { fail(error.message); return }
+    setShowEntry(false); setDesc(''); setForm([emptyLine(), emptyLine()]); done(post ? 'Asiento contabilizado' : 'Borrador guardado')
   }
 
   async function post(id: string) {
@@ -432,9 +406,29 @@ export default function Accounting({
         <div className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex flex-wrap items-center gap-2">
-              <button onClick={() => setShowEntry(!showEntry)} className="flex items-center gap-1 text-sm font-medium text-slate-700 bg-white border border-slate-200 px-3 py-2 rounded-lg hover:bg-slate-50 whitespace-nowrap shrink-0"><Plus className="w-4 h-4" /> Nuevo asiento manual</button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowNiifForm(!showNiifForm)
+                  if (!showNiifForm) setShowEntry(false)
+                }}
+                className="flex items-center gap-1.5 text-xs font-bold text-white bg-indigo-600 px-3.5 py-2 rounded-xl hover:bg-indigo-500 shadow-xs whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                Asiento Partida Doble (NIIF)
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowEntry(!showEntry)
+                  if (!showEntry) setShowNiifForm(false)
+                }}
+                className="flex items-center gap-1 text-xs font-medium text-slate-700 bg-white border border-slate-200 px-3 py-2 rounded-lg hover:bg-slate-50 whitespace-nowrap shrink-0"
+              >
+                Asiento rápido
+              </button>
               {entries.length > 0 && (
-                <button onClick={exportJournalExcel} className="flex items-center gap-1 text-sm font-medium text-slate-700 bg-white border border-slate-200 px-3 py-2 rounded-lg hover:bg-slate-50 whitespace-nowrap shrink-0"><Download className="w-4 h-4" /> Exportar CSV</button>
+                <button onClick={exportJournalExcel} className="flex items-center gap-1 text-xs font-medium text-slate-700 bg-white border border-slate-200 px-3 py-2 rounded-lg hover:bg-slate-50 whitespace-nowrap shrink-0"><Download className="w-3.5 h-3.5" /> Exportar CSV</button>
               )}
             </div>
             <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
@@ -459,15 +453,42 @@ export default function Accounting({
               </div>
             </div>
           </div>
-          {showEntry && (
+          {showNiifForm && (
             <div className="mb-4">
               <JournalEntryForm
-                companyId={companyId}
-                accounts={domainAccounts}
-                onSubmit={handleDynamicEntrySubmit}
-                onCancel={() => setShowEntry(false)}
-                isSubmitting={busy}
+                onSuccess={() => {
+                  setShowNiifForm(false)
+                  void load()
+                }}
+                onCancel={() => setShowNiifForm(false)}
               />
+            </div>
+          )}
+          {showEntry && (
+            <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-3">
+              <div className="grid grid-cols-3 gap-3">
+                <input type="date" value={date} onChange={e => setDate(e.target.value)} className={input} />
+                <input value={desc} onChange={e => setDesc(e.target.value)} placeholder="Descripción del asiento" className={`${input} col-span-2`} />
+              </div>
+              {form.map((l, i) => (
+                <div key={i} className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  <select value={l.account_id} onChange={e => setForm(form.map((x, j) => j === i ? { ...x, account_id: e.target.value } : x))} className={`${input} col-span-2`}>
+                    <option value="">Cuenta…</option>
+                    {postable.map(a => <option key={a.id} value={a.id}>{a.code} · {a.name}</option>)}
+                  </select>
+                  <input inputMode="decimal" value={l.debit} placeholder="Débito" onChange={e => setForm(form.map((x, j) => j === i ? { ...x, debit: e.target.value, credit: e.target.value ? '' : x.credit } : x))} className={`${input} col-span-1`} />
+                  <input inputMode="decimal" value={l.credit} placeholder="Crédito" onChange={e => setForm(form.map((x, j) => j === i ? { ...x, credit: e.target.value, debit: e.target.value ? '' : x.debit } : x))} className={`${input} col-span-1`} />
+                </div>
+              ))}
+              <button onClick={() => setForm([...form, emptyLine()])} className="text-xs text-slate-600 underline">+ Agregar línea</button>
+              <div className={`flex justify-between text-sm px-3 py-2 rounded-lg tabular-nums ${balanced ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-800'}`}>
+                <span>Débitos {money(totalD)} · Créditos {money(totalC)}</span>
+                <span>{balanced ? 'Partida doble cuadrada' : `Diferencia ${money(Math.abs(totalD - totalC))}`}</span>
+              </div>
+              <div className="flex gap-2">
+                <button onClick={() => saveEntry(false)} disabled={!desc || validLines.length < 1} className="px-4 py-2 rounded-lg text-sm text-slate-700 border border-slate-200 disabled:opacity-40 whitespace-nowrap shrink-0">Guardar borrador</button>
+                <button onClick={() => saveEntry(true)} disabled={!balanced || !desc} className="flex-1 bg-slate-800 text-white py-2 rounded-lg text-sm font-medium disabled:opacity-40">Contabilizar asiento</button>
+              </div>
             </div>
           )}
           {loaded && filteredEntries.length === 0 && <p className="text-sm text-slate-400 text-center py-6">No hay asientos para este filtro.</p>}

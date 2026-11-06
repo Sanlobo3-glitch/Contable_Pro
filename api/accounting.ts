@@ -1,482 +1,333 @@
 import type { Request, Response } from 'express'
-import { createClient } from '@supabase/supabase-js'
+import { SEED_PUC_ACCOUNTS, buildAccountTree, type AccountNode } from '../src/lib/accountingTree'
 
-/**
- * Módulo de Controladores y Rutas para el Núcleo Contable
- * Compatible con Bun, Node.js / Express y Vercel Serverless.
- */
-
-export interface AccountingApiReq {
-  method?: string
-  url?: string
-  path?: string
-  headers: Record<string, string | string[] | undefined>
-  query?: Record<string, string | string[] | undefined>
-  body?: unknown
-  params?: Record<string, string | undefined>
+export interface CreateJournalEntryPayload {
+  entry_number?: string
+  entry_date?: string
+  concept: string
+  status?: 'borrador' | 'posteado' | 'cerrado'
+  source_module?: string
+  created_by?: string
+  created_by_name?: string
+  lines: Array<{
+    account_code: string
+    account_name?: string
+    debit: number
+    credit: number
+    memo?: string
+  }>
 }
 
-export interface AccountingApiRes {
-  status(code: number): AccountingApiRes
-  json(body: unknown): void
-  setHeader(name: string, value: string): void
+interface InFlightEntry {
+  id: string
+  entry_number: string
+  entry_date: string
+  concept: string
+  status: 'borrador' | 'posteado' | 'cerrado' | 'anulado'
+  source_module: string
+  created_by_name?: string
+  created_at: string
+  lines: Array<{
+    id: string
+    account_code: string
+    account_name: string
+    debit: number
+    credit: number
+    memo?: string
+  }>
 }
 
-function getBearerToken(headers: Record<string, string | string[] | undefined>): string | null {
-  const raw = headers.authorization || headers.Authorization
-  const val = Array.isArray(raw) ? raw[0] : raw
-  if (!val) return null
-  const m = val.match(/^Bearer\s+(.+)$/i)
-  return m ? m[1].trim() : null
-}
+// Memoria de respaldo en servidor
+const serverEntries: InFlightEntry[] = [
+  {
+    id: 'entry-seed-01',
+    entry_number: 'AS-2026-001',
+    entry_date: new Date().toISOString().split('T')[0],
+    concept: 'Apertura contable y constitución de capital inicial',
+    status: 'posteado',
+    source_module: 'apertura',
+    created_by_name: 'Contador General',
+    created_at: new Date().toISOString(),
+    lines: [
+      { id: 'line-1', account_code: '110505', account_name: 'Caja General', debit: 5000000, credit: 0, memo: 'Aporte en efectivo' },
+      { id: 'line-2', account_code: '111005', account_name: 'Moneda Nacional', debit: 15000000, credit: 0, memo: 'Depósito inicial bancos' },
+      { id: 'line-3', account_code: '310505', account_name: 'Capital Autorizado', debit: 0, credit: 20000000, memo: 'Capital suscrito de socios' },
+    ],
+  },
+  {
+    id: 'entry-seed-02',
+    entry_number: 'AS-2026-002',
+    entry_date: new Date().toISOString().split('T')[0],
+    concept: 'Venta de mercancía a crédito con IVA generado',
+    status: 'posteado',
+    source_module: 'ventas',
+    created_by_name: 'Valentina Morales',
+    created_at: new Date().toISOString(),
+    lines: [
+      { id: 'line-4', account_code: '130505', account_name: 'Clientes Nacionales', debit: 2380000, credit: 0, memo: 'Factura cliente mayorista' },
+      { id: 'line-5', account_code: '413505', account_name: 'Venta de Mercancías', debit: 0, credit: 2000000, memo: 'Ingreso operacional' },
+      { id: 'line-6', account_code: '240805', account_name: 'IVA Generado (Ventas)', debit: 0, credit: 380000, memo: 'IVA 19% generado' },
+    ],
+  },
+]
 
-function getQueryParam(query: Record<string, unknown> | undefined, key: string, fallback = ''): string {
-  if (!query) return fallback
-  const val = query[key]
-  if (Array.isArray(val)) return String(val[0] || fallback)
-  return typeof val === 'string' ? val : fallback
-}
-
-export function createAccountingHandler(deps?: {
-  fetchFn?: typeof fetch
-  env?: Record<string, string | undefined>
-}) {
-  const fetchFn = deps?.fetchFn || globalThis.fetch.bind(globalThis)
-  const getEnv = () => deps?.env || process.env
-
-  return async function handleAccountingRequest(
-    req: AccountingApiReq | Request,
-    res: AccountingApiRes | Response
-  ): Promise<void> {
-    const env = getEnv()
-    const supabaseUrl = (env.SUPABASE_URL || env.VITE_SUPABASE_URL || '')
-      .trim()
-      .replace(/\/+(rest|auth|storage|functions|realtime)\/v1\/?$/i, '')
-      .replace(/\/+$/, '')
-    const supabaseAnonKey = (env.SUPABASE_ANON_KEY || env.VITE_SUPABASE_ANON_KEY || '').trim()
-    const serviceRoleKey = (env.SUPABASE_SERVICE_ROLE_KEY || '').trim()
-
-    // 1. Extraer ruta relativa normalizada
-    const fullUrl = req.url || (req as Request).originalUrl || ''
-    const urlObj = new URL(fullUrl, 'http://localhost:3000')
-    const pathname = urlObj.pathname.replace(/\/+$/, '')
-    const method = (req.method || 'GET').toUpperCase()
-
-    // Encabezados CORS
-    res.setHeader('Content-Type', 'application/json')
-    res.setHeader('Access-Control-Allow-Origin', '*')
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
-
-    if (method === 'OPTIONS') {
-      res.status(200).json({ ok: true })
-      return
-    }
-
-    // 2. Extraer y verificar Token JWT del usuario
-    const token = getBearerToken(req.headers)
-    const isMockMode = !supabaseUrl || !supabaseAnonKey
-
-    let authUser: { id: string; email?: string; company_id?: string } | null = null
-
-    if (!isMockMode && token) {
-      try {
-        const authResp = await fetchFn(`${supabaseUrl}/auth/v1/user`, {
-          method: 'GET',
-          headers: {
-            apikey: supabaseAnonKey,
-            Authorization: `Bearer ${token}`,
-          },
-        })
-        if (authResp.ok) {
-          const userJson = (await authResp.json()) as { id: string; email?: string }
-          authUser = { id: userJson.id, email: userJson.email }
-        }
-      } catch {
-        /* ignore network errors to allow mock/fallback handling */
-      }
-    } else if (isMockMode) {
-      authUser = { id: 'demo-user-contador', email: 'contabilidad@losandesdemo.com' }
-    }
-
-    // Cliente Supabase autenticado
-    const supabase = !isMockMode
-      ? createClient(supabaseUrl, token ? supabaseAnonKey : (serviceRoleKey || supabaseAnonKey), {
-          global: {
-            headers: token ? { Authorization: `Bearer ${token}` } : {},
-          },
-          auth: { persistSession: false },
-        })
-      : null
-
-    const reqBody = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, any>
-    const query = (req as any).query || Object.fromEntries(urlObj.searchParams.entries())
+export function createAccountingHandler() {
+  return async function handleAccounting(req: Request, res: Response) {
+    const { path, method } = req
 
     try {
-      // ----------------------------------------------------------------------
-      // RUTA 1: POST /api/accounting/entries (Crear Asiento Contable Atómico)
-      // ----------------------------------------------------------------------
-      if (method === 'POST' && pathname === '/api/accounting/entries') {
-        const { company_id, entry_date, concept, status = 'borrador', lines = [], source_module = 'manual', source_id = null } = reqBody
+      // 1. GET /api/accounting/accounts -> Catálogo plano y árbol jerárquico
+      if (method === 'GET' && (path === '/accounts' || path === '/api/accounting/accounts')) {
+        const tree = buildAccountTree(SEED_PUC_ACCOUNTS)
+        return res.json({
+          ok: true,
+          total: SEED_PUC_ACCOUNTS.length,
+          flat: SEED_PUC_ACCOUNTS,
+          tree,
+        })
+      }
 
-        if (!company_id) {
-          res.status(400).json({ ok: false, error: 'El campo company_id es obligatorio.' })
-          return
-        }
+      // 2. GET /api/accounting/entries -> Listado de Asientos Contables
+      if (method === 'GET' && (path === '/entries' || path === '/api/accounting/entries')) {
+        return res.json({
+          ok: true,
+          count: serverEntries.length,
+          entries: serverEntries,
+        })
+      }
 
-        if (!entry_date) {
-          res.status(400).json({ ok: false, error: 'La fecha del asiento (entry_date) es obligatoria.' })
-          return
-        }
+      // 3. POST /api/accounting/entries -> Crear y registrar Asiento Contable (Valida Partida Doble)
+      if (method === 'POST' && (path === '/entries' || path === '/api/accounting/entries')) {
+        const payload: CreateJournalEntryPayload = req.body
 
-        if (!concept || !String(concept).trim()) {
-          res.status(400).json({ ok: false, error: 'El concepto del asiento no puede estar vacío.' })
-          return
-        }
-
-        if (!Array.isArray(lines) || lines.length < 2) {
-          res.status(400).json({ ok: false, error: 'Un asiento contable requiere al menos 2 líneas de movimiento.' })
-          return
-        }
-
-        // Validación en servidor de partida doble si se solicita 'posteado'
-        let sumDebit = 0
-        let sumCredit = 0
-        for (const line of lines) {
-          const d = Number(line.debit) || 0
-          const c = Number(line.credit) || 0
-          if (d < 0 || c < 0) {
-            res.status(400).json({ ok: false, error: 'Los importes de débito y crédito deben ser positivos o cero.' })
-            return
-          }
-          if (d > 0 && c > 0) {
-            res.status(400).json({ ok: false, error: 'Una línea no puede contener débito y crédito simultáneamente.' })
-            return
-          }
-          sumDebit += d
-          sumCredit += c
-        }
-
-        sumDebit = Math.round(sumDebit * 10000) / 10000
-        sumCredit = Math.round(sumCredit * 10000) / 10000
-
-        if (status === 'posteado' && Math.abs(sumDebit - sumCredit) > 0.0001) {
-          res.status(400).json({
+        if (!payload || !payload.concept || !Array.isArray(payload.lines) || payload.lines.length < 2) {
+          return res.status(400).json({
             ok: false,
-            error: `Error de Partida Doble: Los débitos (${sumDebit.toFixed(2)}) y créditos (${sumCredit.toFixed(2)}) no cuadran. Descuadre: ${(sumDebit - sumCredit).toFixed(2)}.`,
+            error: 'Un asiento contable requiere concepto válido y al menos 2 líneas contables.',
           })
-          return
         }
 
-        if (supabase) {
-          const { data, error } = await supabase.rpc('fn_create_journal_entry_atomic', {
-            p_company_id: company_id,
-            p_entry_date: entry_date,
-            p_concept: String(concept).trim(),
-            p_status: status,
-            p_lines: lines,
-            p_source_module: source_module,
-            p_source_id: source_id,
-          })
+        let totalDebit = 0
+        let totalCredit = 0
 
-          if (error) {
-            const isMissingFunction =
-              error.message?.includes('Could not find the function') ||
-              error.message?.includes('schema cache')
-            if (!isMissingFunction) {
-              res.status(400).json({ ok: false, error: error.message })
-              return
+        const processedLines = payload.lines.map((line, idx) => {
+          const debit = Number(line.debit) || 0
+          const credit = Number(line.credit) || 0
+          totalDebit += debit
+          totalCredit += credit
+
+          const matchedAccount = SEED_PUC_ACCOUNTS.find((a) => a.code === line.account_code)
+          return {
+            id: `line-${Date.now()}-${idx}`,
+            account_code: line.account_code,
+            account_name: line.account_name || matchedAccount?.name || 'Cuenta Contable',
+            debit,
+            credit,
+            memo: line.memo || payload.concept,
+          }
+        })
+
+        const diff = Math.round((totalDebit - totalCredit) * 100) / 100
+
+        // Si se va a postear directamente, exigir partida doble absoluta
+        const status = payload.status || 'borrador'
+        if (status === 'posteado' && diff !== 0) {
+          return res.status(422).json({
+            ok: false,
+            error: `Error de Partida Doble: El asiento contable está descuadrado por ${diff}. Total Débitos: ${totalDebit}, Total Créditos: ${totalCredit}. No se puede postear sin balancear.`,
+            totalDebit,
+            totalCredit,
+            diff,
+          })
+        }
+
+        const newEntryNumber =
+          payload.entry_number ||
+          `AS-${new Date().getFullYear()}-${String(serverEntries.length + 1).padStart(3, '0')}`
+
+        const newEntry: InFlightEntry = {
+          id: `entry-${Date.now()}`,
+          entry_number: newEntryNumber,
+          entry_date: payload.entry_date || new Date().toISOString().split('T')[0],
+          concept: payload.concept,
+          status,
+          source_module: payload.source_module || 'manual',
+          created_by_name: payload.created_by_name || 'Usuario Contable',
+          created_at: new Date().toISOString(),
+          lines: processedLines,
+        }
+
+        serverEntries.unshift(newEntry)
+
+        return res.status(201).json({
+          ok: true,
+          message:
+            status === 'posteado'
+              ? 'Asiento contable posteado con éxito bajo estricta partida doble (Inmutable).'
+              : 'Asiento contable guardado en borrador.',
+          entry: newEntry,
+          totalDebit,
+          totalCredit,
+          balanced: diff === 0,
+        })
+      }
+
+      // 4. GET /api/accounting/reports/trial-balance -> Balance de Comprobación
+      if (
+        method === 'GET' &&
+        (path === '/reports/trial-balance' || path === '/api/accounting/reports/trial-balance')
+      ) {
+        const accountTotals = new Map<string, { debit: number; credit: number }>()
+
+        // Acumular de asientos posteados
+        for (const entry of serverEntries) {
+          if (entry.status === 'posteado' || entry.status === 'cerrado') {
+            for (const l of entry.lines) {
+              const current = accountTotals.get(l.account_code) || { debit: 0, credit: 0 }
+              current.debit += l.debit
+              current.credit += l.credit
+              accountTotals.set(l.account_code, current)
             }
-          } else {
-            res.status(201).json({ ok: true, data })
-            return
           }
         }
 
-        // Simulación Mock si Supabase no está conectado
-        const mockNumber = `ASI-${Math.floor(1000 + Math.random() * 9000)}`
-        res.status(201).json({
-          ok: true,
-          data: {
-            ok: true,
-            entry_id: `mock-entry-${Date.now()}`,
-            entry_number: mockNumber,
-            status,
-            total_debit: sumDebit,
-            total_credit: sumCredit,
-            lines_count: lines.length,
-          },
+        let totalDebitSum = 0
+        let totalCreditSum = 0
+
+        const rows = SEED_PUC_ACCOUNTS.filter((acc) => accountTotals.has(acc.code)).map((acc) => {
+          const totals = accountTotals.get(acc.code) || { debit: 0, credit: 0 }
+          totalDebitSum += totals.debit
+          totalCreditSum += totals.credit
+
+          const balance =
+            acc.nature === 'Débito'
+              ? totals.debit - totals.credit
+              : totals.credit - totals.debit
+
+          return {
+            code: acc.code,
+            name: acc.name,
+            type: acc.type,
+            nature: acc.nature,
+            level: acc.level,
+            debit: totals.debit,
+            credit: totals.credit,
+            balance,
+          }
         })
-        return
+
+        return res.json({
+          ok: true,
+          report: 'Balance de Comprobación de Sumas y Saldos (NIIF)',
+          asOf: new Date().toISOString(),
+          totalDebitSum,
+          totalCreditSum,
+          balanced: Math.round(totalDebitSum * 100) === Math.round(totalCreditSum * 100),
+          rows,
+        })
       }
 
-      // ----------------------------------------------------------------------
-      // RUTA 2: POST /api/accounting/entries/:id/post (Postear Asiento en Borrador)
-      // ----------------------------------------------------------------------
-      const postMatch = pathname.match(/^\/api\/accounting\/entries\/([^/]+)\/post$/)
-      if (method === 'POST' && postMatch) {
-        const entryId = postMatch[1]
+      // 5. GET /api/accounting/reports/balance-sheet -> Balance General
+      if (
+        method === 'GET' &&
+        (path === '/reports/balance-sheet' || path === '/api/accounting/reports/balance-sheet')
+      ) {
+        let totalActivo = 0
+        let totalPasivo = 0
+        let totalPatrimonio = 0
 
-        if (supabase) {
-          const { data, error } = await supabase.rpc('fn_post_journal_entry', { p_entry_id: entryId })
-          if (error) {
-            res.status(400).json({ ok: false, error: error.message })
-            return
-          }
-          res.status(200).json({ ok: true, data })
-          return
-        }
+        const activosRows: any[] = []
+        const pasivosRows: any[] = []
+        const patrimonioRows: any[] = []
 
-        res.status(200).json({
-          ok: true,
-          data: { ok: true, entry_id: entryId, status: 'posteado', posted_at: new Date().toISOString() },
-        })
-        return
-      }
+        for (const entry of serverEntries) {
+          if (entry.status === 'posteado' || entry.status === 'cerrado') {
+            for (const l of entry.lines) {
+              const acc = SEED_PUC_ACCOUNTS.find((a) => a.code === l.account_code)
+              if (!acc) continue
 
-      // ----------------------------------------------------------------------
-      // RUTA 3: POST /api/accounting/entries/:id/reverse (Contraasiento de Anulación)
-      // ----------------------------------------------------------------------
-      const reverseMatch = pathname.match(/^\/api\/accounting\/entries\/([^/]+)\/reverse$/)
-      if (method === 'POST' && reverseMatch) {
-        const entryId = reverseMatch[1]
-        const reverseConcept = reqBody.concept ? String(reqBody.concept).trim() : null
+              const net = acc.nature === 'Débito' ? l.debit - l.credit : l.credit - l.debit
 
-        if (supabase) {
-          const { data, error } = await supabase.rpc('fn_reverse_journal_entry', {
-            p_entry_id: entryId,
-            p_reverse_concept: reverseConcept,
-          })
-          if (error) {
-            res.status(400).json({ ok: false, error: error.message })
-            return
-          }
-          res.status(200).json({ ok: true, data })
-          return
-        }
-
-        res.status(200).json({
-          ok: true,
-          data: {
-            ok: true,
-            original_entry_id: entryId,
-            reversal_entry_id: `rev-${Date.now()}`,
-            reversal_entry_number: `ASI-REV-${Math.floor(1000 + Math.random() * 9000)}`,
-            status: 'anulado',
-          },
-        })
-        return
-      }
-
-      // ----------------------------------------------------------------------
-      // RUTA 4: GET /api/accounting/reports/trial-balance (Balance de Comprobación)
-      // ----------------------------------------------------------------------
-      if (method === 'GET' && pathname === '/api/accounting/reports/trial-balance') {
-        const companyId = getQueryParam(query, 'company_id')
-        const startDate = getQueryParam(query, 'start_date', `${new Date().getFullYear()}-01-01`)
-        const endDate = getQueryParam(query, 'end_date', new Date().toISOString().slice(0, 10))
-
-        if (!companyId) {
-          res.status(400).json({ ok: false, error: 'Parámetro company_id requerido.' })
-          return
-        }
-
-        if (supabase) {
-          const { data, error } = await supabase.rpc('fn_trial_balance', {
-            p_company_id: companyId,
-            p_start_date: startDate,
-            p_end_date: endDate,
-          })
-          if (!error && data) {
-            res.status(200).json({ ok: true, data })
-            return
-          }
-        }
-
-        // Mock response
-        res.status(200).json({
-          ok: true,
-          data: {
-            company_id: companyId,
-            start_date: startDate,
-            end_date: endDate,
-            total_period_debit: 2500.0,
-            total_period_credit: 2500.0,
-            difference: 0,
-            is_balanced: true,
-            accounts: [],
-          },
-        })
-        return
-      }
-
-      // ----------------------------------------------------------------------
-      // RUTA 5: GET /api/accounting/reports/balance-sheet (Balance General)
-      // ----------------------------------------------------------------------
-      if (method === 'GET' && pathname === '/api/accounting/reports/balance-sheet') {
-        const companyId = getQueryParam(query, 'company_id')
-        const asOfDate = getQueryParam(query, 'as_of_date', new Date().toISOString().slice(0, 10))
-
-        if (!companyId) {
-          res.status(400).json({ ok: false, error: 'Parámetro company_id requerido.' })
-          return
-        }
-
-        if (supabase) {
-          const { data, error } = await supabase.rpc('fn_balance_sheet', {
-            p_company_id: companyId,
-            p_as_of_date: asOfDate,
-          })
-          if (!error && data) {
-            res.status(200).json({ ok: true, data })
-            return
-          }
-        }
-
-        // Mock response
-        res.status(200).json({
-          ok: true,
-          data: {
-            company_id: companyId,
-            as_of_date: asOfDate,
-            assets: { accounts: [], total: 5000 },
-            liabilities: { accounts: [], total: 2000 },
-            equity: { accounts: [], base_total: 2500, net_income_current_period: 500, total_equity_with_income: 3000 },
-            liabilities_and_equity_total: 5000,
-            difference: 0,
-            is_balanced: true,
-          },
-        })
-        return
-      }
-
-      // ----------------------------------------------------------------------
-      // RUTA 6: GET /api/accounting/reports/income-statement (Estado de Resultados)
-      // ----------------------------------------------------------------------
-      if (method === 'GET' && pathname === '/api/accounting/reports/income-statement') {
-        const companyId = getQueryParam(query, 'company_id')
-        const startDate = getQueryParam(query, 'start_date', `${new Date().getFullYear()}-01-01`)
-        const endDate = getQueryParam(query, 'end_date', new Date().toISOString().slice(0, 10))
-
-        if (!companyId) {
-          res.status(400).json({ ok: false, error: 'Parámetro company_id requerido.' })
-          return
-        }
-
-        if (supabase) {
-          const { data, error } = await supabase.rpc('fn_income_statement', {
-            p_company_id: companyId,
-            p_start_date: startDate,
-            p_end_date: endDate,
-          })
-          if (!error && data) {
-            res.status(200).json({ ok: true, data })
-            return
-          }
-        }
-
-        // Mock response
-        res.status(200).json({
-          ok: true,
-          data: {
-            company_id: companyId,
-            start_date: startDate,
-            end_date: endDate,
-            revenues: { items: [], total: 10000 },
-            costs: { items: [], total: 6000 },
-            gross_profit: 4000,
-            expenses: { items: [], total: 2500 },
-            operating_profit: 1500,
-            net_income: 1500,
-          },
-        })
-        return
-      }
-
-      // ----------------------------------------------------------------------
-      // RUTA 7: GET /api/accounting/accounts (Plan de Cuentas Jerárquico)
-      // ----------------------------------------------------------------------
-      if (method === 'GET' && pathname === '/api/accounting/accounts') {
-        const companyId = getQueryParam(query, 'company_id')
-        const onlyPostable = getQueryParam(query, 'postable') === 'true'
-
-        if (!companyId) {
-          res.status(400).json({ ok: false, error: 'Parámetro company_id requerido.' })
-          return
-        }
-
-        if (supabase) {
-          let q = supabase
-            .from('accounts')
-            .select('id, company_id, code, name, parent_id, account_type, nature, level, is_postable, active')
-            .eq('company_id', companyId)
-            .eq('active', true)
-            .order('code', { ascending: true })
-
-          if (onlyPostable) {
-            q = q.eq('is_postable', true)
-          }
-
-          const { data, error } = await q
-          if (error) {
-            // Fallback a acc_accounts legado si accounts no ha corrido en vivo aún
-            const legacyRes = await supabase
-              .from('acc_accounts')
-              .select('id, code, name, type, nature, is_postable, active')
-              .order('code', { ascending: true })
-
-            if (!legacyRes.error && Array.isArray(legacyRes.data)) {
-              const mapped = legacyRes.data.map(a => ({
-                id: a.id,
-                company_id: companyId,
-                code: a.code,
-                name: a.name,
-                parent_id: null,
-                account_type: a.type,
-                nature: a.nature,
-                level: 4,
-                is_postable: a.is_postable !== false,
-                active: a.active !== false,
-              }))
-              if (mapped.length > 0) {
-                res.status(200).json({ ok: true, data: onlyPostable ? mapped.filter(x => x.is_postable) : mapped })
-                return
+              if (acc.type === 'Activo') {
+                totalActivo += net
+                activosRows.push({ code: acc.code, name: acc.name, amount: net })
+              } else if (acc.type === 'Pasivo') {
+                totalPasivo += net
+                pasivosRows.push({ code: acc.code, name: acc.name, amount: net })
+              } else if (acc.type === 'Patrimonio') {
+                totalPatrimonio += net
+                patrimonioRows.push({ code: acc.code, name: acc.name, amount: net })
               }
             }
-            // Si la base remota no tiene aún accounts ni acc_accounts, continúa hacia las cuentas semilla
-          } else if (Array.isArray(data) && data.length > 0) {
-            res.status(200).json({ ok: true, data })
-            return
           }
         }
 
-        // Mock accounts
-        res.status(200).json({
+        const pasivoMasPatrimonio = totalPasivo + totalPatrimonio
+        const ecuacionContableCuadrada =
+          Math.abs(Math.round((totalActivo - pasivoMasPatrimonio) * 100)) === 0
+
+        return res.json({
           ok: true,
-          data: [
-            { id: 'acc-1', code: '1101', name: 'Caja General', account_type: 'activo', nature: 'debito', level: 4, is_postable: true, active: true },
-            { id: 'acc-2', code: '1102', name: 'Bancos Moneda Nacional', account_type: 'activo', nature: 'debito', level: 4, is_postable: true, active: true },
-            { id: 'acc-3', code: '1103', name: 'Cuentas por Cobrar Clientes', account_type: 'activo', nature: 'debito', level: 4, is_postable: true, active: true },
-            { id: 'acc-4', code: '1104', name: 'Inventario de Mercancías', account_type: 'activo', nature: 'debito', level: 4, is_postable: true, active: true },
-            { id: 'acc-5', code: '2101', name: 'Cuentas por Pagar Proveedores', account_type: 'pasivo', nature: 'credito', level: 4, is_postable: true, active: true },
-            { id: 'acc-6', code: '3101', name: 'Capital Social y Aportes', account_type: 'patrimonio', nature: 'credito', level: 4, is_postable: true, active: true },
-            { id: 'acc-7', code: '4101', name: 'Ingresos por Ventas de Mercancía', account_type: 'ingreso', nature: 'credito', level: 4, is_postable: true, active: true },
-            { id: 'acc-8', code: '5101', name: 'Costo de Mercancía Vendida', account_type: 'costo', nature: 'debito', level: 4, is_postable: true, active: true },
-            { id: 'acc-9', code: '6101', name: 'Gastos Operativos y Servicios', account_type: 'gasto', nature: 'debito', level: 4, is_postable: true, active: true },
-          ],
+          report: 'Balance General Clasificado (NIIF)',
+          asOf: new Date().toISOString(),
+          totalActivo,
+          totalPasivo,
+          totalPatrimonio,
+          pasivoMasPatrimonio,
+          ecuacionContableCuadrada,
+          details: {
+            activos: activosRows,
+            pasivos: pasivosRows,
+            patrimonio: patrimonioRows,
+          },
         })
-        return
       }
 
-      // Ruta no encontrada en el módulo contable
-      res.status(404).json({ ok: false, error: `Ruta contable no encontrada: ${method} ${pathname}` })
-    } catch (err) {
-      res.status(500).json({
-        ok: false,
-        error: err instanceof Error ? err.message : 'Error interno en el servidor contable.',
-      })
+      // 6. GET /api/accounting/reports/income-statement -> Estado de Resultados
+      if (
+        method === 'GET' &&
+        (path === '/reports/income-statement' || path === '/api/accounting/reports/income-statement')
+      ) {
+        let totalIngresos = 0
+        let totalCostos = 0
+        let totalGastos = 0
+
+        for (const entry of serverEntries) {
+          if (entry.status === 'posteado' || entry.status === 'cerrado') {
+            for (const l of entry.lines) {
+              const acc = SEED_PUC_ACCOUNTS.find((a) => a.code === l.account_code)
+              if (!acc) continue
+
+              if (acc.type === 'Ingreso') {
+                totalIngresos += l.credit - l.debit
+              } else if (acc.type === 'Costo') {
+                totalCostos += l.debit - l.credit
+              } else if (acc.type === 'Gasto') {
+                totalGastos += l.debit - l.credit
+              }
+            }
+          }
+        }
+
+        const utilidadBruta = totalIngresos - totalCostos
+        const utilidadNeta = utilidadBruta - totalGastos
+
+        return res.json({
+          ok: true,
+          report: 'Estado de Resultados Integral (P&G NIIF)',
+          asOf: new Date().toISOString(),
+          totalIngresos,
+          totalCostos,
+          utilidadBruta,
+          totalGastos,
+          utilidadNeta,
+        })
+      }
+
+      return res.status(404).json({ ok: false, error: `Ruta contable ${path} no encontrada` })
+    } catch (err: any) {
+      console.error('Error en controlador contable:', err)
+      return res.status(500).json({ ok: false, error: err?.message || 'Error interno del servidor contable' })
     }
   }
 }
-
-export default createAccountingHandler()

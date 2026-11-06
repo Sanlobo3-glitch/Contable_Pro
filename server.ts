@@ -37,6 +37,8 @@ async function startServer() {
     env: process.env,
   })
 
+  const accountingHandler = createAccountingHandler()
+
   app.all('/api/copilot', async (req, res) => {
     await copilotHandler(req as any, res as any)
   })
@@ -47,6 +49,10 @@ async function startServer() {
 
   app.all('/api/document-scanner', async (req, res) => {
     await documentScannerHandler(req, res)
+  })
+
+  app.all(['/api/accounting', '/api/accounting/*'], async (req, res) => {
+    await accountingHandler(req, res)
   })
 
   // ==========================================================================
@@ -162,7 +168,7 @@ async function startServer() {
     ? await (
         await import('vite')
       ).createServer({
-        server: { middlewareMode: true, hmr: false, ws: false, allowedHosts: true },
+        server: { middlewareMode: true, hmr: false, allowedHosts: true },
         appType: 'spa',
       })
     : null
@@ -181,15 +187,6 @@ async function startServer() {
       }
       return await fs.readFile(prodIndexPath, 'utf8')
     },
-  })
-
-  const accountingHandler = createAccountingHandler({
-    fetchFn: globalThis.fetch.bind(globalThis),
-    env: process.env,
-  })
-
-  app.all('/api/accounting*', async (req, res) => {
-    await accountingHandler(req as any, res as any)
   })
 
   app.all('/api/store-preview', async (req, res) => {

@@ -11,23 +11,11 @@ import sqlCatalogCommerce from '../../supabase/migrations/20261103000018_ventas_
 import sqlWhatsappStoreLink from '../../supabase/migrations/20261103000019_enlace_tienda_og_y_estudio_whatsapp.sql?raw'
 import sqlAutoBrandSync from '../../supabase/migrations/20261103000020_sincronizacion_automatica_marca_y_cache_whatsapp.sql?raw'
 import sqlCommercialSuite21 from '../../supabase/migrations/20261104000021_cinco_soluciones_comerciales_avanzadas.sql?raw'
-import sqlGlobalAdminCommercial from '../../supabase/migrations/20261105000045_admin_global_comercial_y_equipo_plataforma.sql?raw'
-import sqlAccountingDoubleEntry from '../../supabase/migrations/20261106000046_sistema_contable_partida_doble.sql?raw'
-import sqlAccountingReports from '../../supabase/migrations/20261106000047_reportes_financieros_contables.sql?raw'
-
-function sanitizeForPlpgsqlExecute(rawSql: string): string {
-  return rawSql.replace(/^\s*(BEGIN|COMMIT)\s*;\s*$/gim, '').trim()
-}
-
-const cleanGlobalAdminCommercialSql = sanitizeForPlpgsqlExecute(sqlGlobalAdminCommercial)
-const cleanAccountingDoubleEntrySql = sanitizeForPlpgsqlExecute(sqlAccountingDoubleEntry)
-const cleanAccountingReportsSql = sanitizeForPlpgsqlExecute(sqlAccountingReports)
+import sqlContablePro from '../../supabase/migrations/20261106000022_contable_pro_partida_doble_puc_niif.sql?raw'
 
 export type SqlBundleId =
+  | 'contable_pro'
   | 'consolidated'
-  | 'accounting_reports'
-  | 'accounting_double_entry'
-  | 'global_admin_commercial'
   | 'commercial_suite_21'
   | 'whatsapp_store_link'
   | 'catalog_commerce'
@@ -52,12 +40,22 @@ export interface SqlScriptBundle {
 
 export const SQL_SCRIPT_BUNDLES: SqlScriptBundle[] = [
   {
+    id: 'contable_pro',
+    title: 'Contable_Pro: Partida Doble, Inmutabilidad y Catálogo PUC NIIF',
+    filename: '20261106000022_contable_pro_partida_doble_puc_niif.sql',
+    category: 'Recomendado',
+    summary:
+      'Crea las tablas accounts, journal_entries y journal_lines, instala el trigger trg_verify_journal_entry_posting que valida la partida doble estricta al asentar (POSTED), instala el trigger de inmutabilidad y siembra el PUC Colombiano NIIF.',
+    targetTables: ['accounts', 'journal_entries', 'journal_lines'],
+    sql: sqlContablePro,
+  },
+  {
     id: 'consolidated',
     title: 'Paquete Consolidado Maestro (Todo en 1 · Recomendado)',
     filename: 'inventariopro_consolidado_maestro_completo.sql',
     category: 'Recomendado',
     summary:
-      'Activa en una sola ejecución Toma Física Ciega, Plan Separe, Cambios Mano a Mano y Garantías, Conciliación Bancaria, Escudo de Precios, Enlace Propio de Tienda (/tienda/empresa), Ventas por Catálogo con Captures de Pago, Motor SQL en 1 clic, Rol Técnico, Despacho Contable (CPC) y Administración Global Comercial y Equipo de Plataforma.',
+      'Activa en una sola ejecución Toma Física Ciega, Plan Separe, Cambios Mano a Mano y Garantías, Conciliación Bancaria, Escudo de Precios, Enlace Propio de Tienda (/tienda/empresa), Ventas por Catálogo con Captures de Pago, Motor SQL en 1 clic, Rol Técnico y Despacho Contable (CPC).',
     targetTables: [
       'blind_inventory_sessions',
       'layaway_contracts',
@@ -66,8 +64,6 @@ export const SQL_SCRIPT_BUNDLES: SqlScriptBundle[] = [
       'catalog_orders',
       'support_tickets',
       'cpa_working_papers',
-      'platform_staff',
-      'platform_admin_audit',
       'sql_migration_log',
       'product_images',
       'financial_budgets',
@@ -76,7 +72,7 @@ export const SQL_SCRIPT_BUNDLES: SqlScriptBundle[] = [
     sql: [
       '-- ============================================================================',
       '-- INVENTARIOPRO · PAQUETE CONSOLIDADO MAESTRO PARA SUPABASE',
-      '-- Incluye Migraciones 000013 a 000045 (100% idempotente)',
+      '-- Incluye Migraciones 000013 a 000021 (100% idempotente)',
       '-- Al ejecutarlo una vez, habilita también la ejecución en 1 clic desde la web.',
       '-- ============================================================================',
       '',
@@ -97,43 +93,7 @@ export const SQL_SCRIPT_BUNDLES: SqlScriptBundle[] = [
       sqlCommercialSuite21,
       '',
       sqlAdminEngine,
-      '',
-      cleanGlobalAdminCommercialSql,
-      '',
-      cleanAccountingDoubleEntrySql,
-      '',
-      cleanAccountingReportsSql,
     ].join('\n'),
-  },
-  {
-    id: 'accounting_reports',
-    title: 'Reportes Financieros y Agregaciones Contables SQL (Migración 000047)',
-    filename: '20261106000047_reportes_financieros_contables.sql',
-    category: 'Recomendado',
-    summary:
-      'Habilita los motores analíticos de alta velocidad fn_trial_balance (Balance de Comprobación), fn_balance_sheet (Balance General clasificado), fn_income_statement (Estado de Resultados / PyG), fn_post_journal_entry y contraasientos automáticos de reversión inmutables fn_reverse_journal_entry.',
-    targetTables: ['accounts', 'journal_entries', 'journal_lines'],
-    sql: cleanAccountingReportsSql,
-  },
-  {
-    id: 'accounting_double_entry',
-    title: 'Sistema Contable Profesional y Partida Doble (Migración 000046)',
-    filename: '20261106000046_sistema_contable_partida_doble.sql',
-    category: 'Recomendado',
-    summary:
-      'Crea las tablas accounts, journal_entries y journal_lines con RLS multiempresa, triggers de inmutabilidad estricta para asientos posteados y cerrados, y trigger diferido de validación de partida doble (SUM(débitos) = SUM(créditos)).',
-    targetTables: ['accounts', 'journal_entries', 'journal_lines'],
-    sql: cleanAccountingDoubleEntrySql,
-  },
-  {
-    id: 'global_admin_commercial',
-    title: 'Administración Global Comercial y Equipo de Plataforma (Migración 000045)',
-    filename: '20261105000045_admin_global_comercial_y_equipo_plataforma.sql',
-    category: 'Recomendado',
-    summary:
-      'Crea las tablas platform_staff y platform_admin_audit con aislamiento estricto multiempresa y las funciones RPC globales para activar planes por empresa cliente, reactivar pruebas, suspender/reactivar suscripciones, gestionar equipo de plataforma y consultar auditoría central.',
-    targetTables: ['platform_staff', 'platform_admin_audit'],
-    sql: cleanGlobalAdminCommercialSql,
   },
   {
     id: 'commercial_suite_21',

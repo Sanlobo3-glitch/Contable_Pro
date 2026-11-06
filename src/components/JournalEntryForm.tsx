@@ -235,7 +235,7 @@ export default function JournalEntryForm({ onSuccess, onCancel }: JournalEntryFo
         entry_number: entryNumber,
         entry_date: entryDate,
         concept,
-        status,
+        status: status === 'posteado' ? 'POSTED' : 'DRAFT',
         source_module: sourceModule,
         lines: lines.map((l) => ({
           account_code: l.account_code,

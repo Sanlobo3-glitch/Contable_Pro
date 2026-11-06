@@ -23,7 +23,7 @@ interface InFlightEntry {
   entry_number: string
   entry_date: string
   concept: string
-  status: 'borrador' | 'posteado' | 'cerrado' | 'anulado'
+  status: 'borrador' | 'posteado' | 'cerrado' | 'anulado' | 'DRAFT' | 'POSTED' | 'CLOSED' | 'VOID'
   source_module: string
   created_by_name?: string
   created_at: string
@@ -130,11 +130,14 @@ export function createAccountingHandler() {
         const diff = Math.round((totalDebit - totalCredit) * 100) / 100
 
         // Si se va a postear directamente, exigir partida doble absoluta
-        const status = payload.status || 'borrador'
-        if (status === 'posteado' && diff !== 0) {
+        const rawStatus = String(payload.status || 'DRAFT').toUpperCase()
+        const isPosted = rawStatus === 'POSTED' || rawStatus === 'POSTEADO'
+        const status = isPosted ? 'POSTED' : 'DRAFT'
+
+        if (isPosted && diff !== 0) {
           return res.status(422).json({
             ok: false,
-            error: `Error de Partida Doble: El asiento contable está descuadrado por ${diff}. Total Débitos: ${totalDebit}, Total Créditos: ${totalCredit}. No se puede postear sin balancear.`,
+            error: `Error de Partida Doble: El asiento contable está descuadrado por ${diff}. Total Débitos: ${totalDebit}, Total Créditos: ${totalCredit}. No se puede asentar (POSTED) sin balancear.`,
             totalDebit,
             totalCredit,
             diff,
@@ -161,10 +164,9 @@ export function createAccountingHandler() {
 
         return res.status(201).json({
           ok: true,
-          message:
-            status === 'posteado'
-              ? 'Asiento contable posteado con éxito bajo estricta partida doble (Inmutable).'
-              : 'Asiento contable guardado en borrador.',
+          message: isPosted
+            ? 'Asiento contable asentado (POSTED) con éxito bajo estricta partida doble (Inmutable).'
+            : 'Asiento contable guardado en borrador (DRAFT).',
           entry: newEntry,
           totalDebit,
           totalCredit,

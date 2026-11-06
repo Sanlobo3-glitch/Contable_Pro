@@ -1,171 +1,112 @@
 -- ============================================================================
--- MIGRACIÓN CONTABLE_PRO: PARTIDA DOBLE, INMUTABILIDAD Y PUC NIIF
+-- MIGRACIÓN CONTABLE_PRO: FASE 1 - DISEÑO DE BASE DE DATOS E INMUTABILIDAD
+-- Script Oficial según Especificación de Partida Doble y Catálogo PUC NIIF
 -- ============================================================================
 
--- 1. Tabla accounts (Catálogo de cuentas jerárquico NIIF)
-CREATE TABLE IF NOT EXISTS public.accounts (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  company_id uuid NULL,
-  code text NOT NULL,
-  name text NOT NULL,
-  type text NOT NULL CHECK (type IN ('Activo', 'Pasivo', 'Patrimonio', 'Ingreso', 'Gasto', 'Costo')),
-  nature text NOT NULL CHECK (nature IN ('Débito', 'Crédito')),
-  level integer NOT NULL CHECK (level BETWEEN 1 AND 5),
-  is_active boolean NOT NULL DEFAULT true,
-  created_at timestamptz NOT NULL DEFAULT now(),
-  CONSTRAINT uq_accounts_company_code UNIQUE (company_id, code)
+-- 1. LIMPIEZA DE ENTORNO POR SEGURIDAD
+DROP TRIGGER IF EXISTS trg_verify_journal_entry_posting ON journal_entries;
+DROP TRIGGER IF EXISTS trg_enforce_journal_immutability ON journal_entries;
+DROP FUNCTION IF EXISTS verify_journal_entry_posting();
+DROP FUNCTION IF EXISTS enforce_journal_immutability();
+DROP TABLE IF EXISTS journal_lines;
+DROP TABLE IF EXISTS journal_entries;
+DROP TABLE IF EXISTS accounts;
+
+-- 2. CREACIÓN DE LA TABLA DE CUENTAS (CATÁLOGO / PUC)
+CREATE TABLE accounts (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    code VARCHAR(20) UNIQUE NOT NULL,
+    name VARCHAR(150) NOT NULL,
+    type VARCHAR(50) NOT NULL, -- Activo, Pasivo, Patrimonio, Ingreso, Gasto, Costo
+    nature VARCHAR(20) NOT NULL, -- Débito, Crédito
+    level INT NOT NULL, -- 1, 2, 3, 4
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- Si no hay company_id, garantizar unicidad por código global
-CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_global_code ON public.accounts (code) WHERE company_id IS NULL;
-
--- 2. Tabla journal_entries (Cabecera de Asientos Contables)
-CREATE TABLE IF NOT EXISTS public.journal_entries (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  company_id uuid NULL,
-  entry_number text NOT NULL,
-  entry_date date NOT NULL DEFAULT CURRENT_DATE,
-  concept text NOT NULL,
-  status text NOT NULL DEFAULT 'borrador' CHECK (status IN ('borrador', 'posteado', 'cerrado', 'anulado')),
-  source_module text NOT NULL DEFAULT 'manual',
-  source_id text NULL,
-  created_by text NULL,
-  created_by_name text NULL,
-  created_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz NOT NULL DEFAULT now()
+-- 3. CREACIÓN DE LA CABECERA DE ASIENTOS CONTABLES
+CREATE TABLE journal_entries (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    entry_date DATE NOT NULL DEFAULT CURRENT_DATE,
+    entry_number SERIAL UNIQUE, -- Numeración automática consecutiva
+    concept TEXT NOT NULL,
+    status VARCHAR(20) DEFAULT 'DRAFT', -- DRAFT (Borrador), POSTED (Aprobado/Asentado), CLOSED (Cerrado), VOID (Anulado)
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_journal_entries_date ON public.journal_entries (entry_date);
-CREATE INDEX IF NOT EXISTS idx_journal_entries_status ON public.journal_entries (status);
-
--- 3. Tabla journal_lines (Líneas / Apuntes Contables)
-CREATE TABLE IF NOT EXISTS public.journal_lines (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  entry_id uuid NOT NULL REFERENCES public.journal_entries(id) ON DELETE CASCADE,
-  account_id uuid NOT NULL REFERENCES public.accounts(id) ON DELETE RESTRICT,
-  debit numeric(18, 2) NOT NULL DEFAULT 0 CHECK (debit >= 0),
-  credit numeric(18, 2) NOT NULL DEFAULT 0 CHECK (credit >= 0),
-  memo text NULL,
-  created_at timestamptz NOT NULL DEFAULT now(),
-  CONSTRAINT chk_journal_lines_debit_or_credit CHECK (debit > 0 OR credit > 0)
+-- 4. CREACIÓN DEL DETALLE DE ASIENTOS CONTABLES (REQUERÍA EXISTIR PRIMERO)
+CREATE TABLE journal_lines (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    entry_id UUID REFERENCES journal_entries(id) ON DELETE CASCADE NOT NULL,
+    account_id UUID REFERENCES accounts(id) NOT NULL,
+    debit NUMERIC(15,2) DEFAULT 0.00 NOT NULL CHECK (debit >= 0),
+    credit NUMERIC(15,2) DEFAULT 0.00 NOT NULL CHECK (credit >= 0),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    -- Restricción para evitar que una línea tenga débito y crédito a la vez
+    CONSTRAINT chk_debit_credit CHECK (NOT (debit > 0 AND credit > 0))
 );
 
-CREATE INDEX IF NOT EXISTS idx_journal_lines_entry ON public.journal_lines (entry_id);
-CREATE INDEX IF NOT EXISTS idx_journal_lines_account ON public.journal_lines (account_id);
-
--- ============================================================================
--- TRIGGER: VALIDACIÓN ESTRICTA DE PARTIDA DOBLE AL POSTEAR
--- ============================================================================
-CREATE OR REPLACE FUNCTION public.fn_validate_journal_entry_balance()
-RETURNS trigger AS $$
+-- 5. FUNCIÓN DEL TRIGGER CORREGIDA (EFECTÚA LA VALIDACIÓN CUANDO SE PASA A 'POSTED')
+CREATE OR REPLACE FUNCTION verify_journal_entry_posting()
+RETURNS TRIGGER AS $$
 DECLARE
-  v_total_debit numeric(18, 2) := 0;
-  v_total_credit numeric(18, 2) := 0;
-  v_diff numeric(18, 2) := 0;
-  v_line_count integer := 0;
+    v_sum_debit NUMERIC(15,2);
+    v_sum_credit NUMERIC(15,2);
 BEGIN
-  -- La partida doble se valida estrictamente cuando el asiento pasa a estado 'posteado' o 'cerrado'
-  IF NEW.status IN ('posteado', 'cerrado') THEN
-    SELECT 
-      COALESCE(SUM(debit), 0), 
-      COALESCE(SUM(credit), 0), 
-      COUNT(*)
-    INTO v_total_debit, v_total_credit, v_line_count
-    FROM public.journal_lines
-    WHERE entry_id = NEW.id;
+    -- Solo validamos la partida doble cuando el asiento pasa a estar 'POSTED' o 'POSTEADO'
+    IF NEW.status IN ('POSTED', 'posteado', 'CLOSED', 'cerrado') THEN
+        SELECT COALESCE(SUM(debit), 0), COALESCE(SUM(credit), 0)
+        INTO v_sum_debit, v_sum_credit
+        FROM journal_lines
+        WHERE entry_id = NEW.id;
 
-    IF v_line_count < 2 THEN
-      RAISE EXCEPTION 'Error de Partida Doble: El asiento % requiere al menos dos líneas contables para poder ser posteado. Líneas actuales: %',
-        NEW.entry_number, v_line_count;
+        -- Validación estricta de la ecuación contable (Partida Doble)
+        IF (v_sum_debit - v_sum_credit) != 0 OR (v_sum_debit = 0 AND v_sum_credit = 0) THEN
+            RAISE EXCEPTION 'No se puede asentar el asiento #%. Desbalance Contable: Suma Débito (%), Suma Crédito (%). El balance neto debe ser cero.', 
+                NEW.entry_number, v_sum_debit, v_sum_credit;
+        END IF;
     END IF;
 
-    v_diff := ROUND(v_total_debit - v_total_credit, 2);
-
-    IF v_diff <> 0 THEN
-      RAISE EXCEPTION 'Error de Partida Doble: El asiento contable % está descuadrado. Débitos = %, Créditos = %, Diferencia = %. La suma de débitos menos créditos debe ser exactamente igual a 0.',
-        NEW.entry_number, v_total_debit, v_total_credit, v_diff;
-    END IF;
-  END IF;
-
-  NEW.updated_at := now();
-  RETURN NEW;
+    RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
-DROP TRIGGER IF EXISTS trg_validate_journal_entry_balance ON public.journal_entries;
-CREATE TRIGGER trg_validate_journal_entry_balance
-BEFORE INSERT OR UPDATE ON public.journal_entries
+-- 6. ASIGNACIÓN DEL TRIGGER A LA CABECERA
+CREATE TRIGGER trg_verify_journal_entry_posting
+BEFORE UPDATE ON journal_entries
 FOR EACH ROW
-EXECUTE FUNCTION public.fn_validate_journal_entry_balance();
+EXECUTE FUNCTION verify_journal_entry_posting();
 
--- ============================================================================
--- TRIGGER: INMUTABILIDAD ESTRICTA PARA ASIENTOS POSTEADOS O CERRADOS
--- ============================================================================
-CREATE OR REPLACE FUNCTION public.fn_enforce_journal_immutability()
-RETURNS trigger AS $$
+-- 7. TRIGGER ADICIONAL DE INMUTABILIDAD CONTABLE (REQUISITO 3 DE FASE 1)
+-- Bloquea que los asientos en estado 'POSTED' o 'CLOSED' puedan ser editados o eliminados
+CREATE OR REPLACE FUNCTION enforce_journal_immutability()
+RETURNS TRIGGER AS $$
 BEGIN
-  -- Si el asiento ya estaba posteado o cerrado, no se permite modificarlo ni borrarlo
-  IF OLD.status IN ('posteado', 'cerrado') THEN
-    IF TG_OP = 'DELETE' THEN
-      RAISE EXCEPTION 'Inmutabilidad Contable: Está prohibido eliminar el asiento % porque ya ha sido posteado o cerrado en los libros oficiales. Debe emitirse un asiento de reversión o anulación.',
-        OLD.entry_number;
-    END IF;
+    IF OLD.status IN ('POSTED', 'posteado', 'CLOSED', 'cerrado') THEN
+        IF TG_OP = 'DELETE' THEN
+            RAISE EXCEPTION 'Inmutabilidad Contable: No se puede eliminar el asiento #% porque ya ha sido asentado (POSTED) en los libros oficiales.', OLD.entry_number;
+        END IF;
 
-    IF TG_OP = 'UPDATE' THEN
-      -- Solo se permite pasar de posteado a anulado si no se alteran las cifras
-      IF NEW.status = 'anulado' AND OLD.status = 'posteado' THEN
-        -- Permitir anulación con marca de auditoría
-        RETURN NEW;
-      ELSE
-        RAISE EXCEPTION 'Inmutabilidad Contable: El asiento % está en estado % y no puede ser modificado. Para corregir operaciones, cree una nota o asiento de ajuste.',
-          OLD.entry_number, OLD.status;
-      END IF;
+        IF TG_OP = 'UPDATE' THEN
+            -- Solo se permite si no se alteran montos o si pasa a VOID/Anulado
+            IF NEW.status IN ('VOID', 'anulado') AND OLD.status IN ('POSTED', 'posteado') THEN
+                RETURN NEW;
+            ELSE
+                RAISE EXCEPTION 'Inmutabilidad Contable: El asiento #% ya está asentado (POSTED) y no puede ser modificado. Para correcciones debe emitirse una nota o asiento de ajuste.', OLD.entry_number;
+            END IF;
+        END IF;
     END IF;
-  END IF;
-
-  RETURN NEW;
+    RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
-DROP TRIGGER IF EXISTS trg_enforce_journal_immutability ON public.journal_entries;
+DROP TRIGGER IF EXISTS trg_enforce_journal_immutability ON journal_entries;
 CREATE TRIGGER trg_enforce_journal_immutability
-BEFORE UPDATE OR DELETE ON public.journal_entries
+BEFORE UPDATE OR DELETE ON journal_entries
 FOR EACH ROW
-EXECUTE FUNCTION public.fn_enforce_journal_immutability();
+EXECUTE FUNCTION enforce_journal_immutability();
 
--- Bloquear manipulación directa de líneas en asientos ya posteados
-CREATE OR REPLACE FUNCTION public.fn_enforce_journal_line_immutability()
-RETURNS trigger AS $$
-DECLARE
-  v_parent_status text;
-  v_parent_number text;
-  v_entry_id uuid;
-BEGIN
-  v_entry_id := CASE WHEN TG_OP = 'DELETE' THEN OLD.entry_id ELSE NEW.entry_id END;
-
-  SELECT status, entry_number INTO v_parent_status, v_parent_number
-  FROM public.journal_entries
-  WHERE id = v_entry_id;
-
-  IF v_parent_status IN ('posteado', 'cerrado') THEN
-    RAISE EXCEPTION 'Inmutabilidad Contable: No se pueden agregar, editar ni eliminar líneas del asiento % porque se encuentra en estado %.',
-      v_parent_number, v_parent_status;
-  END IF;
-
-  RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
-END;
-$$ LANGUAGE plpgsql;
-
-DROP TRIGGER IF EXISTS trg_enforce_journal_line_immutability ON public.journal_lines;
-CREATE TRIGGER trg_enforce_journal_line_immutability
-BEFORE INSERT OR UPDATE OR DELETE ON public.journal_lines
-FOR EACH ROW
-EXECUTE FUNCTION public.fn_enforce_journal_line_immutability();
-
--- ============================================================================
--- SEMILLA DEL CATÁLOGO DE CUENTAS (PUC COLOMBIANO BASADO EN NIIF)
--- ============================================================================
-INSERT INTO public.accounts (code, name, type, nature, level) VALUES
+-- 8. SEMILLA INICIAL DEL CATÁLOGO DE CUENTAS (PUC NIIF COLOMBIANO)
+INSERT INTO accounts (code, name, type, nature, level) VALUES
 ('1', 'ACTIVO', 'Activo', 'Débito', 1),
 ('11', 'EFECTIVO Y EQUIVALENTES DE EFECTIVO', 'Activo', 'Débito', 2),
 ('1105', 'Caja', 'Activo', 'Débito', 3),
@@ -202,8 +143,4 @@ INSERT INTO public.accounts (code, name, type, nature, level) VALUES
 ('61', 'COSTO DE VENTAS Y PRESTACIÓN DE SERVICIOS', 'Costo', 'Débito', 2),
 ('6135', 'Comercio al por Mayor y al por Menor', 'Costo', 'Débito', 3),
 ('613505', 'Costo de Mercancías Vendidas', 'Costo', 'Débito', 4)
-ON CONFLICT (code) DO UPDATE SET
-  name = EXCLUDED.name,
-  type = EXCLUDED.type,
-  nature = EXCLUDED.nature,
-  level = EXCLUDED.level;
+ON CONFLICT (code) DO NOTHING;

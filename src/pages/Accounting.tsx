@@ -26,7 +26,7 @@ export default function Accounting() {
     try {
       setLoading(true);
       const { data, error: supabaseError } = await supabase
-        ?..from('accounting_accounts')
+        .from('accounting_accounts')
         .select('id, code, name, type, nature, level')
         .order('code', { ascending: true });
 

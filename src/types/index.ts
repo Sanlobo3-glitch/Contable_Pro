@@ -1158,4 +1158,89 @@ export interface CreateJournalEntryPayload {
   }>
 }
 
+export interface TrialBalanceAccountRow {
+  account_id: string
+  account_code: string
+  account_name: string
+  account_type: AccountType
+  nature: AccountNature
+  level: number
+  is_postable: boolean
+  initial_balance: number
+  period_debit: number
+  period_credit: number
+  final_balance: number
+}
+
+export interface TrialBalanceReport {
+  company_id: string
+  start_date: string
+  end_date: string
+  total_period_debit: number
+  total_period_credit: number
+  difference: number
+  is_balanced: boolean
+  accounts: TrialBalanceAccountRow[]
+}
+
+export interface BalanceSheetAccountRow {
+  id: string
+  code: string
+  name: string
+  level: number
+  is_postable: boolean
+  balance: number
+}
+
+export interface BalanceSheetReport {
+  company_id: string
+  as_of_date: string
+  assets: {
+    accounts: BalanceSheetAccountRow[]
+    total: number
+  }
+  liabilities: {
+    accounts: BalanceSheetAccountRow[]
+    total: number
+  }
+  equity: {
+    accounts: BalanceSheetAccountRow[]
+    base_total: number
+    net_income_current_period: number
+    total_equity_with_income: number
+  }
+  liabilities_and_equity_total: number
+  difference: number
+  is_balanced: boolean
+}
+
+export interface IncomeStatementItem {
+  id: string
+  code: string
+  name: string
+  level: number
+  amount: number
+}
+
+export interface IncomeStatementReport {
+  company_id: string
+  start_date: string
+  end_date: string
+  revenues: {
+    items: IncomeStatementItem[]
+    total: number
+  }
+  costs: {
+    items: IncomeStatementItem[]
+    total: number
+  }
+  gross_profit: number
+  expenses: {
+    items: IncomeStatementItem[]
+    total: number
+  }
+  operating_profit: number
+  net_income: number
+}
+
 

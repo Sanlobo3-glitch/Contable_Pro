@@ -90,18 +90,71 @@ export default function AccountingStatements({
   useEffect(() => {
     if (!isManager) return
     setErr(null)
+    const companyId = user?.company_id || '00000000-0000-4000-8000-000000000001'
     const q =
       tab === 'er'
         ? supabase.rpc('acc_income_statement', { p_from: from, p_to: to })
         : supabase.rpc('acc_balance_sheet', { p_to: to })
-    q.then(({ data, error }) => {
+
+    q.then(async ({ data, error }) => {
+      if (!error && Array.isArray(data) && data.length > 0) {
+        setRows(data as Row[])
+        return
+      }
+
+      try {
+        if (tab === 'er') {
+          const res = await supabase.rpc('fn_income_statement', {
+            p_company_id: companyId,
+            p_start_date: from,
+            p_end_date: to,
+          })
+          if (res.data) {
+            const rowsMapped: Row[] = []
+            res.data.revenues?.items?.forEach((i: any) =>
+              rowsMapped.push({ account_id: i.id, code: i.code, name: i.name, type: 'ingreso', amount: i.amount })
+            )
+            res.data.costs?.items?.forEach((i: any) =>
+              rowsMapped.push({ account_id: i.id, code: i.code, name: i.name, type: 'costo', amount: i.amount })
+            )
+            res.data.expenses?.items?.forEach((i: any) =>
+              rowsMapped.push({ account_id: i.id, code: i.code, name: i.name, type: 'gasto', amount: i.amount })
+            )
+            setRows(rowsMapped)
+            return
+          }
+        } else {
+          const res = await supabase.rpc('fn_balance_sheet', {
+            p_company_id: companyId,
+            p_as_of_date: to,
+          })
+          if (res.data) {
+            const rowsMapped: Row[] = []
+            res.data.assets?.accounts?.forEach((i: any) =>
+              rowsMapped.push({ account_id: i.id, code: i.code, name: i.name, type: 'activo', amount: i.balance })
+            )
+            res.data.liabilities?.accounts?.forEach((i: any) =>
+              rowsMapped.push({ account_id: i.id, code: i.code, name: i.name, type: 'pasivo', amount: i.balance })
+            )
+            res.data.equity?.accounts?.forEach((i: any) =>
+              rowsMapped.push({ account_id: i.id, code: i.code, name: i.name, type: 'patrimonio', amount: i.balance })
+            )
+            setRows(rowsMapped)
+            return
+          }
+        }
+      } catch {
+        /* proceed to standard error */
+      }
+
       if (error) setErr(error.message)
       else setRows((data as Row[]) || [])
     })
+
     supabase.rpc('acc_statement_status', { p_to: to }).then(({ data }) => {
       setReasons((data as Reason[]) || [])
     })
-  }, [isManager, tab, from, to])
+  }, [isManager, tab, from, to, user?.company_id])
 
   if (!isManager) {
     return <p className="text-sm text-slate-500">No tienes permiso para ver esta página.</p>

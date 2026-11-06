@@ -13,6 +13,7 @@ import sqlAutoBrandSync from '../../supabase/migrations/20261103000020_sincroniz
 import sqlCommercialSuite21 from '../../supabase/migrations/20261104000021_cinco_soluciones_comerciales_avanzadas.sql?raw'
 import sqlGlobalAdminCommercial from '../../supabase/migrations/20261105000045_admin_global_comercial_y_equipo_plataforma.sql?raw'
 import sqlAccountingDoubleEntry from '../../supabase/migrations/20261106000046_sistema_contable_partida_doble.sql?raw'
+import sqlAccountingReports from '../../supabase/migrations/20261106000047_reportes_financieros_contables.sql?raw'
 
 function sanitizeForPlpgsqlExecute(rawSql: string): string {
   return rawSql.replace(/^\s*(BEGIN|COMMIT)\s*;\s*$/gim, '').trim()
@@ -20,9 +21,11 @@ function sanitizeForPlpgsqlExecute(rawSql: string): string {
 
 const cleanGlobalAdminCommercialSql = sanitizeForPlpgsqlExecute(sqlGlobalAdminCommercial)
 const cleanAccountingDoubleEntrySql = sanitizeForPlpgsqlExecute(sqlAccountingDoubleEntry)
+const cleanAccountingReportsSql = sanitizeForPlpgsqlExecute(sqlAccountingReports)
 
 export type SqlBundleId =
   | 'consolidated'
+  | 'accounting_reports'
   | 'accounting_double_entry'
   | 'global_admin_commercial'
   | 'commercial_suite_21'
@@ -98,7 +101,19 @@ export const SQL_SCRIPT_BUNDLES: SqlScriptBundle[] = [
       cleanGlobalAdminCommercialSql,
       '',
       cleanAccountingDoubleEntrySql,
+      '',
+      cleanAccountingReportsSql,
     ].join('\n'),
+  },
+  {
+    id: 'accounting_reports',
+    title: 'Reportes Financieros y Agregaciones Contables SQL (Migración 000047)',
+    filename: '20261106000047_reportes_financieros_contables.sql',
+    category: 'Recomendado',
+    summary:
+      'Habilita los motores analíticos de alta velocidad fn_trial_balance (Balance de Comprobación), fn_balance_sheet (Balance General clasificado), fn_income_statement (Estado de Resultados / PyG), fn_post_journal_entry y contraasientos automáticos de reversión inmutables fn_reverse_journal_entry.',
+    targetTables: ['accounts', 'journal_entries', 'journal_lines'],
+    sql: cleanAccountingReportsSql,
   },
   {
     id: 'accounting_double_entry',

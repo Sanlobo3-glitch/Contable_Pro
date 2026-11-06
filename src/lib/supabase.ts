@@ -6949,6 +6949,325 @@ function createMockSupabase(silent = false): SupabaseClient {
           error: null,
         }
       }
+      case 'fn_post_journal_entry': {
+        const entryId = args?.p_entry_id
+        const entries = getTable('journal_entries')
+        const allLines = getTable('journal_lines')
+        const entry = entries.find(e => e.id === entryId)
+        if (!entry) {
+          return { data: null, error: { message: 'El asiento contable no existe.' } }
+        }
+        if (entry.status === 'posteado') {
+          return { data: { ok: true, message: 'El asiento ya se encuentra posteado.', entry_id: entryId }, error: null }
+        }
+        if (entry.status === 'cerrado') {
+          return { data: null, error: { message: 'No se puede modificar un asiento en período contable cerrado.' } }
+        }
+
+        const lines = allLines.filter(l => l.entry_id === entryId)
+        if (lines.length < 2) {
+          return { data: null, error: { message: 'Partida Doble Inválida: El asiento debe contener al menos 2 líneas contables.' } }
+        }
+        let debSum = 0
+        let credSum = 0
+        for (const l of lines) {
+          debSum += Math.round((Number(l.debit) || 0) * 10000) / 10000
+          credSum += Math.round((Number(l.credit) || 0) * 10000) / 10000
+        }
+        if (Math.abs(debSum - credSum) > 0.0001) {
+          return {
+            data: null,
+            error: { message: `Partida Doble Descuadrada: Débitos (${debSum.toFixed(2)}) != Créditos (${credSum.toFixed(2)}).` },
+          }
+        }
+
+        entry.status = 'posteado'
+        entry.posted_by = currentSession?.user?.id || 'demo-contador-1'
+        entry.posted_at = nowIso()
+        entry.updated_at = nowIso()
+
+        return {
+          data: {
+            ok: true,
+            entry_id: entryId,
+            entry_number: entry.entry_number,
+            status: 'posteado',
+            posted_at: entry.posted_at,
+          },
+          error: null,
+        }
+      }
+      case 'fn_reverse_journal_entry': {
+        const origId = args?.p_entry_id
+        const entries = getTable('journal_entries')
+        const allLines = getTable('journal_lines')
+        const orig = entries.find(e => e.id === origId)
+        if (!orig) {
+          return { data: null, error: { message: 'El asiento contable a reversar no existe.' } }
+        }
+
+        const origLines = allLines.filter(l => l.entry_id === origId)
+        const revId = genId()
+        const nextNum = entries.length + 1
+        const revNumber = `ASI-${String(nextNum).padStart(5, '0')}`
+        const revConcept = String(args?.p_reverse_concept || `Reversión y anulación del asiento ${orig.entry_number}: ${orig.concept}`).trim()
+
+        entries.unshift({
+          id: revId,
+          company_id: orig.company_id,
+          entry_number: revNumber,
+          entry_date: daysFromNowYmd(0),
+          concept: revConcept,
+          status: 'posteado',
+          source_module: 'reversion',
+          source_id: orig.id,
+          created_by: currentSession?.user?.id || 'demo-contador-1',
+          posted_by: currentSession?.user?.id || 'demo-contador-1',
+          posted_at: nowIso(),
+          created_at: nowIso(),
+          updated_at: nowIso(),
+        })
+
+        origLines.forEach((l, idx) => {
+          allLines.push({
+            id: genId(),
+            company_id: orig.company_id,
+            entry_id: revId,
+            account_id: l.account_id,
+            line_number: idx + 1,
+            description: `Contraasiento reverso: ${l.description || orig.concept}`,
+            debit: l.credit,
+            credit: l.debit,
+            created_at: nowIso(),
+          })
+        })
+
+        return {
+          data: {
+            ok: true,
+            original_entry_id: orig.id,
+            original_entry_number: orig.entry_number,
+            reversal_entry_id: revId,
+            reversal_entry_number: revNumber,
+            status: 'posteado',
+          },
+          error: null,
+        }
+      }
+      case 'fn_trial_balance': {
+        const coId = String(args?.p_company_id || DEMO_COMPANY_ID)
+        const sDate = String(args?.p_start_date || '2026-01-01')
+        const eDate = String(args?.p_end_date || daysFromNowYmd(0))
+        const accounts = getTable('accounts').filter(a => a.company_id === coId && a.active)
+        const entries = getTable('journal_entries').filter(e => e.company_id === coId && (e.status === 'posteado' || e.status === 'cerrado'))
+        const allLines = getTable('journal_lines').filter(l => l.company_id === coId)
+
+        const entryMap = new Map(entries.map(e => [e.id, e]))
+        const accountRows: any[] = []
+        let totalPerDebit = 0
+        let totalPerCredit = 0
+
+        for (const acc of accounts) {
+          const lines = allLines.filter(l => l.account_id === acc.id)
+          let initDeb = 0
+          let initCred = 0
+          let perDeb = 0
+          let perCred = 0
+
+          for (const line of lines) {
+            const entry = entryMap.get(line.entry_id)
+            if (!entry) continue
+            if (entry.entry_date < sDate) {
+              initDeb += Number(line.debit) || 0
+              initCred += Number(line.credit) || 0
+            } else if (entry.entry_date <= eDate) {
+              perDeb += Number(line.debit) || 0
+              perCred += Number(line.credit) || 0
+            }
+          }
+
+          if (initDeb === 0 && initCred === 0 && perDeb === 0 && perCred === 0) continue
+
+          const isDeb = acc.nature === 'debito'
+          const initBal = isDeb ? (initDeb - initCred) : (initCred - initDeb)
+          const finalBal = isDeb ? ((initDeb + perDeb) - (initCred + perCred)) : ((initCred + perCred) - (initDeb + perDeb))
+
+          totalPerDebit += perDeb
+          totalPerCredit += perCred
+
+          accountRows.push({
+            account_id: acc.id,
+            account_code: acc.code,
+            account_name: acc.name,
+            account_type: acc.account_type,
+            nature: acc.nature,
+            level: acc.level,
+            is_postable: acc.is_postable,
+            initial_balance: Math.round(initBal * 10000) / 10000,
+            period_debit: Math.round(perDeb * 10000) / 10000,
+            period_credit: Math.round(perCred * 10000) / 10000,
+            final_balance: Math.round(finalBal * 10000) / 10000,
+          })
+        }
+
+        accountRows.sort((a, b) => a.account_code.localeCompare(b.account_code))
+        const diff = Math.round((totalPerDebit - totalPerCredit) * 10000) / 10000
+
+        return {
+          data: {
+            company_id: coId,
+            start_date: sDate,
+            end_date: eDate,
+            total_period_debit: Math.round(totalPerDebit * 10000) / 10000,
+            total_period_credit: Math.round(totalPerCredit * 10000) / 10000,
+            difference: diff,
+            is_balanced: Math.abs(diff) < 0.0001,
+            accounts: accountRows,
+          },
+          error: null,
+        }
+      }
+      case 'fn_balance_sheet': {
+        const coId = String(args?.p_company_id || DEMO_COMPANY_ID)
+        const asOf = String(args?.p_as_of_date || daysFromNowYmd(0))
+        const accounts = getTable('accounts').filter(a => a.company_id === coId && a.active)
+        const entries = getTable('journal_entries').filter(e => e.company_id === coId && (e.status === 'posteado' || e.status === 'cerrado') && e.entry_date <= asOf)
+        const allLines = getTable('journal_lines').filter(l => l.company_id === coId)
+        const entryMap = new Map(entries.map(e => [e.id, e]))
+
+        let netIncome = 0
+        const assetRows: any[] = []
+        const liabRows: any[] = []
+        const equityRows: any[] = []
+        let totAssets = 0
+        let totLiab = 0
+        let totEquity = 0
+
+        for (const acc of accounts) {
+          const lines = allLines.filter(l => l.account_id === acc.id)
+          let deb = 0
+          let cred = 0
+          for (const l of lines) {
+            if (entryMap.has(l.entry_id)) {
+              deb += Number(l.debit) || 0
+              cred += Number(l.credit) || 0
+            }
+          }
+
+          if (acc.account_type === 'ingreso') {
+            netIncome += (cred - deb)
+          } else if (acc.account_type === 'costo' || acc.account_type === 'gasto') {
+            netIncome -= (deb - cred)
+          } else if (acc.account_type === 'activo') {
+            const bal = Math.round((deb - cred) * 10000) / 10000
+            if (deb !== 0 || cred !== 0) {
+              totAssets += bal
+              assetRows.push({ id: acc.id, code: acc.code, name: acc.name, level: acc.level, is_postable: acc.is_postable, balance: bal })
+            }
+          } else if (acc.account_type === 'pasivo') {
+            const bal = Math.round((cred - deb) * 10000) / 10000
+            if (deb !== 0 || cred !== 0) {
+              totLiab += bal
+              liabRows.push({ id: acc.id, code: acc.code, name: acc.name, level: acc.level, is_postable: acc.is_postable, balance: bal })
+            }
+          } else if (acc.account_type === 'patrimonio') {
+            const bal = Math.round((cred - deb) * 10000) / 10000
+            if (deb !== 0 || cred !== 0) {
+              totEquity += bal
+              equityRows.push({ id: acc.id, code: acc.code, name: acc.name, level: acc.level, is_postable: acc.is_postable, balance: bal })
+            }
+          }
+        }
+
+        const totalEquityWithIncome = Math.round((totEquity + netIncome) * 10000) / 10000
+        const totalLiabAndEquity = Math.round((totLiab + totalEquityWithIncome) * 10000) / 10000
+        const diff = Math.round((totAssets - totalLiabAndEquity) * 10000) / 10000
+
+        return {
+          data: {
+            company_id: coId,
+            as_of_date: asOf,
+            assets: { accounts: assetRows, total: Math.round(totAssets * 10000) / 10000 },
+            liabilities: { accounts: liabRows, total: Math.round(totLiab * 10000) / 10000 },
+            equity: {
+              accounts: equityRows,
+              base_total: Math.round(totEquity * 10000) / 10000,
+              net_income_current_period: Math.round(netIncome * 10000) / 10000,
+              total_equity_with_income: totalEquityWithIncome,
+            },
+            liabilities_and_equity_total: totalLiabAndEquity,
+            difference: diff,
+            is_balanced: Math.abs(diff) < 0.0001,
+          },
+          error: null,
+        }
+      }
+      case 'fn_income_statement': {
+        const coId = String(args?.p_company_id || DEMO_COMPANY_ID)
+        const sDate = String(args?.p_start_date || '2026-01-01')
+        const eDate = String(args?.p_end_date || daysFromNowYmd(0))
+        const accounts = getTable('accounts').filter(a => a.company_id === coId && a.active)
+        const entries = getTable('journal_entries').filter(e => e.company_id === coId && (e.status === 'posteado' || e.status === 'cerrado') && e.entry_date >= sDate && e.entry_date <= eDate)
+        const allLines = getTable('journal_lines').filter(l => l.company_id === coId)
+        const entryMap = new Map(entries.map(e => [e.id, e]))
+
+        const revItems: any[] = []
+        const costItems: any[] = []
+        const expItems: any[] = []
+        let totRev = 0
+        let totCost = 0
+        let totExp = 0
+
+        for (const acc of accounts) {
+          const lines = allLines.filter(l => l.account_id === acc.id)
+          let deb = 0
+          let cred = 0
+          for (const l of lines) {
+            if (entryMap.has(l.entry_id)) {
+              deb += Number(l.debit) || 0
+              cred += Number(l.credit) || 0
+            }
+          }
+
+          if (acc.account_type === 'ingreso') {
+            const amt = Math.round((cred - deb) * 10000) / 10000
+            if (amt !== 0) {
+              totRev += amt
+              revItems.push({ id: acc.id, code: acc.code, name: acc.name, level: acc.level, amount: amt })
+            }
+          } else if (acc.account_type === 'costo') {
+            const amt = Math.round((deb - cred) * 10000) / 10000
+            if (amt !== 0) {
+              totCost += amt
+              costItems.push({ id: acc.id, code: acc.code, name: acc.name, level: acc.level, amount: amt })
+            }
+          } else if (acc.account_type === 'gasto') {
+            const amt = Math.round((deb - cred) * 10000) / 10000
+            if (amt !== 0) {
+              totExp += amt
+              expItems.push({ id: acc.id, code: acc.code, name: acc.name, level: acc.level, amount: amt })
+            }
+          }
+        }
+
+        const grossProfit = Math.round((totRev - totCost) * 10000) / 10000
+        const opProfit = Math.round((grossProfit - totExp) * 10000) / 10000
+
+        return {
+          data: {
+            company_id: coId,
+            start_date: sDate,
+            end_date: eDate,
+            revenues: { items: revItems, total: Math.round(totRev * 10000) / 10000 },
+            costs: { items: costItems, total: Math.round(totCost * 10000) / 10000 },
+            gross_profit: grossProfit,
+            expenses: { items: expItems, total: Math.round(totExp * 10000) / 10000 },
+            operating_profit: opProfit,
+            net_income: opProfit,
+          },
+          error: null,
+        }
+      }
       default:
         return { data: null, error: null }
     }

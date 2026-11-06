@@ -6,6 +6,7 @@ import { createHandler } from './api/copilot.ts'
 import { createAdminSqlHandler } from './api/admin-sql.ts'
 import { createStorePreviewHandler } from './api/store-preview.ts'
 import { createDocumentScannerHandler } from './api/document-scanner.ts'
+import { createAccountingHandler } from './api/accounting.ts'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const isProd = process.env.NODE_ENV === 'production'
@@ -180,6 +181,15 @@ async function startServer() {
       }
       return await fs.readFile(prodIndexPath, 'utf8')
     },
+  })
+
+  const accountingHandler = createAccountingHandler({
+    fetchFn: globalThis.fetch.bind(globalThis),
+    env: process.env,
+  })
+
+  app.all('/api/accounting*', async (req, res) => {
+    await accountingHandler(req as any, res as any)
   })
 
   app.all('/api/store-preview', async (req, res) => {

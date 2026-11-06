@@ -1,5 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase';
+import * as XLSX from 'xlsx';
+import { jsPDF } from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
 interface TrialBalanceRow {
   account_code: string;
@@ -57,8 +60,70 @@ export default function AccountingStatements() {
 
   const netUtility = totalIncome - totalExpenses;
 
+  // Lógica nativa de exportación a Excel
+  const exportToExcel = () => {
+    if (!balanceData || balanceData.length === 0) return;
+    const worksheetData = balanceData.map(row => ({
+      "Código Cuenta": row.account_code,
+      "Nombre de Cuenta": row.account_name,
+      "Tipo": row.account_type.toUpperCase(),
+      "Débitos": Number(row.total_debit),
+      "Créditos": Number(row.total_credit),
+      "Saldo Final": Number(row.final_balance)
+    }));
+    worksheetData.push({
+      "Código Cuenta": "TOTALES",
+      "Nombre de Cuenta": "CONTROL PARTIDA DOBLE",
+      "Tipo": "",
+      "Débitos": totalDebits,
+      "Créditos": totalCredits,
+      "Saldo Final": totalDebits - totalCredits
+    });
+    const ws = XLSX.utils.json_to_sheet(worksheetData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Balance Comprobación");
+    XLSX.writeFile(wb, `Balance_Comprobacion_${startDate}_a_${endDate}.xlsx`);
+  };
+
+  // Lógica nativa de generación de PDF Corporativo
+  const exportToPDF = () => {
+    if (!balanceData || balanceData.length === 0) return;
+    const doc = new jsPDF();
+    doc.setFont("Helvetica", "bold");
+    doc.setFontSize(16);
+    doc.text("Contable_Pro - ERP Financiero", 14, 20);
+    doc.setFontSize(11);
+    doc.setFont("Helvetica", "normal");
+    doc.text("Balance de Comprobación Oficial", 14, 27);
+    doc.text(`Periodo: ${startDate} al ${endDate}`, 14, 33);
+
+    const tableRows = balanceData.map(row => [
+      row.account_code,
+      row.account_name,
+      `$${Number(row.total_debit).toFixed(2)}`,
+      `$${Number(row.total_credit).toFixed(2)}`,
+      `$${Number(row.final_balance).toFixed(2)}`
+    ]);
+    tableRows.push([
+      "TOTALES",
+      "CONTROL DE PARTIDA DOBLE",
+      `$${totalDebits.toFixed(2)}`,
+      `$${totalCredits.toFixed(2)}`,
+      `$${(totalDebits - totalCredits).toFixed(2)}`
+    ]);
+
+    autoTable(doc, {
+      startY: 40,
+      head: [['Código', 'Cuenta Contable', 'Débitos', 'Créditos', 'Saldo Final']],
+      body: tableRows,
+      theme: 'striped',
+      headStyles: { fillColor: [15, 23, 42] }
+    });
+    doc.save(`Balance_Comprobacion_${startDate}_a_${endDate}.pdf`);
+  };
   return (
     <div className="container mx-auto p-6 max-w-6xl space-y-6">
+      {/* Encabezado Principal Integrado */}
       <div className="md:flex justify-between items-center bg-slate-900 text-white p-6 rounded-2xl shadow-lg">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Centro de Estados Financieros</h1>
@@ -82,13 +147,13 @@ export default function AccountingStatements() {
 
           <div className="flex gap-2 w-full md:w-auto justify-end">
             <button 
-              onClick={() => alert('Exportando a Excel...')}
+              onClick={exportToExcel}
               className="bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold px-3 py-2 rounded-lg flex items-center gap-1 transition-colors shadow-sm cursor-pointer"
             >
               📊 Excel
             </button>
             <button 
-              onClick={() => alert('Generando PDF corporativo...')}
+              onClick={exportToPDF}
               className="bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold px-3 py-2 rounded-lg flex items-center gap-1 transition-colors shadow-sm cursor-pointer"
             >
               📄 PDF
@@ -96,6 +161,8 @@ export default function AccountingStatements() {
           </div>
         </div>
       </div>
+
+      {/* KPI Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="bg-white p-5 rounded-xl border border-slate-100 shadow-sm flex justify-between items-center">
           <div>
@@ -126,6 +193,7 @@ export default function AccountingStatements() {
         </div>
       </div>
 
+      {/* Tabla del Balance */}
       <div className="bg-white rounded-xl shadow-md border border-slate-100 overflow-hidden">
         <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
           <h2 className="font-bold text-slate-800 text-sm uppercase tracking-wider">Balance de Comprobación por Subcuentas</h2>

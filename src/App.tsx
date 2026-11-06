@@ -3,16 +3,6 @@ import {
   AuthProvider,
   useAuth,
   isCompanyManager,
-  canRegisterSales,
-  canManageUsers,
-  canManageTeam,
-  canManageSettings,
-  canViewStats,
-  canManageInventory,
-  canManagePurchases,
-  canAccessCashAndAudit,
-  canViewAccounting,
-  canManageTransport,
 } from './lib/auth'
 import { useAppNavigation } from './lib/navigation'
 import { getPublicStoreIdentifierFromLocation } from './lib/whatsappStudio'
@@ -124,105 +114,107 @@ function getRoleHomePage(role?: Role): string {
   }
 }
 
-function isPageAllowedForRole(
-  page: string,
-  role?: Role,
-  opts?: { isMasterAccount?: boolean; isDemo?: boolean }
-): boolean {
-  switch (page) {
-    case 'dashboard':
-    case 'copilot':
-    case 'ask':
-    case 'customers':
-    case 'products':
-    case 'catalog':
-    case 'kardex':
-    case 'manual':
-      return true
-    case 'command':
-    case 'treasury':
-    case 'bankrecon':
-    case 'costcenters':
-    case 'expenses':
-    case 'profit':
-      return isCompanyManager(role) || canViewAccounting(role)
-    case 'summary':
-      return isCompanyManager(role) || canManageInventory(role) || canViewAccounting(role)
-    case 'pos':
-    case 'quotations':
-    case 'layaways':
-      return canRegisterSales(role)
-    case 'sales':
-    case 'cartera':
-      return canRegisterSales(role) || canViewAccounting(role)
-    case 'catorders':
-      return canRegisterSales(role) || isCompanyManager(role) || canViewAccounting(role)
-    case 'devolutions':
-    case 'exchanges':
-      return canRegisterSales(role) || canManageInventory(role)
-    case 'sellers':
-      return canManageTeam(role) || canViewAccounting(role)
-    case 'routeplan':
-      return canRegisterSales(role) || canManageTransport(role)
-    case 'dispatch':
-      return canRegisterSales(role) || canManageTransport(role) || canManageInventory(role)
-    case 'goals':
-      return canRegisterSales(role) || isCompanyManager(role)
-    case 'purchaseorders':
-      return canManagePurchases(role) || canManageInventory(role) || canViewAccounting(role)
-    case 'purchases':
-    case 'payables':
-      return canManagePurchases(role) || canViewAccounting(role)
-    case 'buyplan':
-    case 'suppliers':
-    case 'predict':
-      return canManagePurchases(role) || canManageInventory(role)
-    case 'warehouses':
-    case 'categories':
-    case 'lots':
-    case 'labels':
-    case 'priceshield':
-      return canManageInventory(role)
-    case 'blindcount':
-      return canManageInventory(role) || canViewAccounting(role) || isCompanyManager(role)
-    case 'cash':
-    case 'history':
-      return canAccessCashAndAudit(role)
-    case 'reports':
-    case 'stats':
-      return canViewStats(role)
-    case 'map':
-      return isCompanyManager(role) || canManageTransport(role)
-    case 'accounting':
-    case 'accstate':
-    case 'accsetup':
-    case 'accclose':
-    case 'taxes':
-    case 'cpa':
-      return canViewAccounting(role)
-    case 'erpbridge':
-      return canViewAccounting(role) || isCompanyManager(role)
-    case 'dispatch_history':
-    case 'despachos':
-    case 'trazabilidad':
-    case 'support':
-      return true
-    case 'team':
-      return canManageTeam(role)
-    case 'users':
-      return canManageUsers(role)
-    case 'companies':
-    case 'adminplans':
-      return role === 'admin'
-    case 'sqlcenter':
-      return role === 'admin' || Boolean(opts?.isMasterAccount) || Boolean(opts?.isDemo)
-    case 'subscription':
-      return role === 'dueno' || role === 'admin'
-    case 'settings':
-      return canManageSettings(role)
-    default:
-      return true
-  }
+// Matriz de acceso a pantallas: debe mantenerse alineada con ROLE_MENU_ACCESS
+// de src/components/AppLayout.tsx. El acceso se deniega por defecto.
+const ROLE_PAGE_ACCESS: Record<Role, readonly string[]> = {
+  admin: ['companies','adminplans','users','support','sqlcenter','manual'],
+  tecnico: ['support','manual'],
+
+  dueno: [
+    'dashboard','command','summary','copilot','ask','ai_actions',
+    'pos','omnichannel','catalog','catorders','sales','dispatch_history',
+    'layaways','cartera','quotations','customers','devolutions','exchanges',
+    'sellers','employee_portal','routeplan','dispatch','goals',
+    'purchaseorders','purchases','payables','buyplan','suppliers','supplier_intel',
+    'products','priceshield','blindcount','warehouses','branch_balance',
+    'equipment_assets','categories','lots','kardex','labels',
+    'treasury','bankrecon','cash','expenses','anomaly_detector','compliance',
+    'reports','profit','predict','stats','map','history',
+    'cpa','accounting','accstate','costcenters','accsetup','accclose',
+    'taxes','erpbridge','support','api_ecosystem','team','subscription',
+    'settings','manual',
+  ],
+
+  admin_empresa: [
+    'dashboard','command','summary','copilot','ask','ai_actions',
+    'pos','omnichannel','catalog','catorders','sales','dispatch_history',
+    'layaways','cartera','quotations','customers','devolutions','exchanges',
+    'sellers','employee_portal','routeplan','dispatch','goals',
+    'purchaseorders','purchases','payables','buyplan','suppliers','supplier_intel',
+    'products','priceshield','blindcount','warehouses','branch_balance',
+    'equipment_assets','categories','lots','kardex','labels',
+    'treasury','bankrecon','cash','expenses','anomaly_detector','compliance',
+    'reports','profit','predict','stats','map','history',
+    'cpa','accounting','accstate','costcenters','accsetup','accclose',
+    'taxes','erpbridge','support','api_ecosystem','team','subscription',
+    'settings','manual',
+  ],
+
+  gerente: [
+    'dashboard','command','summary','copilot','ask','ai_actions',
+    'pos','omnichannel','catalog','catorders','sales','dispatch_history',
+    'layaways','cartera','quotations','customers','devolutions','exchanges',
+    'employee_portal','routeplan','dispatch','goals',
+    'purchaseorders','purchases','payables','buyplan','suppliers','supplier_intel',
+    'products','priceshield','blindcount','warehouses','branch_balance',
+    'equipment_assets','categories','lots','kardex','labels',
+    'cash','treasury','bankrecon','expenses','anomaly_detector','compliance',
+    'reports','profit','predict','stats','map','history','support','team','manual',
+  ],
+
+  contador: [
+    'dashboard','command','summary','copilot','ask',
+    'sales','dispatch_history','cartera','customers',
+    'purchaseorders','purchases','payables','suppliers',
+    'products','kardex','blindcount','treasury','bankrecon',
+    'cash','expenses','anomaly_detector','compliance',
+    'reports','profit','stats','history','cpa','accounting',
+    'accstate','costcenters','accsetup','accclose','taxes',
+    'erpbridge','manual',
+  ],
+
+  vendedor: [
+    'sales','catalog','catorders','customers','quotations',
+    'layaways','cartera','devolutions','exchanges',
+        'employee_portal','routeplan','dispatch','goals',
+    'products','dispatch_history','manual',
+  ],
+
+  cajero: [
+    'pos','sales','customers','devolutions','exchanges',
+    'layaways','cash','history','products','manual',
+  ],
+
+  almacen: [
+    'summary','products','warehouses','categories','kardex',
+    'lots','labels','priceshield','blindcount','branch_balance',
+    'purchaseorders','purchases','suppliers','buyplan',
+    'dispatch','dispatch_history','map','equipment_assets',
+    'predict','manual',
+  ],
+
+  comprador: [
+    'purchases','purchaseorders','payables','buyplan',
+    'suppliers','supplier_intel','products','categories',
+    'predict','manual',
+  ],
+
+  transportador: ['routeplan','dispatch','dispatch_history','map'],
+}
+
+const PAGE_ALIASES: Record<string, string> = {
+  despachos: 'dispatch_history',
+  trazabilidad: 'dispatch_history',
+  omnichannel_inbox: 'omnichannel',
+  ai_action_hub: 'ai_actions',
+  branch_rebalancing: 'branch_balance',
+  compliance_monitor: 'compliance',
+}
+
+function isPageAllowedForRole(page: string, role?: Role): boolean {
+  if (!role) return false
+  const canonicalPage = PAGE_ALIASES[page] ?? page
+  return ROLE_PAGE_ACCESS[role]?.includes(canonicalPage) ?? false
 }
 
 function AppContent() {
@@ -251,7 +243,7 @@ function AppContent() {
     scopeKey,
     defaultPage: defaultPageForRole,
     isAllowedPage: page =>
-      isPageAllowedForRole(page, user?.role, { isMasterAccount, isDemo }),
+      isPageAllowedForRole(page, user?.role),
   })
 
   // Alinear la pantalla inicial y el historial con el rol efectivo del usuario.
@@ -362,7 +354,7 @@ function AppContent() {
       } finally {
         checking = false
       }
-    }
+          }
 
     const intervalId = window.setInterval(
       checkDeviceHeartbeat,
@@ -540,7 +532,7 @@ function AppContent() {
           <p className="text-sm text-slate-500 mt-2">
             El administrador de tu empresa bloqueó este dispositivo.
             Contáctalo para recuperar el acceso.
-          </p>
+                      </p>
 
           <button
             onClick={() => void handleSignOut()}
@@ -609,10 +601,7 @@ function AppContent() {
     )
   }
 
-  const safeCurrent = isPageAllowedForRole(current, user.role, {
-    isMasterAccount,
-    isDemo,
-  })
+  const safeCurrent = isPageAllowedForRole(current, user.role)
     ? current
     : defaultPageForRole
 

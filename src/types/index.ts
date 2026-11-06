@@ -299,6 +299,48 @@ export interface CompanySummary {
   owner_name: string | null
   owner_email: string | null
   members_count: number
+  plan_type?: string | null
+  subscription_status?: string | null
+  trial_start?: string | null
+  trial_end?: string | null
+  subscription_start?: string | null
+  subscription_end?: string | null
+  created_at?: string | null
+}
+
+export type PlatformStaffRole =
+  | 'developer'
+  | 'operations_manager'
+  | 'support_manager'
+  | 'technician'
+  | 'commercial'
+  | 'billing'
+  | 'customer_success'
+
+export interface PlatformStaffMember {
+  user_id: string
+  email: string
+  full_name: string | null
+  profile_role: Role
+  staff_role: PlatformStaffRole
+  active: boolean
+  permissions: Record<string, boolean>
+  notes: string | null
+  granted_by: string | null
+  granted_at: string | null
+  updated_at: string | null
+}
+
+export interface PlatformAuditEntry {
+  id: string
+  actor_id: string
+  actor_email: string | null
+  target_company_id: string | null
+  target_user_id: string | null
+  target_email: string | null
+  event_type: string
+  event_data: Record<string, unknown>
+  created_at: string
 }
 
 export interface Subscription {
@@ -386,20 +428,6 @@ export interface CompanyConfig {
   catalog_payment_methods?: CatalogPaymentMethodConfig[] | null
   catalog_delivery_modes?: CatalogDeliveryMode[] | null
   whatsapp_settings?: CompanyWhatsAppSettings | null
-  erp_sync_preferences?: ErpSyncEntityPreferences | null
-}
-
-export interface ErpSyncEntityPreferences {
-  customers: boolean
-  products: boolean
-  invoices: boolean
-  customers_direction?: 'bidirectional' | 'push_to_erp' | 'pull_from_erp'
-  products_direction?: 'bidirectional' | 'push_to_erp' | 'pull_from_erp'
-  invoices_direction?: 'bidirectional' | 'push_to_erp' | 'pull_from_erp'
-  include_suppliers?: boolean
-  sync_stock?: boolean
-  updated_at?: string
-  updated_by?: string
 }
 
 export interface PayrollMovement {

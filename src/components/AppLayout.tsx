@@ -29,7 +29,7 @@ import { useWarehouse } from '../lib/warehouseContext'
 import AvatarCapture, { UserAvatar } from './AvatarCapture'
 import CommandPalette, { type PaletteItem } from './CommandPalette'
 import { useBackOverlay } from '../lib/navigation'
-import type { CompanySummary, Role } from '../types'
+import type { CompanySummary, Role, SupportTicket } from '../types'
 import {
   ArrowLeft,
   ArrowLeftRight,
@@ -102,6 +102,7 @@ import {
   Scale,
   ShieldAlert,
   Code,
+  Eye,
   UserCheck,
 } from 'lucide-react'
 import { getActiveSupportPass, revokeSupportPass } from '../lib/innovationsRepo'
@@ -221,6 +222,8 @@ export default function AppLayout({
   previousPageLabel = null,
   onGoBack,
   exitHintVisible = false,
+  inspectedSupportTicket = null,
+  onClearInspectedSupportTicket,
   onSignOut,
   onExitDemoToLogin,
   onExitDemoToRegister,
@@ -232,6 +235,8 @@ export default function AppLayout({
   previousPageLabel?: string | null
   onGoBack?: () => void
   exitHintVisible?: boolean
+  inspectedSupportTicket?: SupportTicket | null
+  onClearInspectedSupportTicket?: () => void
   onSignOut?: () => void
   onExitDemoToLogin?: () => void
   onExitDemoToRegister?: () => void
@@ -355,9 +360,23 @@ export default function AppLayout({
       setMasterCompanies([])
       return
     }
-    supabase.rpc('admin_listar_empresas').then(({ data, error }) => {
-      if (!active || error || !Array.isArray(data)) return
-      setMasterCompanies(data as CompanySummary[])
+    Promise.all([
+      supabase.rpc('admin_listar_empresas_comerciales'),
+      supabase.rpc('admin_listar_empresas'),
+    ]).then(([commercialRes, legacyRes]) => {
+      if (!active) return
+      const mergedMap = new Map<string, CompanySummary>()
+      if (!legacyRes.error && Array.isArray(legacyRes.data)) {
+        for (const c of legacyRes.data as CompanySummary[]) {
+          if (c.company_id) mergedMap.set(c.company_id, c)
+        }
+      }
+      if (!commercialRes.error && Array.isArray(commercialRes.data)) {
+        for (const c of commercialRes.data as CompanySummary[]) {
+          if (c.company_id) mergedMap.set(c.company_id, c)
+        }
+      }
+      setMasterCompanies(Array.from(mergedMap.values()))
     })
     return () => {
       active = false
@@ -497,8 +516,15 @@ export default function AppLayout({
   )
 
   const allowedItems = useMemo(
-    () => navItems.filter(n => n.allowed && !!role && ROLE_MENU_ACCESS[role]?.includes(n.id)),
-    [navItems, role]
+    () =>
+      navItems.filter(
+        n =>
+          n.allowed &&
+          !!role &&
+          (ROLE_MENU_ACCESS[role]?.includes(n.id) ||
+            (n.id === 'sqlcenter' && (isMasterAccount || isDemo)))
+      ),
+    [navItems, role, isMasterAccount, isDemo]
   )
 
   const paletteItems: PaletteItem[] = useMemo(
@@ -722,7 +748,7 @@ export default function AppLayout({
             </select>
           )}
 
-          {activeEffectiveRole === 'admin' && (
+          {isMasterAccount && (
             <button
               type="button"
               onClick={() => handleNav('sqlcenter')}
@@ -796,24 +822,61 @@ export default function AppLayout({
   function renderSupportPassBanner() {
     if (!activeSupportPass) return null
     return (
-      <div className="bg-red-700 text-white px-4 py-2 text-xs flex flex-wrap items-center justify-between gap-3 shadow-md border-b border-red-800">
+      <div className="bg-red-700 text-white px-4 py-2 text-xs flex flex-wrap items-center justify-between gap-3 border-b border-red-800">
         <div className="flex items-center gap-2">
-          <ShieldAlert className="w-4 h-4 text-amber-300 animate-pulse shrink-0" />
+          <ShieldAlert className="w-4 h-4 text-amber-300 shrink-0" />
           <span>
             <strong>Pase de Soporte Técnico Activo:</strong> Autorizado para{' '}
             <strong>{activeSupportPass.scope_level.replace(/_/g, ' ')}</strong> (Código:{' '}
-            <span className="font-mono font-bold tracking-widest bg-red-800 px-1.5 py-0.5 rounded">
+            <span className="font-mono font-bold tracking-widest bg-red-800 px-1.5 py-0.5 rounded tabular-nums">
               {activeSupportPass.access_code}
             </span>
             ).
           </span>
         </div>
         <button
+          type="button"
           onClick={handleRevokePass}
-          className="bg-white hover:bg-red-50 text-red-800 px-3 py-1 rounded-lg text-xs font-bold transition-colors cursor-pointer shadow-xs"
+          className="bg-white hover:bg-red-50 text-red-800 px-3 py-1 rounded-lg text-xs font-bold transition-colors cursor-pointer whitespace-nowrap shrink-0"
         >
           Revocar Acceso Inmediatamente
         </button>
+      </div>
+    )
+  }
+
+  function renderInspectedTicketBanner() {
+    if (!inspectedSupportTicket) return null
+    return (
+      <div className="bg-amber-50 border-b border-amber-200 px-4 py-2 text-xs text-amber-950 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2 min-w-0">
+          <Eye className="w-4 h-4 text-amber-700 shrink-0" />
+          <span className="truncate">
+            <strong>Inspección autorizada de ticket {inspectedSupportTicket.ticket_number}:</strong>{' '}
+            {inspectedSupportTicket.company_name || 'Empresa cliente'} · Código{' '}
+            <span className="font-mono font-semibold tabular-nums">
+              {inspectedSupportTicket.authorization_code || 'AUT'}
+            </span>
+          </span>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={() => handleNav('support')}
+            className="px-2.5 py-1 rounded-lg bg-amber-900 text-white text-xs font-semibold hover:bg-amber-800 whitespace-nowrap"
+          >
+            Volver a soporte técnico
+          </button>
+          {onClearInspectedSupportTicket && (
+            <button
+              type="button"
+              onClick={onClearInspectedSupportTicket}
+              className="px-2.5 py-1 rounded-lg border border-amber-300 bg-white text-amber-900 text-xs font-medium hover:bg-amber-100 whitespace-nowrap"
+            >
+              Cerrar inspección
+            </button>
+          )}
+        </div>
       </div>
     )
   }
@@ -1230,6 +1293,7 @@ export default function AppLayout({
 
       <main className="flex-1 min-w-0 overflow-y-auto pt-14 md:pt-0">
         {renderSupportPassBanner()}
+        {renderInspectedTicketBanner()}
         {renderDemoBanner()}
         {renderMasterDevBanner()}
         {renderTrialBanner()}

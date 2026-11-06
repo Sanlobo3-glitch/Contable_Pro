@@ -161,7 +161,7 @@ async function startServer() {
     ? await (
         await import('vite')
       ).createServer({
-        server: { middlewareMode: true, hmr: false, allowedHosts: true },
+        server: { middlewareMode: true, hmr: false, ws: false, allowedHosts: true },
         appType: 'spa',
       })
     : null

@@ -1,7 +1,13 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { supabase } from '../lib/supabase'
-import type { UserProfile, Role, CompanySummary } from '../types'
+import type {
+  UserProfile,
+  Role,
+  CompanySummary,
+  PlatformStaffMember,
+  PlatformStaffRole,
+} from '../types'
 import {
   X,
   Search,
@@ -13,12 +19,33 @@ import {
   AlertTriangle,
   ShieldCheck,
   ShieldOff,
+  UserPlus,
+  KeyRound,
 } from 'lucide-react'
 import { useAuth, canManageUsers, getRoleLabel } from '../lib/auth'
 import AvatarCapture, { UserAvatar } from '../components/AvatarCapture'
-import { fmtDate } from '../lib/currency'
+import { fmtDate, fmtDateTime } from '../lib/currency'
 
 type FilterKey = 'all' | 'dueno' | 'vendedor' | 'attention'
+type UsersSectionTab = 'internal' | 'platform_staff'
+
+const PLATFORM_STAFF_ROLE_LABELS: Record<PlatformStaffRole, string> = {
+  developer: 'Desarrollador de plataforma',
+  operations_manager: 'Gerente de operaciones',
+  support_manager: 'Líder de soporte técnico',
+  technician: 'Técnico especialista',
+  commercial: 'Ejecutivo comercial',
+  billing: 'Facturación y cobranza',
+  customer_success: 'Éxito del cliente',
+}
+
+const PLATFORM_PERMISSION_OPTIONS = [
+  { key: 'manage_plans', label: 'Activar y renovar planes' },
+  { key: 'view_commercial_companies', label: 'Consultar empresas clientes' },
+  { key: 'support_inbox', label: 'Atender bandeja de soporte' },
+  { key: 'sql_diagnostics', label: 'Diagnóstico SQL y mantenimiento' },
+  { key: 'audit_logs', label: 'Consultar auditoría central' },
+] as const
 
 interface AdminEditForm {
   full_name: string
@@ -61,6 +88,7 @@ export default function Users() {
   const canEdit = canManageUsers(currentUser?.role)
   const ownCompanyId = currentUser?.company_id || ''
 
+  const [activeTab, setActiveTab] = useState<UsersSectionTab>('internal')
   const [users, setUsers] = useState<UserProfile[]>([])
   const [companies, setCompanies] = useState<CompanySummary[]>([])
   const [filter, setFilter] = useState<FilterKey>('all')
@@ -72,6 +100,22 @@ export default function Users() {
     ok: boolean
     text: string
   } | null>(null)
+
+  // Equipo global de plataforma (platform_staff)
+  const [staffMembers, setStaffMembers] = useState<PlatformStaffMember[]>([])
+  const [staffNeedsMigration, setStaffNeedsMigration] = useState(false)
+  const [staffModalOpen, setStaffModalOpen] = useState(false)
+  const [staffUserId, setStaffUserId] = useState<string>('')
+  const [staffCustomUuid, setStaffCustomUuid] = useState<string>('')
+  const [staffRole, setStaffRole] = useState<PlatformStaffRole>('technician')
+  const [staffPermissions, setStaffPermissions] = useState<Record<string, boolean>>({
+    manage_plans: false,
+    view_commercial_companies: true,
+    support_inbox: true,
+    sql_diagnostics: false,
+    audit_logs: false,
+  })
+  const [staffNotes, setStaffNotes] = useState<string>('')
 
   const [editTarget, setEditTarget] = useState<UserProfile | null>(null)
   const [editForm, setEditForm] = useState<AdminEditForm | null>(null)
@@ -141,6 +185,22 @@ export default function Users() {
       } else {
         setCompanies([])
       }
+
+      if (currentUser?.role === 'admin') {
+        const staffRes = await supabase.rpc('admin_listar_equipo_plataforma')
+        if (!staffRes.error && Array.isArray(staffRes.data)) {
+          setStaffNeedsMigration(false)
+          setStaffMembers(staffRes.data as PlatformStaffMember[])
+        } else if (
+          staffRes.error &&
+          /admin_listar_equipo_plataforma|does not exist|schema cache|42883|PGRST202/i.test(
+            staffRes.error.message || ''
+          )
+        ) {
+          setStaffNeedsMigration(true)
+          setStaffMembers([])
+        }
+      }
     } catch (error) {
       setUsers([])
       setCompanies([])
@@ -155,7 +215,7 @@ export default function Users() {
       setBusy(false)
       setLoading(false)
     }
-  }, [canEdit, ownCompanyId])
+  }, [canEdit, ownCompanyId, currentUser?.role])
 
   useEffect(() => {
     void load()
@@ -411,6 +471,85 @@ export default function Users() {
     )
   }
 
+  function openAssignStaffModal(existing?: PlatformStaffMember) {
+    setFeedback(null)
+    if (existing) {
+      setStaffUserId(existing.user_id)
+      setStaffCustomUuid('')
+      setStaffRole(existing.staff_role)
+      setStaffPermissions({
+        manage_plans: Boolean(existing.permissions?.manage_plans),
+        view_commercial_companies: Boolean(existing.permissions?.view_commercial_companies),
+        support_inbox: Boolean(existing.permissions?.support_inbox),
+        sql_diagnostics: Boolean(existing.permissions?.sql_diagnostics),
+        audit_logs: Boolean(existing.permissions?.audit_logs),
+      })
+      setStaffNotes(existing.notes || '')
+    } else {
+      const firstCandidate = users.find(u => u.id !== currentUser?.id && u.active)
+      setStaffUserId(firstCandidate?.id || '')
+      setStaffCustomUuid('')
+      setStaffRole('technician')
+      setStaffPermissions({
+        manage_plans: false,
+        view_commercial_companies: true,
+        support_inbox: true,
+        sql_diagnostics: false,
+        audit_logs: false,
+      })
+      setStaffNotes('')
+    }
+    setStaffModalOpen(true)
+  }
+
+  async function handleAssignPlatformStaff(e: React.FormEvent) {
+    e.preventDefault()
+    const targetId = (staffCustomUuid.trim() || staffUserId).trim()
+    if (!targetId) {
+      setFeedback({
+        ok: false,
+        text: 'Selecciona un usuario activo o ingresa su identificador UUID.',
+      })
+      return
+    }
+
+    setBusy(true)
+    setFeedback(null)
+    const { error } = await supabase.rpc('admin_asignar_personal_plataforma', {
+      p_user_id: targetId,
+      p_staff_role: staffRole,
+      p_permissions: staffPermissions,
+      p_notes: staffNotes.trim() || null,
+    })
+    setBusy(false)
+
+    if (error) {
+      setFeedback({ ok: false, text: error.message })
+      return
+    }
+
+    setStaffModalOpen(false)
+    setFeedback({
+      ok: true,
+      text: `Integrante asignado al equipo de plataforma (${PLATFORM_STAFF_ROLE_LABELS[staffRole]}).`,
+    })
+    await load()
+  }
+
+  async function handleTogglePlatformStaffActive(member: PlatformStaffMember) {
+    if (member.user_id === currentUser?.id || busy) return
+    await runRpc(
+      'admin_estado_personal_plataforma',
+      {
+        p_user_id: member.user_id,
+        p_active: !member.active,
+      },
+      `${member.full_name || member.email}: acceso en equipo de plataforma ${
+        !member.active ? 'reactivado' : 'suspendido'
+      }.`
+    )
+  }
+
   const metrics = useMemo(() => {
     const owners = users.filter(u => u.role === 'dueno').length
     const sellers = users.filter(u => u.role === 'vendedor').length
@@ -554,35 +693,79 @@ export default function Users() {
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={() => void load()}
-          disabled={busy}
-          className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-slate-200 bg-white text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 self-start sm:self-auto whitespace-nowrap"
-        >
-          <RefreshCw
-            className={`w-3.5 h-3.5 ${busy ? 'animate-spin' : ''}`}
-          />
-          Sincronizar usuarios
-        </button>
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
+          {currentUser?.role === 'admin' && (
+            <div className="inline-flex items-center p-1 rounded-lg bg-slate-100 border border-slate-200">
+              <button
+                type="button"
+                onClick={() => setActiveTab('internal')}
+                className={`px-3 py-1.5 rounded-md text-xs font-medium whitespace-nowrap shrink-0 transition-colors ${
+                  activeTab === 'internal'
+                    ? 'bg-slate-900 text-white'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Personal interno ({users.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('platform_staff')}
+                className={`px-3 py-1.5 rounded-md text-xs font-medium whitespace-nowrap shrink-0 transition-colors ${
+                  activeTab === 'platform_staff'
+                    ? 'bg-slate-900 text-white'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Equipo plataforma ({staffMembers.length})
+              </button>
+            </div>
+          )}
+
+          {activeTab === 'platform_staff' && currentUser?.role === 'admin' && (
+            <button
+              type="button"
+              disabled={busy || staffNeedsMigration}
+              onClick={() => openAssignStaffModal()}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800 disabled:opacity-50 whitespace-nowrap shrink-0"
+            >
+              <UserPlus className="w-3.5 h-3.5" />
+              Asignar integrante
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={() => void load()}
+            disabled={busy}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-slate-200 bg-white text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 whitespace-nowrap shrink-0"
+          >
+            <RefreshCw
+              className={`w-3.5 h-3.5 ${busy ? 'animate-spin' : ''}`}
+            />
+            Sincronizar
+          </button>
+        </div>
       </div>
 
-      <div className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-xs text-blue-900">
+      <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-700">
         <div className="flex items-start gap-2">
-          <Building2 className="w-4 h-4 mt-0.5 shrink-0" />
+          <Building2 className="w-4 h-4 mt-0.5 text-slate-600 shrink-0" />
           <div>
-            <p className="font-semibold">Directorio interno de pruebas</p>
-            <p className="mt-1">
-              Esta pantalla muestra únicamente los miembros de tu empresa
-              interna. Las empresas reales y sus responsables se gestionan
-              desde el módulo Empresas clientes. Los usuarios heredan el plan
-              y los dispositivos permitidos por su empresa.
+            <p className="font-semibold text-slate-900">
+              {activeTab === 'platform_staff'
+                ? 'Equipo global de plataforma (platform_staff)'
+                : 'Directorio interno de pruebas'}
+            </p>
+            <p className="mt-0.5 text-slate-600">
+              {activeTab === 'platform_staff'
+                ? 'Gestiona especialistas técnicos, soporte, desarrolladores y equipo comercial de Inventario Pro sin alterar la empresa asignada ni conceder acceso a datos privados de terceros.'
+                : 'Esta pantalla muestra únicamente los miembros de tu empresa interna de pruebas. Las empresas clientes y sus suscripciones se gestionan desde Empresas clientes.'}
             </p>
           </div>
         </div>
       </div>
 
-      {legacyMode && (
+      {legacyMode && activeTab === 'internal' && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 text-xs text-amber-900">
           La función principal de usuarios no está disponible. Revisa que la
           migración de administración de usuarios esté instalada en Supabase.
@@ -607,6 +790,131 @@ export default function Users() {
           </button>
         </div>
       )}
+
+      {activeTab === 'platform_staff' ? (
+        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+          <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <KeyRound className="w-4 h-4 text-slate-600" />
+              <h2 className="text-sm font-bold text-slate-900">
+                Integrantes del equipo global de plataforma
+              </h2>
+            </div>
+            <span className="text-xs text-slate-500 tabular-nums">
+              {staffMembers.length} registrados
+            </span>
+          </div>
+
+          {staffNeedsMigration ? (
+            <div className="p-6 text-xs text-amber-900 bg-amber-50">
+              La tabla <strong>platform_staff</strong> y sus funciones RPC requieren aplicar la <strong>Migración 000045</strong> desde el Centro SQL.
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 bg-slate-50/70 text-left text-xs text-slate-500">
+                    <th className="px-5 py-3 font-medium">Integrante</th>
+                    <th className="px-4 py-3 font-medium">Rol de plataforma</th>
+                    <th className="px-4 py-3 font-medium">Permisos funcionales</th>
+                    <th className="px-4 py-3 font-medium">Estado</th>
+                    <th className="px-5 py-3 font-medium text-right">Acciones</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {staffMembers.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="px-5 py-10 text-center text-xs text-slate-500">
+                        Aún no has asignado integrantes al equipo global de plataforma. Pulsa «Asignar integrante» para registrar técnicos o gerentes operativos.
+                      </td>
+                    </tr>
+                  ) : (
+                    staffMembers.map(member => {
+                      const activePermLabels = PLATFORM_PERMISSION_OPTIONS.filter(
+                        opt => Boolean(member.permissions?.[opt.key])
+                      ).map(opt => opt.label)
+
+                      return (
+                        <tr key={member.user_id} className="hover:bg-slate-50/70">
+                          <td className="px-5 py-3.5">
+                            <p className="font-semibold text-slate-900">
+                              {member.full_name || 'Sin nombre'}
+                            </p>
+                            <p className="text-xs text-slate-500">{member.email}</p>
+                            <p className="text-[11px] font-mono text-slate-400 mt-0.5">
+                              {member.user_id.slice(0, 8)} · Perfil {getRoleLabel(member.profile_role)}
+                            </p>
+                          </td>
+
+                          <td className="px-4 py-3.5 text-xs">
+                            <p className="font-semibold text-slate-900">
+                              {PLATFORM_STAFF_ROLE_LABELS[member.staff_role] || member.staff_role}
+                            </p>
+                            {member.notes && (
+                              <p className="text-[11px] text-slate-500 mt-0.5 max-w-[220px] truncate">
+                                {member.notes}
+                              </p>
+                            )}
+                          </td>
+
+                          <td className="px-4 py-3.5 text-xs text-slate-600 max-w-[280px]">
+                            {activePermLabels.length > 0
+                              ? activePermLabels.join(' · ')
+                              : 'Solo consulta básica'}
+                          </td>
+
+                          <td className="px-4 py-3.5 text-xs">
+                            <span
+                              className={`font-semibold ${
+                                member.active ? 'text-emerald-700' : 'text-red-600'
+                              }`}
+                            >
+                              {member.active ? 'Activo' : 'Suspendido'}
+                            </span>
+                            {member.updated_at && (
+                              <p className="text-[11px] text-slate-400 tabular-nums mt-0.5">
+                                {fmtDateTime(member.updated_at)}
+                              </p>
+                            )}
+                          </td>
+
+                          <td className="px-5 py-3.5 text-right whitespace-nowrap">
+                            <div className="inline-flex items-center justify-end gap-1.5">
+                              <button
+                                type="button"
+                                disabled={busy}
+                                onClick={() => openAssignStaffModal(member)}
+                                className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-medium text-slate-700 hover:bg-slate-50"
+                              >
+                                Permisos
+                              </button>
+                              {member.user_id !== currentUser?.id && (
+                                <button
+                                  type="button"
+                                  disabled={busy}
+                                  onClick={() => void handleTogglePlatformStaffActive(member)}
+                                  className={`px-2.5 py-1.5 rounded-lg border text-xs font-medium ${
+                                    member.active
+                                      ? 'border-amber-200 bg-white text-amber-800 hover:bg-amber-50'
+                                      : 'border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
+                                  }`}
+                                >
+                                  {member.active ? 'Suspender' : 'Activar'}
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      ) : (
+        <>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         <button
@@ -1277,6 +1585,150 @@ export default function Users() {
                 {busy ? 'Eliminando...' : 'Eliminar perfil'}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+        </>
+      )}
+
+      {/* Modal para asignar o actualizar integrante en Equipo Global de Plataforma */}
+      {staffModalOpen && (
+        <div
+          className="fixed inset-0 z-50 bg-slate-950/50 flex items-center justify-center p-4 overflow-y-auto"
+          onClick={() => !busy && setStaffModalOpen(false)}
+        >
+          <div
+            className="bg-white rounded-xl border border-slate-200 w-full max-w-lg overflow-hidden"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
+              <div>
+                <h2 className="text-base font-bold text-slate-900">
+                  Equipo global de plataforma
+                </h2>
+                <p className="text-xs text-slate-500">
+                  Asigna funciones administrativas o técnicas de plataforma sin modificar empresas externas.
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => setStaffModalOpen(false)}
+                className="p-1.5 rounded-lg text-slate-500 hover:bg-slate-100"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleAssignPlatformStaff} className="p-5 space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Usuario de tu empresa interna
+                </label>
+                <select
+                  value={staffUserId}
+                  onChange={e => setStaffUserId(e.target.value)}
+                  className={inputCls}
+                >
+                  <option value="">Selecciona un usuario o escribe un UUID abajo...</option>
+                  {users
+                    .filter(u => u.id !== currentUser?.id && u.active)
+                    .map(u => (
+                      <option key={u.id} value={u.id}>
+                        {u.full_name || u.email} ({u.email} · {getRoleLabel(u.role)})
+                      </option>
+                    ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  O identificador UUID directo del perfil (opcional)
+                </label>
+                <input
+                  value={staffCustomUuid}
+                  onChange={e => setStaffCustomUuid(e.target.value)}
+                  placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+                  className={`${inputCls} font-mono`}
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Rol dentro del equipo de plataforma
+                </label>
+                <select
+                  value={staffRole}
+                  onChange={e => setStaffRole(e.target.value as PlatformStaffRole)}
+                  className={inputCls}
+                >
+                  {(Object.entries(PLATFORM_STAFF_ROLE_LABELS) as [PlatformStaffRole, string][]).map(
+                    ([id, label]) => (
+                      <option key={id} value={id}>
+                        {label}
+                      </option>
+                    )
+                  )}
+                </select>
+              </div>
+
+              <div>
+                <p className="text-xs font-medium text-slate-700 mb-2">
+                  Permisos operativos en consola
+                </p>
+                <div className="space-y-2 rounded-lg border border-slate-200 p-3 bg-slate-50/70">
+                  {PLATFORM_PERMISSION_OPTIONS.map(opt => (
+                    <label
+                      key={opt.key}
+                      className="flex items-center gap-2 text-xs text-slate-700 select-none"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={Boolean(staffPermissions[opt.key])}
+                        onChange={e =>
+                          setStaffPermissions(prev => ({
+                            ...prev,
+                            [opt.key]: e.target.checked,
+                          }))
+                        }
+                        className="rounded border-slate-300"
+                      />
+                      <span>{opt.label}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Observaciones o alcance (opcional)
+                </label>
+                <input
+                  value={staffNotes}
+                  onChange={e => setStaffNotes(e.target.value)}
+                  placeholder="Ej. Técnico de soporte nivel 2 / Gestión comercial"
+                  className={inputCls}
+                />
+              </div>
+
+              <div className="pt-3 border-t border-slate-200 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setStaffModalOpen(false)}
+                  className="px-4 py-2 rounded-lg border border-slate-200 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={busy}
+                  className="px-4 py-2 rounded-lg bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800 disabled:opacity-50"
+                >
+                  {busy ? 'Guardando...' : 'Guardar en equipo'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

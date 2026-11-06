@@ -3,6 +3,8 @@ import {
   CheckCircle2,
   Clock,
   Database,
+  ExternalLink,
+  Eye,
   KeyRound,
   LifeBuoy,
   Lock,
@@ -16,6 +18,7 @@ import {
   X,
 } from 'lucide-react'
 import { useAuth, canManageTechSupport, getRoleLabel } from '../lib/auth'
+import { supabase } from '../lib/supabase'
 import { PAGE_LABELS, getPageLabel } from '../lib/navigation'
 import { useWarehouse } from '../lib/warehouseContext'
 import { useCurrency, fmtDateTime } from '../lib/currency'
@@ -76,11 +79,13 @@ function formatRemainingTime(untilIso: string | null): string {
 export default function TechSupport({
   currentOriginPage = 'dashboard',
   onNavigate,
+  onInspectTicketModule,
 }: {
   currentOriginPage?: string
   onNavigate?: (page: string) => void
+  onInspectTicketModule?: (ticket: SupportTicket, simulateUserRole?: boolean) => void
 }) {
-  const { user } = useAuth()
+  const { user, isMasterAccount, switchMasterRole } = useAuth()
   const { activeWarehouse, activeBranch } = useWarehouse()
   const cur = useCurrency()
 
@@ -314,6 +319,43 @@ export default function TechSupport({
     } finally {
       setBusy(false)
     }
+  }
+
+  function handleInspectAuthorizedModule(ticket: SupportTicket, simulateUserRole = false) {
+    if (!isSessionAuthorizationActive(ticket)) {
+      setFeedback({
+        ok: false,
+        text: 'La autorización de sesión no está activa o ha expirado.',
+      })
+      return
+    }
+
+    const targetPage = (ticket.module_page || 'dashboard').trim() || 'dashboard'
+
+    void supabase.rpc('support_register_access', {
+      p_company_id: ticket.company_id,
+      p_module: targetPage,
+      p_scope: ticket.authorization_scope || 'lectura_diagnostico',
+    })
+
+    if (onInspectTicketModule) {
+      onInspectTicketModule(ticket, simulateUserRole)
+      return
+    }
+
+    if (simulateUserRole && isMasterAccount) {
+      switchMasterRole(
+        ticket.user_role,
+        ticket.company_id
+          ? {
+              id: ticket.company_id,
+              name: ticket.company_name || 'Empresa cliente',
+            }
+          : null
+      )
+    }
+
+    onNavigate?.(targetPage)
   }
     const inputCls =
     'w-full px-3 py-2 rounded-lg border border-slate-300 bg-white text-sm text-slate-800 focus:outline-none focus:border-slate-700'
@@ -1041,11 +1083,38 @@ export default function TechSupport({
                         </div>
                       )}
 
-                      <div className="rounded-lg border border-amber-300 bg-white p-3 text-xs text-amber-950">
-                        <strong>Inspección de datos protegida.</strong>
-                        <p className="mt-1">
-                          Aunque un ticket tenga autorización, esta no concede por sí sola acceso a los datos de la empresa. La inspección directa permanece deshabilitada hasta integrar y verificar el permiso en las políticas RLS de cada tabla operativa.
-                        </p>
+                      <div className="rounded-lg border border-amber-300 bg-white p-3.5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                        <div className="text-xs text-slate-700 space-y-1">
+                          <p className="font-semibold text-slate-900">
+                            Sesión autorizada para inspección técnica ({getPageLabel(selectedTicket.module_page || 'dashboard')})
+                          </p>
+                          <p className="text-slate-600">
+                            Acceso auditable bajo consentimiento del titular · Rol del caso:{' '}
+                            <strong className="text-slate-800">{getRoleLabel(selectedTicket.user_role)}</strong>
+                          </p>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => handleInspectAuthorizedModule(selectedTicket, false)}
+                            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800 whitespace-nowrap shrink-0"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5" />
+                            Abrir pantalla ({getPageLabel(selectedTicket.module_page || 'dashboard')})
+                          </button>
+
+                          {isMasterAccount && (
+                            <button
+                              type="button"
+                              onClick={() => handleInspectAuthorizedModule(selectedTicket, true)}
+                              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-amber-300 bg-amber-50 text-amber-950 text-xs font-semibold hover:bg-amber-100 whitespace-nowrap shrink-0"
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                              Inspeccionar con rol ({getRoleLabel(selectedTicket.user_role)})
+                            </button>
+                          )}
+                        </div>
                       </div>
                     </div>
                   ) : (

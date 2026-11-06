@@ -11,9 +11,17 @@ import sqlCatalogCommerce from '../../supabase/migrations/20261103000018_ventas_
 import sqlWhatsappStoreLink from '../../supabase/migrations/20261103000019_enlace_tienda_og_y_estudio_whatsapp.sql?raw'
 import sqlAutoBrandSync from '../../supabase/migrations/20261103000020_sincronizacion_automatica_marca_y_cache_whatsapp.sql?raw'
 import sqlCommercialSuite21 from '../../supabase/migrations/20261104000021_cinco_soluciones_comerciales_avanzadas.sql?raw'
+import sqlGlobalAdminCommercial from '../../supabase/migrations/20261105000045_admin_global_comercial_y_equipo_plataforma.sql?raw'
+
+function sanitizeForPlpgsqlExecute(rawSql: string): string {
+  return rawSql.replace(/^\s*(BEGIN|COMMIT)\s*;\s*$/gim, '').trim()
+}
+
+const cleanGlobalAdminCommercialSql = sanitizeForPlpgsqlExecute(sqlGlobalAdminCommercial)
 
 export type SqlBundleId =
   | 'consolidated'
+  | 'global_admin_commercial'
   | 'commercial_suite_21'
   | 'whatsapp_store_link'
   | 'catalog_commerce'
@@ -43,7 +51,7 @@ export const SQL_SCRIPT_BUNDLES: SqlScriptBundle[] = [
     filename: 'inventariopro_consolidado_maestro_completo.sql',
     category: 'Recomendado',
     summary:
-      'Activa en una sola ejecución Toma Física Ciega, Plan Separe, Cambios Mano a Mano y Garantías, Conciliación Bancaria, Escudo de Precios, Enlace Propio de Tienda (/tienda/empresa), Ventas por Catálogo con Captures de Pago, Motor SQL en 1 clic, Rol Técnico y Despacho Contable (CPC).',
+      'Activa en una sola ejecución Toma Física Ciega, Plan Separe, Cambios Mano a Mano y Garantías, Conciliación Bancaria, Escudo de Precios, Enlace Propio de Tienda (/tienda/empresa), Ventas por Catálogo con Captures de Pago, Motor SQL en 1 clic, Rol Técnico, Despacho Contable (CPC) y Administración Global Comercial y Equipo de Plataforma.',
     targetTables: [
       'blind_inventory_sessions',
       'layaway_contracts',
@@ -52,6 +60,8 @@ export const SQL_SCRIPT_BUNDLES: SqlScriptBundle[] = [
       'catalog_orders',
       'support_tickets',
       'cpa_working_papers',
+      'platform_staff',
+      'platform_admin_audit',
       'sql_migration_log',
       'product_images',
       'financial_budgets',
@@ -60,7 +70,7 @@ export const SQL_SCRIPT_BUNDLES: SqlScriptBundle[] = [
     sql: [
       '-- ============================================================================',
       '-- INVENTARIOPRO · PAQUETE CONSOLIDADO MAESTRO PARA SUPABASE',
-      '-- Incluye Migraciones 000013 a 000021 (100% idempotente)',
+      '-- Incluye Migraciones 000013 a 000045 (100% idempotente)',
       '-- Al ejecutarlo una vez, habilita también la ejecución en 1 clic desde la web.',
       '-- ============================================================================',
       '',
@@ -81,7 +91,19 @@ export const SQL_SCRIPT_BUNDLES: SqlScriptBundle[] = [
       sqlCommercialSuite21,
       '',
       sqlAdminEngine,
+      '',
+      cleanGlobalAdminCommercialSql,
     ].join('\n'),
+  },
+  {
+    id: 'global_admin_commercial',
+    title: 'Administración Global Comercial y Equipo de Plataforma (Migración 000045)',
+    filename: '20261105000045_admin_global_comercial_y_equipo_plataforma.sql',
+    category: 'Recomendado',
+    summary:
+      'Crea las tablas platform_staff y platform_admin_audit con aislamiento estricto multiempresa y las funciones RPC globales para activar planes por empresa cliente, reactivar pruebas, suspender/reactivar suscripciones, gestionar equipo de plataforma y consultar auditoría central.',
+    targetTables: ['platform_staff', 'platform_admin_audit'],
+    sql: cleanGlobalAdminCommercialSql,
   },
   {
     id: 'commercial_suite_21',

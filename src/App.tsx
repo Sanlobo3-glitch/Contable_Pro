@@ -89,9 +89,10 @@ import {
   touchDevice,
   type DeviceState,
 } from './lib/devices'
+import { isSessionAuthorizationActive } from './lib/supportTickets'
 import { useCurrency } from './lib/currency'
 import CurrencySetup from './components/CurrencySetup'
-import type { Role } from './types'
+import type { Role, SupportTicket } from './types'
 
 function getPublicCatalogStoreKey(): string | null {
   return getPublicStoreIdentifierFromLocation()
@@ -211,15 +212,44 @@ const PAGE_ALIASES: Record<string, string> = {
   compliance_monitor: 'compliance',
 }
 
-function isPageAllowedForRole(page: string, role?: Role): boolean {
+function isPageAllowedForRole(
+  page: string,
+  role?: Role,
+  opts?: {
+    isMasterAccount?: boolean
+    isDemo?: boolean
+    inspectedSupportTicket?: SupportTicket | null
+  }
+): boolean {
   if (!role) return false
   const canonicalPage = PAGE_ALIASES[page] ?? page
+  if (canonicalPage === 'sqlcenter' && (opts?.isMasterAccount || opts?.isDemo)) {
+    return true
+  }
+  if (
+    opts?.inspectedSupportTicket &&
+    isSessionAuthorizationActive(opts.inspectedSupportTicket) &&
+    (opts.inspectedSupportTicket.module_page === canonicalPage ||
+      opts.inspectedSupportTicket.module_page === page)
+  ) {
+    return true
+  }
   return ROLE_PAGE_ACCESS[role]?.includes(canonicalPage) ?? false
 }
 
 function AppContent() {
-  const { user, loading, signOut, isDemo, isMasterAccount, enterDemo, exitDemo } = useAuth()
+  const { user, loading, signOut, isDemo, isMasterAccount, switchMasterRole, enterDemo, exitDemo } = useAuth()
   const cur = useCurrency()
+
+  const [inspectedSupportTicket, setInspectedSupportTicket] = useState<SupportTicket | null>(null)
+  const inspectedTicketRef = useRef<SupportTicket | null>(null)
+  const pendingRoleTargetPageRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    setInspectedSupportTicket(null)
+    inspectedTicketRef.current = null
+    pendingRoleTargetPageRef.current = null
+  }, [user?.id])
 
   const scopeKey = isDemo ? 'demo' : (user?.id ?? null)
   const defaultPageForRole = getRoleHomePage(user?.role)
@@ -243,7 +273,11 @@ function AppContent() {
     scopeKey,
     defaultPage: defaultPageForRole,
     isAllowedPage: page =>
-      isPageAllowedForRole(page, user?.role),
+      isPageAllowedForRole(page, user?.role, {
+        isMasterAccount,
+        isDemo,
+        inspectedSupportTicket: inspectedSupportTicket ?? inspectedTicketRef.current,
+      }),
   })
 
   // Alinear la pantalla inicial y el historial con el rol efectivo del usuario.
@@ -265,7 +299,10 @@ function AppContent() {
     const hasExplicitPage = Boolean(new URLSearchParams(window.location.search).get('vista'))
     if (!previousRole && hasExplicitPage) return
 
-    navigateToPage(getRoleHomePage(nextRole), { resetStack: true })
+    const pendingTarget = pendingRoleTargetPageRef.current
+    pendingRoleTargetPageRef.current = null
+
+    navigateToPage(pendingTarget || getRoleHomePage(nextRole), { resetStack: true })
   }, [user?.role, navigateToPage])
 
   // Nunca iniciar una sesión como autorizada por defecto.
@@ -601,7 +638,40 @@ function AppContent() {
     )
   }
 
-  const safeCurrent = isPageAllowedForRole(current, user.role)
+  function handleInspectTicketModule(ticket: SupportTicket, simulateUserRole = false) {
+    if (!isSessionAuthorizationActive(ticket)) return
+    const targetModule = (ticket.module_page || 'dashboard').trim() || 'dashboard'
+
+    inspectedTicketRef.current = ticket
+    setInspectedSupportTicket(ticket)
+
+    if (simulateUserRole && isMasterAccount) {
+      if (user && ticket.user_role !== user.role) {
+        pendingRoleTargetPageRef.current = targetModule
+      }
+      switchMasterRole(
+        ticket.user_role,
+        ticket.company_id
+          ? {
+              id: ticket.company_id,
+              name: ticket.company_name || 'Empresa cliente',
+            }
+          : null
+      )
+      if (!user || ticket.user_role === user.role) {
+        navigateToPage(targetModule)
+      }
+      return
+    }
+
+    navigateToPage(targetModule)
+  }
+
+  const safeCurrent = isPageAllowedForRole(current, user.role, {
+    isMasterAccount,
+    isDemo,
+    inspectedSupportTicket: inspectedSupportTicket ?? inspectedTicketRef.current,
+  })
     ? current
     : defaultPageForRole
 
@@ -635,7 +705,7 @@ function AppContent() {
     users: <Users />,
     settings: <Settings />,
     history: <History />,
-    adminplans: <AdminPlans />,
+    adminplans: <AdminPlans onNavigate={navigateToPage} />,
     companies: <CompanyClients onNavigate={navigateToPage} />,
     team: <TeamDevices onNavigate={navigateToPage} />,
     sellers: <SellersPayroll onNavigate={navigateToPage} />,
@@ -665,7 +735,13 @@ function AppContent() {
     trazabilidad: <DispatchHistory onNavigate={navigateToPage} />,
     ask: <AskCopilot onNavigate={navigateToPage} />,
     lots: <Lots onNavigate={navigateToPage} />,
-    support: <TechSupport currentOriginPage={safeCurrent} onNavigate={navigateToPage} />,
+    support: (
+      <TechSupport
+        currentOriginPage={safeCurrent}
+        onNavigate={navigateToPage}
+        onInspectTicketModule={handleInspectTicketModule}
+      />
+    ),
     sqlcenter: <SqlAdminCenter />,
     manual: <Manual role={user.role} onNavigate={navigateToPage} />,
     omnichannel: <OmnichannelInbox onNavigate={navigateToPage} />,
@@ -691,6 +767,11 @@ function AppContent() {
       previousPageLabel={previousPageLabel}
       onGoBack={goBack}
       exitHintVisible={exitHintVisible}
+      inspectedSupportTicket={inspectedSupportTicket}
+      onClearInspectedSupportTicket={() => {
+        inspectedTicketRef.current = null
+        setInspectedSupportTicket(null)
+      }}
       onSignOut={() => void handleSignOut()}
       onExitDemoToLogin={() => handleExitDemoToAuth('login')}
       onExitDemoToRegister={() => handleExitDemoToAuth('register')}

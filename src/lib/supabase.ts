@@ -2082,6 +2082,46 @@ function createMockSupabase(silent = false): SupabaseClient {
         created_at: daysAgoIso(2, 3),
         updated_at: daysAgoIso(2, 1),
       },
+      {
+        id: 'sup-tk-4',
+        ticket_number: 'SOP-1043',
+        company_id: 'co-client-101',
+        company_name: 'Supermercados El Trébol S.A.',
+        user_id: 'client-user-101',
+        user_name: 'Roberto Mendoza',
+        user_email: 'gerencia@eltrebol.com',
+        user_role: 'dueno',
+        category: 'ventas_pos',
+        priority: 'alta',
+        subject: 'Revisión de cierre fiscal diario y desglose de cobranzas',
+        description: 'Autorizo inspección temporal en el módulo de ventas para verificar el resumen por forma de pago del turno vespertino.',
+        module_page: 'sales',
+        session_authorized: true,
+        authorization_code: 'AUT-9104-IP',
+        authorized_at: daysAgoIso(0, 0.6),
+        authorized_until: new Date(Date.now() + 24 * 3600 * 1000).toISOString(),
+        revoked_at: null,
+        authorization_scope: 'intervencion_asistida',
+        session_snapshot: {
+          captured_at: daysAgoIso(0, 0.6),
+          active_page: 'sales',
+          active_page_label: 'Ventas',
+          user_role: 'Dueño',
+          warehouse_name: 'Sede Principal El Trébol',
+          branch_name: 'Casa Matriz',
+          currency: 'USD',
+          platform: 'Windows · Chrome Desktop',
+          online: true,
+        },
+        status: 'pendiente',
+        assigned_to: null,
+        assigned_name: null,
+        tech_diagnosis: null,
+        resolution_notes: null,
+        resolved_at: null,
+        created_at: daysAgoIso(0, 0.6),
+        updated_at: daysAgoIso(0, 0.6),
+      },
     ],
     cpa_working_papers: [
       {
@@ -2335,6 +2375,139 @@ function createMockSupabase(silent = false): SupabaseClient {
         quotation_id: null,
         created_at: daysAgoIso(0, 2.2),
         updated_at: daysAgoIso(0, 1.2),
+      },
+    ],
+    demo_client_companies: [
+      {
+        company_id: 'co-client-101',
+        company_name: 'Supermercados El Trébol S.A.',
+        owner_name: 'Roberto Mendoza',
+        owner_email: 'gerencia@eltrebol.com',
+        members_count: 14,
+        plan_type: 'empresarial',
+        subscription_status: 'active',
+        trial_start: null,
+        trial_end: null,
+        subscription_start: daysAgoIso(42),
+        subscription_end: trialEndIso,
+        created_at: daysAgoIso(45),
+      },
+      {
+        company_id: 'co-client-102',
+        company_name: 'Farmacia Salud Integral C.A.',
+        owner_name: 'Dra. Patricia Gómez',
+        owner_email: 'administracion@farmaciasalud.com',
+        members_count: 6,
+        plan_type: 'profesional',
+        subscription_status: 'trial',
+        trial_start: daysAgoIso(3),
+        trial_end: new Date(Date.now() + 4 * 86400000).toISOString(),
+        subscription_start: null,
+        subscription_end: null,
+        created_at: daysAgoIso(4),
+      },
+      {
+        company_id: 'co-client-103',
+        company_name: 'Repuestos y Motores Oriente S.R.L.',
+        owner_name: 'Héctor Villalobos',
+        owner_email: 'ventas@motoresoriente.com',
+        members_count: 9,
+        plan_type: 'emprendedor',
+        subscription_status: 'expired',
+        trial_start: daysAgoIso(18),
+        trial_end: daysAgoIso(11),
+        subscription_start: null,
+        subscription_end: null,
+        created_at: daysAgoIso(20),
+      },
+    ],
+    platform_staff: [
+      {
+        user_id: 'demo-tecnico-1',
+        staff_role: 'support_manager',
+        active: true,
+        permissions: {
+          manage_plans: false,
+          view_commercial_companies: true,
+          support_inbox: true,
+          sql_diagnostics: true,
+          audit_logs: true,
+        },
+        notes: 'Líder técnico de soporte y sesiones autorizadas',
+        granted_by: 'demo-owner-1',
+        granted_at: daysAgoIso(30),
+        updated_at: daysAgoIso(5),
+      },
+      {
+        user_id: 'demo-admin-emp-1',
+        staff_role: 'operations_manager',
+        active: true,
+        permissions: {
+          manage_plans: true,
+          view_commercial_companies: true,
+          support_inbox: false,
+          sql_diagnostics: false,
+          audit_logs: true,
+        },
+        notes: 'Activación comercial y seguimiento de suscripciones',
+        granted_by: 'demo-owner-1',
+        granted_at: daysAgoIso(18),
+        updated_at: daysAgoIso(2),
+      },
+    ],
+    platform_admin_audit: [
+      {
+        id: 'paud-demo-1',
+        actor_id: 'demo-owner-1',
+        actor_email: 'sanlobo3@hotmail.com',
+        target_company_id: 'co-client-101',
+        target_user_id: null,
+        target_email: null,
+        event_type: 'company_plan_activated',
+        event_data: {
+          previous_plan: 'profesional',
+          previous_status: 'trial',
+          new_plan: 'empresarial',
+          months: 3,
+          subscription_end: trialEndIso,
+          note: 'Comprobante bancario verificado #88412',
+        },
+        created_at: daysAgoIso(1, 2),
+      },
+      {
+        id: 'paud-demo-2',
+        actor_id: 'demo-owner-1',
+        actor_email: 'sanlobo3@hotmail.com',
+        target_company_id: 'co-client-102',
+        target_user_id: null,
+        target_email: null,
+        event_type: 'company_trial_granted',
+        event_data: {
+          days: 7,
+        },
+        created_at: daysAgoIso(3, 1),
+      },
+      {
+        id: 'paud-demo-3',
+        actor_id: 'demo-owner-1',
+        actor_email: 'sanlobo3@hotmail.com',
+        target_company_id: null,
+        target_user_id: 'demo-tecnico-1',
+        target_email: 'soporte@inventariopro.demo',
+        event_type: 'platform_staff_assigned',
+        event_data: {
+          previous_role: null,
+          previous_active: null,
+          new_role: 'support_manager',
+          permissions: {
+            manage_plans: false,
+            view_commercial_companies: true,
+            support_inbox: true,
+            sql_diagnostics: true,
+            audit_logs: true,
+          },
+        },
+        created_at: daysAgoIso(5, 4),
       },
     ],
   }
@@ -3146,19 +3319,24 @@ function createMockSupabase(silent = false): SupabaseClient {
       }
       case 'admin_listar_empresas': {
         const cfg = getTable('company_config')[0]
+        const ownCompanyRow = {
+          company_id: DEMO_COMPANY_ID,
+          company_name: cfg?.name || 'Comercial Demo',
+          owner_name: 'Administrador Demo',
+          owner_email: 'admin@empresa.com',
+          members_count: getTable('profiles').filter(p => (p.company_id || DEMO_COMPANY_ID) === DEMO_COMPANY_ID).length,
+          plan_type: 'profesional',
+          subscription_status: 'active',
+          trial_start: daysAgoIso(90),
+          trial_end: trialEndIso,
+          subscription_start: daysAgoIso(90),
+          subscription_end: trialEndIso,
+          created_at: daysAgoIso(90),
+        }
         return {
           data: [
-            {
-              company_id: DEMO_COMPANY_ID,
-              company_name: cfg?.name || 'Comercial Demo',
-              owner_name: 'Administrador Demo',
-              owner_email: 'admin@empresa.com',
-              members_count: getTable('profiles').length,
-              plan_type: 'profesional',
-              subscription_status: 'active',
-              trial_end: trialEndIso,
-              subscription_end: trialEndIso,
-            },
+            ownCompanyRow,
+            ...getTable('demo_client_companies').map(c => ({ ...c })),
           ],
           error: null,
         }
@@ -6168,11 +6346,24 @@ function createMockSupabase(silent = false): SupabaseClient {
               { name: 'cpa_working_papers', label: 'Papeles de trabajo y firma CPC', installed: true },
               { name: 'acc_accounts', label: 'Plan de cuentas contables', installed: true },
               { name: 'acc_entries', label: 'Libro diario y comprobantes', installed: true },
+              { name: 'platform_staff', label: 'Equipo interno de plataforma', installed: true },
+              { name: 'platform_admin_audit', label: 'Auditoría comercial del plano global', installed: true },
               { name: 'sql_migration_log', label: 'Bitácora de migraciones SQL', installed: true },
             ],
             rpcs: [
               { name: 'is_tech_support', label: 'Validador RLS de soporte técnico', installed: true },
               { name: 'admin_guardar_usuario_completo', label: 'Gestión integral de roles (11 perfiles)', installed: true },
+              { name: 'admin_listar_empresas_comerciales', label: 'Listado comercial multiempresa', installed: true },
+              { name: 'admin_activar_plan_empresa', label: 'Activación de planes por empresa', installed: true },
+              { name: 'admin_reactivar_prueba_empresa', label: 'Concesión de pruebas gratuitas por empresa', installed: true },
+              { name: 'admin_cambiar_estado_empresa', label: 'Suspensión y reactivación comercial de empresas', installed: true },
+              { name: 'admin_listar_equipo_plataforma', label: 'Listado del equipo global de plataforma', installed: true },
+              { name: 'admin_asignar_personal_plataforma', label: 'Asignación de cargos y permisos de plataforma', installed: true },
+              { name: 'admin_estado_personal_plataforma', label: 'Activación/suspensión de integrantes globales', installed: true },
+              { name: 'admin_listar_auditoria_plataforma', label: 'Bitácora de auditoría del administrador central', installed: true },
+              { name: 'support_grant_ticket_authorization', label: 'Concesión auditable de sesión de soporte', installed: true },
+              { name: 'support_has_active_authorization', label: 'Verificación de permiso de acceso a soporte', installed: true },
+              { name: 'support_register_access', label: 'Registro de auditoría de entrada a soporte', installed: true },
               { name: 'actualizar_imagen_producto', label: 'Sincronización de imágenes POS/Catálogo', installed: true },
               { name: 'obtener_catalogo_publico', label: 'Catálogo público multiempresa', installed: true },
               { name: 'resolver_catalogo_publico', label: 'Resolución de tienda por alias /tienda/... o UUID', installed: true },
@@ -6212,6 +6403,425 @@ function createMockSupabase(silent = false): SupabaseClient {
           },
           error: null,
         }
+      }
+      case 'admin_listar_empresas_comerciales': {
+        const list = getTable('demo_client_companies')
+          .map(c => ({ ...c }))
+          .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')))
+        return { data: list, error: null }
+      }
+      case 'admin_activar_plan_empresa': {
+        const companyId = String(args?.p_company_id || '').trim()
+        const plan = String(args?.p_plan || '').trim()
+        const months = Number(args?.p_months)
+        const note = args?.p_note ? String(args.p_note).trim() || null : null
+        if (!companyId || companyId === DEMO_COMPANY_ID) {
+          return { data: null, error: { message: 'Esta operación solo aplica a empresas clientes' } }
+        }
+        if (!['emprendedor', 'profesional', 'empresarial', 'corporativo'].includes(plan)) {
+          return { data: null, error: { message: 'Plan inválido' } }
+        }
+        if (!Number.isFinite(months) || months < 0 || months > 120) {
+          return { data: null, error: { message: 'La duración debe estar entre 0 y 120 meses' } }
+        }
+        const co = getTable('demo_client_companies').find(c => c.company_id === companyId)
+        if (!co) {
+          return { data: null, error: { message: 'No existe suscripción para esta empresa' } }
+        }
+        const prevPlan = co.plan_type ?? null
+        const prevStatus = co.subscription_status ?? null
+        const baseMs =
+          co.subscription_status === 'active' && co.subscription_end && new Date(co.subscription_end).getTime() > Date.now()
+            ? new Date(co.subscription_end).getTime()
+            : Date.now()
+        const subEnd = months === 0 ? null : new Date(baseMs + months * 30 * 86400000).toISOString()
+        co.plan_type = plan
+        co.subscription_status = 'active'
+        co.subscription_start = prevStatus === 'active' && co.subscription_start ? co.subscription_start : nowIso()
+        co.subscription_end = subEnd
+        co.trial_start = null
+        co.trial_end = null
+        getTable('platform_admin_audit').unshift({
+          id: genId(),
+          actor_id: currentSession?.user?.id || 'demo-owner-1',
+          actor_email: currentSession?.user?.email || 'sanlobo3@hotmail.com',
+          target_company_id: companyId,
+          target_user_id: null,
+          target_email: null,
+          event_type: 'company_plan_activated',
+          event_data: {
+            previous_plan: prevPlan,
+            previous_status: prevStatus,
+            new_plan: plan,
+            months,
+            subscription_end: subEnd,
+            note,
+          },
+          created_at: nowIso(),
+        })
+        return {
+          data: {
+            ok: true,
+            company_id: companyId,
+            plan_type: plan,
+            subscription_status: 'active',
+            subscription_end: subEnd,
+          },
+          error: null,
+        }
+      }
+      case 'admin_reactivar_prueba_empresa': {
+        const companyId = String(args?.p_company_id || '').trim()
+        const days = Number(args?.p_days ?? 7)
+        if (!companyId || companyId === DEMO_COMPANY_ID) {
+          return { data: null, error: { message: 'No puedes modificar la prueba de la empresa interna' } }
+        }
+        if (!Number.isFinite(days) || days < 1 || days > 90) {
+          return { data: null, error: { message: 'La prueba debe durar entre 1 y 90 días' } }
+        }
+        const co = getTable('demo_client_companies').find(c => c.company_id === companyId)
+        if (!co) {
+          return { data: null, error: { message: 'No existe suscripción para esta empresa' } }
+        }
+        const newTrialEnd = new Date(Date.now() + days * 86400000).toISOString()
+        co.subscription_status = 'trial'
+        co.trial_start = nowIso()
+        co.trial_end = newTrialEnd
+        co.subscription_start = null
+        co.subscription_end = null
+        getTable('platform_admin_audit').unshift({
+          id: genId(),
+          actor_id: currentSession?.user?.id || 'demo-owner-1',
+          actor_email: currentSession?.user?.email || 'sanlobo3@hotmail.com',
+          target_company_id: companyId,
+          target_user_id: null,
+          target_email: null,
+          event_type: 'company_trial_granted',
+          event_data: { days },
+          created_at: nowIso(),
+        })
+        return {
+          data: {
+            ok: true,
+            company_id: companyId,
+            subscription_status: 'trial',
+            trial_end: newTrialEnd,
+          },
+          error: null,
+        }
+      }
+      case 'admin_cambiar_estado_empresa': {
+        const companyId = String(args?.p_company_id || '').trim()
+        const status = String(args?.p_status || '').trim()
+        const note = args?.p_note ? String(args.p_note).trim() || null : null
+        if (!companyId || companyId === DEMO_COMPANY_ID) {
+          return { data: null, error: { message: 'No puedes cambiar el estado de la empresa interna' } }
+        }
+        if (!['active', 'suspended', 'expired'].includes(status)) {
+          return { data: null, error: { message: 'Estado no permitido' } }
+        }
+        const co = getTable('demo_client_companies').find(c => c.company_id === companyId)
+        if (!co) {
+          return { data: null, error: { message: 'No existe suscripción para esta empresa' } }
+        }
+        const oldStatus = co.subscription_status ?? null
+        co.subscription_status = status
+        getTable('platform_admin_audit').unshift({
+          id: genId(),
+          actor_id: currentSession?.user?.id || 'demo-owner-1',
+          actor_email: currentSession?.user?.email || 'sanlobo3@hotmail.com',
+          target_company_id: companyId,
+          target_user_id: null,
+          target_email: null,
+          event_type: 'company_subscription_status_changed',
+          event_data: {
+            previous_status: oldStatus,
+            new_status: status,
+            note,
+          },
+          created_at: nowIso(),
+        })
+        return {
+          data: {
+            ok: true,
+            company_id: companyId,
+            subscription_status: status,
+          },
+          error: null,
+        }
+      }
+      case 'admin_listar_equipo_plataforma': {
+        const profilesList = getTable('profiles')
+        const staffList = getTable('platform_staff')
+          .map(ps => {
+            const p = profilesList.find(u => u.id === ps.user_id)
+            return {
+              user_id: ps.user_id,
+              email: p?.email ?? null,
+              full_name: p?.full_name ?? null,
+              profile_role: p?.role ?? null,
+              staff_role: ps.staff_role,
+              active: Boolean(ps.active),
+              permissions: ps.permissions && typeof ps.permissions === 'object' ? ps.permissions : {},
+              notes: ps.notes ?? null,
+              granted_by: ps.granted_by,
+              granted_at: ps.granted_at,
+              updated_at: ps.updated_at,
+            }
+          })
+          .sort((a, b) => {
+            if (a.active !== b.active) return a.active ? -1 : 1
+            const roleCmp = String(a.staff_role).localeCompare(String(b.staff_role))
+            if (roleCmp !== 0) return roleCmp
+            return String(a.full_name || a.email || '').localeCompare(String(b.full_name || b.email || ''))
+          })
+        return { data: staffList, error: null }
+      }
+      case 'admin_asignar_personal_plataforma': {
+        const targetUserId = String(args?.p_user_id || '').trim()
+        const staffRole = String(args?.p_staff_role || '').trim()
+        const permissions =
+          args?.p_permissions && typeof args.p_permissions === 'object' && !Array.isArray(args.p_permissions)
+            ? args.p_permissions
+            : {}
+        const notes = args?.p_notes ? String(args.p_notes).trim() || null : null
+        const actorId = currentSession?.user?.id || 'demo-owner-1'
+        if (!targetUserId || targetUserId === actorId) {
+          return { data: null, error: { message: 'Selecciona otro usuario para asignarlo al equipo' } }
+        }
+        if (
+          ![
+            'developer',
+            'operations_manager',
+            'support_manager',
+            'technician',
+            'commercial',
+            'billing',
+            'customer_success',
+          ].includes(staffRole)
+        ) {
+          return { data: null, error: { message: 'Cargo de plataforma inválido' } }
+        }
+        const profile = getTable('profiles').find(p => p.id === targetUserId && p.active !== false)
+        if (!profile) {
+          return { data: null, error: { message: 'El usuario debe tener una cuenta activa en InventarioPro' } }
+        }
+        const staffTable = getTable('platform_staff')
+        const existing = staffTable.find(s => s.user_id === targetUserId)
+        const prevRole = existing?.staff_role ?? null
+        const prevActive = existing ? Boolean(existing.active) : null
+        const now = nowIso()
+        if (existing) {
+          existing.staff_role = staffRole
+          existing.active = true
+          existing.permissions = { ...permissions }
+          existing.notes = notes
+          existing.granted_by = actorId
+          existing.updated_at = now
+        } else {
+          staffTable.unshift({
+            user_id: targetUserId,
+            staff_role: staffRole,
+            active: true,
+            permissions: { ...permissions },
+            notes,
+            granted_by: actorId,
+            granted_at: now,
+            updated_at: now,
+          })
+        }
+        getTable('platform_admin_audit').unshift({
+          id: genId(),
+          actor_id: actorId,
+          actor_email: currentSession?.user?.email || 'sanlobo3@hotmail.com',
+          target_company_id: null,
+          target_user_id: targetUserId,
+          target_email: profile.email || null,
+          event_type: 'platform_staff_assigned',
+          event_data: {
+            previous_role: prevRole,
+            previous_active: prevActive,
+            new_role: staffRole,
+            permissions,
+          },
+          created_at: now,
+        })
+        return { data: { ok: true, user_id: targetUserId, staff_role: staffRole }, error: null }
+      }
+      case 'admin_estado_personal_plataforma': {
+        const targetUserId = String(args?.p_user_id || '').trim()
+        const nextActive = Boolean(args?.p_active)
+        const actorId = currentSession?.user?.id || 'demo-owner-1'
+        if (!targetUserId || targetUserId === actorId) {
+          return { data: null, error: { message: 'No puedes desactivar tu propia cuenta' } }
+        }
+        const member = getTable('platform_staff').find(s => s.user_id === targetUserId)
+        if (!member) {
+          return { data: null, error: { message: 'El integrante no pertenece al equipo de plataforma' } }
+        }
+        const oldActive = Boolean(member.active)
+        member.active = nextActive
+        member.updated_at = nowIso()
+        const profile = getTable('profiles').find(p => p.id === targetUserId)
+        getTable('platform_admin_audit').unshift({
+          id: genId(),
+          actor_id: actorId,
+          actor_email: currentSession?.user?.email || 'sanlobo3@hotmail.com',
+          target_company_id: null,
+          target_user_id: targetUserId,
+          target_email: profile?.email || null,
+          event_type: 'platform_staff_status_changed',
+          event_data: {
+            previous_active: oldActive,
+            new_active: nextActive,
+          },
+          created_at: nowIso(),
+        })
+        return { data: { ok: true, user_id: targetUserId, active: nextActive }, error: null }
+      }
+      case 'admin_listar_auditoria_plataforma': {
+        const limit = Math.max(1, Math.min(Number(args?.p_limit ?? 100) || 100, 500))
+        const profilesList = getTable('profiles')
+        const logs = getTable('platform_admin_audit')
+          .slice()
+          .sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')))
+          .slice(0, limit)
+          .map(entry => {
+            const actor = profilesList.find(p => p.id === entry.actor_id)
+            const target = entry.target_user_id ? profilesList.find(p => p.id === entry.target_user_id) : null
+            return {
+              ...entry,
+              actor_email: entry.actor_email || actor?.email || 'sanlobo3@hotmail.com',
+              target_email: entry.target_email || target?.email || null,
+            }
+          })
+        return { data: logs, error: null }
+      }
+      case 'admin_find_user': {
+        const term = String(args?.p_email || '').trim().toLowerCase()
+        if (!term) return { data: [], error: null }
+        const matches = getTable('profiles')
+          .filter(
+            p =>
+              (p.company_id || DEMO_COMPANY_ID) === DEMO_COMPANY_ID &&
+              (String(p.email || '').toLowerCase().includes(term) ||
+                String(p.full_name || '').toLowerCase().includes(term))
+          )
+          .slice(0, 20)
+          .map(p => ({ ...p }))
+        return { data: matches, error: null }
+      }
+      case 'admin_list_courtesies': {
+        const list = getTable('profiles')
+          .filter(
+            p =>
+              (p.company_id || DEMO_COMPANY_ID) === DEMO_COMPANY_ID &&
+              Boolean(p.plan_courtesy) &&
+              p.subscription_status === 'active'
+          )
+          .map(p => ({ ...p }))
+        return { data: list, error: null }
+      }
+      case 'admin_set_plan': {
+        const p = getTable('profiles').find(x => x.id === args?.p_user_id)
+        if (!p) return { data: null, error: { message: 'Usuario no encontrado' } }
+        const isLifetime = Boolean(args?.p_lifetime)
+        const days = Math.max(1, Number(args?.p_days) || 30)
+        p.plan_type = String(args?.p_plan || 'profesional')
+        p.subscription_status = 'active'
+        p.subscription_end = isLifetime ? null : new Date(Date.now() + days * 86400000).toISOString()
+        p.plan_courtesy = Boolean(args?.p_courtesy)
+        p.plan_note = args?.p_note ? String(args.p_note).trim() || null : null
+        return { data: { ok: true, user_id: p.id }, error: null }
+      }
+      case 'admin_revoke_plan': {
+        const p = getTable('profiles').find(x => x.id === args?.p_user_id)
+        if (!p) return { data: null, error: { message: 'Usuario no encontrado' } }
+        p.subscription_status = 'expired'
+        p.subscription_end = null
+        p.plan_courtesy = false
+        p.plan_note = null
+        return { data: { ok: true, user_id: p.id }, error: null }
+      }
+      case 'support_grant_ticket_authorization': {
+        const tk = getTable('support_tickets').find(t => t.id === args?.p_ticket_id)
+        if (!tk) {
+          return { data: { success: false, message: 'Ticket de soporte no encontrado.' }, error: null }
+        }
+        const hours = Math.min(168, Math.max(1, Number(args?.p_duration_hours) || 24))
+        const untilIso = new Date(Date.now() + hours * 3600 * 1000).toISOString()
+        const code = tk.authorization_code || `AUT-${Math.floor(1000 + Math.random() * 9000)}-IP`
+        tk.session_authorized = true
+        tk.authorization_code = code
+        tk.authorized_at = nowIso()
+        tk.authorized_until = untilIso
+        tk.revoked_at = null
+        if (args?.p_scope) tk.authorization_scope = String(args.p_scope)
+        if (args?.p_module) tk.module_page = String(args.p_module)
+        tk.assigned_to = tk.assigned_to || 'demo-tecnico-1'
+        tk.assigned_name = tk.assigned_name || 'Ing. Gabriel Soto'
+        tk.updated_at = nowIso()
+        return {
+          data: {
+            success: true,
+            authorization_code: code,
+            authorized_until: untilIso,
+            authorization_id: genId(),
+            technician_id: tk.assigned_to,
+            technician_name: tk.assigned_name,
+          },
+          error: null,
+        }
+      }
+      case 'support_revoke_ticket_authorization': {
+        const tk = getTable('support_tickets').find(t => t.id === args?.p_ticket_id)
+        if (!tk) {
+          return { data: { success: false, message: 'Ticket de soporte no encontrado.' }, error: null }
+        }
+        tk.session_authorized = false
+        tk.revoked_at = nowIso()
+        tk.updated_at = nowIso()
+        return { data: { success: true }, error: null }
+      }
+      case 'support_update_ticket_technical_resolution': {
+        const tk = getTable('support_tickets').find(t => t.id === args?.p_ticket_id)
+        if (!tk) {
+          return { data: { success: false, message: 'Ticket de soporte no encontrado.' }, error: null }
+        }
+        const nextStatus = String(args?.p_status || tk.status)
+        const now = nowIso()
+        tk.status = nextStatus
+        tk.tech_diagnosis = args?.p_tech_diagnosis ?? null
+        tk.resolution_notes = args?.p_resolution_notes ?? null
+        tk.assigned_to = currentSession?.user?.id || tk.assigned_to || 'demo-tecnico-1'
+        tk.assigned_name = currentSession?.user?.user_metadata?.full_name || tk.assigned_name || 'Ing. Gabriel Soto'
+        if (nextStatus === 'resuelto' || nextStatus === 'cerrado') {
+          tk.resolved_at = now
+        }
+        tk.updated_at = now
+        return { data: { success: true }, error: null }
+      }
+      case 'support_has_active_authorization': {
+        const tk = getTable('support_tickets').find(t => t.id === args?.p_ticket_id)
+        if (!tk || !tk.session_authorized || tk.revoked_at || tk.status === 'resuelto' || tk.status === 'cerrado') {
+          return { data: false, error: null }
+        }
+        const untilMs = tk.authorized_until ? new Date(tk.authorized_until).getTime() : 0
+        if (!Number.isFinite(untilMs) || untilMs <= Date.now()) {
+          return { data: false, error: null }
+        }
+        if (args?.p_module && String(args.p_module) !== String(tk.module_page || '')) {
+          return { data: false, error: null }
+        }
+        return { data: true, error: null }
+      }
+      case 'support_register_access': {
+        const tk = getTable('support_tickets').find(t => t.id === args?.p_ticket_id)
+        if (!tk) {
+          return { data: { success: false, message: 'Ticket no encontrado.' }, error: null }
+        }
+        tk.updated_at = nowIso()
+        return { data: { success: true }, error: null }
       }
       default:
         return { data: null, error: null }

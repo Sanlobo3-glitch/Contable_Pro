@@ -434,7 +434,25 @@ export async function updateTicketSessionAuthorization({
       },
     )
 
-    if (error) throw new Error(error.message)
+    if (error) {
+      if (isMissingTableError(error.message)) {
+        const now = new Date().toISOString()
+        writeLocalTickets(
+          readLocalTickets().map(t =>
+            t.id === ticketId
+              ? {
+                  ...t,
+                  session_authorized: false,
+                  revoked_at: now,
+                  updated_at: now,
+                }
+              : t,
+          ),
+        )
+        return
+      }
+      throw new Error(error.message)
+    }
 
     const result = getRpcPayload(data)
     if (result.success === false) {
@@ -455,6 +473,32 @@ export async function updateTicketSessionAuthorization({
     .single()
 
   if (ticketError) {
+    if (isMissingTableError(ticketError.message)) {
+      const localList = readLocalTickets()
+      const localTicket = localList.find(t => t.id === ticketId)
+      const localModule = normalizeModuleName(localTicket?.module_page)
+      const now = new Date().toISOString()
+      writeLocalTickets(
+        localList.map(t =>
+          t.id === ticketId
+            ? {
+                ...t,
+                module_page: localModule,
+                session_authorized: true,
+                authorization_code:
+                  t.authorization_code || generateAuthorizationCode(),
+                authorized_at: now,
+                authorized_until: computeAuthorizedUntilIso(durationHours),
+                revoked_at: null,
+                authorization_scope: scope,
+                updated_at: now,
+              }
+            : t,
+        ),
+      )
+      return
+    }
+
     throw new Error(
       `No se pudo consultar el módulo del ticket antes de autorizar: ${ticketError.message}`,
     )
@@ -473,7 +517,31 @@ export async function updateTicketSessionAuthorization({
     },
   )
 
-  if (error) throw new Error(error.message)
+  if (error) {
+    if (isMissingTableError(error.message)) {
+      const now = new Date().toISOString()
+      writeLocalTickets(
+        readLocalTickets().map(t =>
+          t.id === ticketId
+            ? {
+                ...t,
+                module_page: moduleName,
+                session_authorized: true,
+                authorization_code:
+                  t.authorization_code || generateAuthorizationCode(),
+                authorized_at: now,
+                authorized_until: computeAuthorizedUntilIso(durationHours),
+                revoked_at: null,
+                authorization_scope: scope,
+                updated_at: now,
+              }
+            : t,
+        ),
+      )
+      return
+    }
+    throw new Error(error.message)
+  }
 
   const result = getRpcPayload(data)
   if (result.success === false) {
@@ -498,8 +566,6 @@ export async function updateTicketTechnicalResolution({
 }): Promise<void> {
   // La identidad del técnico la determina auth.uid() en Supabase.
   // No confiamos en techUser.id ni en assigned_to enviados por el cliente.
-  void techUser
-
   const { data, error } = await supabase.rpc(
     'support_update_ticket_technical_resolution',
     {
@@ -510,7 +576,32 @@ export async function updateTicketTechnicalResolution({
     },
   )
 
-  if (error) throw new Error(error.message)
+  if (error) {
+    if (isMissingTableError(error.message)) {
+      const now = new Date().toISOString()
+      writeLocalTickets(
+        readLocalTickets().map(t =>
+          t.id === ticketId
+            ? {
+                ...t,
+                status,
+                tech_diagnosis: techDiagnosis.trim() || null,
+                resolution_notes: resolutionNotes.trim() || null,
+                assigned_to: techUser.id,
+                assigned_name: techUser.full_name || techUser.email,
+                resolved_at:
+                  status === 'resuelto' || status === 'cerrado'
+                    ? now
+                    : t.resolved_at,
+                updated_at: now,
+              }
+            : t,
+        ),
+      )
+      return
+    }
+    throw new Error(error.message)
+  }
 
   const result = getRpcPayload(data)
   if (result.success === false) {

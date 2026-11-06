@@ -62,7 +62,6 @@ import {
 import type {
   CompanyConfig,
   Customer,
-  ErpSyncEntityPreferences,
   Expense,
   Product,
   Purchase,

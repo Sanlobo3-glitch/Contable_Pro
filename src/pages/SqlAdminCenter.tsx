@@ -59,6 +59,8 @@ const PROBE_TABLES: { name: string; label: string }[] = [
   { name: 'layaway_contracts', label: 'Contratos de Plan Separe y apartados' },
   { name: 'product_exchanges', label: 'Cambios mano a mano y garantías' },
   { name: 'bank_reconciliations', label: 'Actas de conciliación bancaria' },
+  { name: 'platform_staff', label: 'Equipo global de plataforma' },
+  { name: 'platform_admin_audit', label: 'Auditoría global de plataforma' },
   { name: 'sql_migration_log', label: 'Bitácora y motor SQL en 1 clic' },
 ]
 

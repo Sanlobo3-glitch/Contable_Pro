@@ -1,5 +1,5 @@
 -- ============================================================
--- INVENTARIOPRO · MIGRACIÓN 000040
+-- INVENTARIOPRO · MIGRACIÓN 000045
 -- ADMINISTRACIÓN GLOBAL COMERCIAL Y EQUIPO DE PLATAFORMA
 --
 -- No concede acceso operativo global a empresas clientes.

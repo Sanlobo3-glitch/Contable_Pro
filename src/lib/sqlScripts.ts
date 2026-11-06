@@ -12,15 +12,18 @@ import sqlWhatsappStoreLink from '../../supabase/migrations/20261103000019_enlac
 import sqlAutoBrandSync from '../../supabase/migrations/20261103000020_sincronizacion_automatica_marca_y_cache_whatsapp.sql?raw'
 import sqlCommercialSuite21 from '../../supabase/migrations/20261104000021_cinco_soluciones_comerciales_avanzadas.sql?raw'
 import sqlGlobalAdminCommercial from '../../supabase/migrations/20261105000045_admin_global_comercial_y_equipo_plataforma.sql?raw'
+import sqlAccountingDoubleEntry from '../../supabase/migrations/20261106000046_sistema_contable_partida_doble.sql?raw'
 
 function sanitizeForPlpgsqlExecute(rawSql: string): string {
   return rawSql.replace(/^\s*(BEGIN|COMMIT)\s*;\s*$/gim, '').trim()
 }
 
 const cleanGlobalAdminCommercialSql = sanitizeForPlpgsqlExecute(sqlGlobalAdminCommercial)
+const cleanAccountingDoubleEntrySql = sanitizeForPlpgsqlExecute(sqlAccountingDoubleEntry)
 
 export type SqlBundleId =
   | 'consolidated'
+  | 'accounting_double_entry'
   | 'global_admin_commercial'
   | 'commercial_suite_21'
   | 'whatsapp_store_link'
@@ -93,7 +96,19 @@ export const SQL_SCRIPT_BUNDLES: SqlScriptBundle[] = [
       sqlAdminEngine,
       '',
       cleanGlobalAdminCommercialSql,
+      '',
+      cleanAccountingDoubleEntrySql,
     ].join('\n'),
+  },
+  {
+    id: 'accounting_double_entry',
+    title: 'Sistema Contable Profesional y Partida Doble (Migración 000046)',
+    filename: '20261106000046_sistema_contable_partida_doble.sql',
+    category: 'Recomendado',
+    summary:
+      'Crea las tablas accounts, journal_entries y journal_lines con RLS multiempresa, triggers de inmutabilidad estricta para asientos posteados y cerrados, y trigger diferido de validación de partida doble (SUM(débitos) = SUM(créditos)).',
+    targetTables: ['accounts', 'journal_entries', 'journal_lines'],
+    sql: cleanAccountingDoubleEntrySql,
   },
   {
     id: 'global_admin_commercial',

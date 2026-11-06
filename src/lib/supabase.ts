@@ -2510,6 +2510,59 @@ function createMockSupabase(silent = false): SupabaseClient {
         created_at: daysAgoIso(5, 4),
       },
     ],
+    accounts: [
+      { id: 'acc-1', company_id: DEMO_COMPANY_ID, code: '1101', name: 'Caja General', account_type: 'activo', nature: 'debito', level: 4, parent_id: null, is_postable: true, active: true, created_at: daysAgoIso(90), updated_at: daysAgoIso(90) },
+      { id: 'acc-2', company_id: DEMO_COMPANY_ID, code: '1102', name: 'Bancos Moneda Nacional / Divisas', account_type: 'activo', nature: 'debito', level: 4, parent_id: null, is_postable: true, active: true, created_at: daysAgoIso(90), updated_at: daysAgoIso(90) },
+      { id: 'acc-3', company_id: DEMO_COMPANY_ID, code: '1103', name: 'Cuentas por Cobrar Clientes', account_type: 'activo', nature: 'debito', level: 4, parent_id: null, is_postable: true, active: true, created_at: daysAgoIso(90), updated_at: daysAgoIso(90) },
+      { id: 'acc-4', company_id: DEMO_COMPANY_ID, code: '1104', name: 'Inventario de Mercancías', account_type: 'activo', nature: 'debito', level: 4, parent_id: null, is_postable: true, active: true, created_at: daysAgoIso(90), updated_at: daysAgoIso(90) },
+      { id: 'acc-5', company_id: DEMO_COMPANY_ID, code: '2101', name: 'Cuentas por Pagar Proveedores', account_type: 'pasivo', nature: 'credito', level: 4, parent_id: null, is_postable: true, active: true, created_at: daysAgoIso(90), updated_at: daysAgoIso(90) },
+      { id: 'acc-6', company_id: DEMO_COMPANY_ID, code: '3101', name: 'Capital Social y Aportes', account_type: 'patrimonio', nature: 'credito', level: 4, parent_id: null, is_postable: true, active: true, created_at: daysAgoIso(90), updated_at: daysAgoIso(90) },
+      { id: 'acc-7', company_id: DEMO_COMPANY_ID, code: '4101', name: 'Ingresos por Ventas de Mercancía', account_type: 'ingreso', nature: 'credito', level: 4, parent_id: null, is_postable: true, active: true, created_at: daysAgoIso(90), updated_at: daysAgoIso(90) },
+      { id: 'acc-8', company_id: DEMO_COMPANY_ID, code: '5101', name: 'Costo de Mercancía Vendida', account_type: 'costo', nature: 'debito', level: 4, parent_id: null, is_postable: true, active: true, created_at: daysAgoIso(90), updated_at: daysAgoIso(90) },
+      { id: 'acc-9', company_id: DEMO_COMPANY_ID, code: '6101', name: 'Gastos Operativos y Servicios', account_type: 'gasto', nature: 'debito', level: 4, parent_id: null, is_postable: true, active: true, created_at: daysAgoIso(90), updated_at: daysAgoIso(90) },
+    ],
+    journal_entries: [
+      {
+        id: 'je-1',
+        company_id: DEMO_COMPANY_ID,
+        entry_number: 'ASI-00001',
+        entry_date: `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}-01`,
+        concept: 'Apertura operativa e inventario inicial de demostración',
+        status: 'posteado',
+        source_module: 'manual',
+        source_id: null,
+        created_by: 'demo-contador-1',
+        posted_by: 'demo-contador-1',
+        posted_at: daysAgoIso(90),
+        created_at: daysAgoIso(90),
+        updated_at: daysAgoIso(90),
+      },
+      {
+        id: 'je-2',
+        company_id: DEMO_COMPANY_ID,
+        entry_number: 'ASI-00002',
+        entry_date: daysFromNowYmd(-3),
+        concept: 'Ventas consolidadas de ruta y mostrador',
+        status: 'posteado',
+        source_module: 'ventas',
+        source_id: null,
+        created_by: 'demo-contador-1',
+        posted_by: 'demo-contador-1',
+        posted_at: daysAgoIso(3),
+        created_at: daysAgoIso(3),
+        updated_at: daysAgoIso(3),
+      },
+    ],
+    journal_lines: [
+      { id: 'jl-1', company_id: DEMO_COMPANY_ID, entry_id: 'je-1', account_id: 'acc-1', line_number: 1, description: 'Efectivo inicial en caja', debit: 450, credit: 0, created_at: daysAgoIso(90) },
+      { id: 'jl-2', company_id: DEMO_COMPANY_ID, entry_id: 'je-1', account_id: 'acc-2', line_number: 2, description: 'Saldo operativo en bancos', debit: 1200, credit: 0, created_at: daysAgoIso(90) },
+      { id: 'jl-3', company_id: DEMO_COMPANY_ID, entry_id: 'je-1', account_id: 'acc-4', line_number: 3, description: 'Inventario inicial valorizado', debit: 850, credit: 0, created_at: daysAgoIso(90) },
+      { id: 'jl-4', company_id: DEMO_COMPANY_ID, entry_id: 'je-1', account_id: 'acc-5', line_number: 4, description: 'Facturas proveedores vigentes', debit: 0, credit: 253, created_at: daysAgoIso(90) },
+      { id: 'jl-5', company_id: DEMO_COMPANY_ID, entry_id: 'je-1', account_id: 'acc-6', line_number: 5, description: 'Patrimonio neto inicial', debit: 0, credit: 2247, created_at: daysAgoIso(90) },
+      { id: 'jl-6', company_id: DEMO_COMPANY_ID, entry_id: 'je-2', account_id: 'acc-2', line_number: 1, description: 'Cobros ventas en bancos y caja', debit: 710, credit: 0, created_at: daysAgoIso(3) },
+      { id: 'jl-7', company_id: DEMO_COMPANY_ID, entry_id: 'je-2', account_id: 'acc-3', line_number: 2, description: 'Ventas a crédito clientes', debit: 110.9, credit: 0, created_at: daysAgoIso(3) },
+      { id: 'jl-8', company_id: DEMO_COMPANY_ID, entry_id: 'je-2', account_id: 'acc-7', line_number: 3, description: 'Ingresos brutos por ventas', debit: 0, credit: 820.9, created_at: daysAgoIso(3) },
+    ],
   }
 
   const getTable = (name: string): Row[] => {
@@ -6822,6 +6875,79 @@ function createMockSupabase(silent = false): SupabaseClient {
         }
         tk.updated_at = nowIso()
         return { data: { success: true }, error: null }
+      }
+      case 'fn_create_journal_entry_atomic': {
+        const coId = String(args?.p_company_id || DEMO_COMPANY_ID)
+        const date = String(args?.p_entry_date || daysFromNowYmd(0))
+        const concept = String(args?.p_concept || 'Asiento contable').trim()
+        const status = String(args?.p_status || 'borrador')
+        const lines = Array.isArray(args?.p_lines) ? args.p_lines : []
+        const entries = getTable('journal_entries')
+        const allLines = getTable('journal_lines')
+        const nextNum = entries.length + 1
+        const entryId = genId()
+        const entryNumber = `ASI-${String(nextNum).padStart(5, '0')}`
+
+        let totDebit = 0
+        let totCredit = 0
+        for (const l of lines) {
+          totDebit += Math.round((Number(l.debit) || 0) * 10000) / 10000
+          totCredit += Math.round((Number(l.credit) || 0) * 10000) / 10000
+        }
+
+        if (status === 'posteado') {
+          if (Math.abs(totDebit - totCredit) > 0.0001) {
+            return {
+              data: null,
+              error: {
+                message: `Partida Doble Descuadrada: La suma de débitos (${totDebit.toFixed(2)}) difiere de los créditos (${totCredit.toFixed(2)}).`,
+              },
+            }
+          }
+        }
+
+        entries.unshift({
+          id: entryId,
+          company_id: coId,
+          entry_number: entryNumber,
+          entry_date: date,
+          concept,
+          status,
+          source_module: String(args?.p_source_module || 'manual'),
+          source_id: args?.p_source_id || null,
+          created_by: currentSession?.user?.id || 'demo-contador-1',
+          posted_by: status === 'posteado' ? (currentSession?.user?.id || 'demo-contador-1') : null,
+          posted_at: status === 'posteado' ? nowIso() : null,
+          created_at: nowIso(),
+          updated_at: nowIso(),
+        })
+
+        lines.forEach((l, idx) => {
+          allLines.push({
+            id: genId(),
+            company_id: coId,
+            entry_id: entryId,
+            account_id: l.account_id,
+            line_number: idx + 1,
+            description: l.description || concept,
+            debit: Math.round((Number(l.debit) || 0) * 10000) / 10000,
+            credit: Math.round((Number(l.credit) || 0) * 10000) / 10000,
+            created_at: nowIso(),
+          })
+        })
+
+        return {
+          data: {
+            ok: true,
+            entry_id: entryId,
+            entry_number: entryNumber,
+            status,
+            total_debit: totDebit,
+            total_credit: totCredit,
+            lines_count: lines.length,
+          },
+          error: null,
+        }
       }
       default:
         return { data: null, error: null }

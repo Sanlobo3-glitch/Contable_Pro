@@ -1073,4 +1073,89 @@ export interface SupportPassSession {
   revoked_at?: string | null
 }
 
+// 13. Núcleo Contable Profesional y Partida Doble (Migración 000046)
+export type AccountType =
+  | 'activo'
+  | 'pasivo'
+  | 'patrimonio'
+  | 'ingreso'
+  | 'costo'
+  | 'gasto'
+  | 'orden'
+
+export type AccountNature = 'debito' | 'credito'
+
+export interface Account {
+  id: string
+  company_id: string
+  code: string
+  name: string
+  parent_id: string | null
+  account_type: AccountType
+  nature: AccountNature
+  level: number
+  is_postable: boolean
+  active: boolean
+  description?: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type JournalEntryStatus = 'borrador' | 'posteado' | 'cerrado' | 'anulado'
+export type JournalSourceModule =
+  | 'manual'
+  | 'ventas'
+  | 'compras'
+  | 'caja_bancos'
+  | 'nomina'
+  | 'ajuste'
+  | 'cierre'
+
+export interface JournalEntry {
+  id: string
+  company_id: string
+  entry_number: string
+  entry_date: string
+  concept: string
+  status: JournalEntryStatus
+  source_module: JournalSourceModule
+  source_id?: string | null
+  created_by?: string | null
+  posted_by?: string | null
+  posted_at?: string | null
+  created_at: string
+  updated_at: string
+  lines?: JournalLine[]
+  total_debit?: number
+  total_credit?: number
+}
+
+export interface JournalLine {
+  id: string
+  company_id: string
+  entry_id: string
+  account_id: string
+  line_number: number
+  description?: string | null
+  debit: number
+  credit: number
+  created_at: string
+  account?: Pick<Account, 'id' | 'code' | 'name' | 'nature' | 'account_type'> | null
+}
+
+export interface CreateJournalEntryPayload {
+  company_id: string
+  entry_date: string
+  concept: string
+  status: 'borrador' | 'posteado'
+  source_module?: JournalSourceModule
+  source_id?: string | null
+  lines: Array<{
+    account_id: string
+    debit: number
+    credit: number
+    description?: string
+  }>
+}
+
 

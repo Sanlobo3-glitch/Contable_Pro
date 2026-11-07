@@ -11,6 +11,7 @@ import sqlCatalogCommerce from '../../supabase/migrations/20261103000018_ventas_
 import sqlWhatsappStoreLink from '../../supabase/migrations/20261103000019_enlace_tienda_og_y_estudio_whatsapp.sql?raw'
 import sqlAutoBrandSync from '../../supabase/migrations/20261103000020_sincronizacion_automatica_marca_y_cache_whatsapp.sql?raw'
 import sqlCommercialSuite21 from '../../supabase/migrations/20261104000021_cinco_soluciones_comerciales_avanzadas.sql?raw'
+import sqlContableProPartidaDoble from '../../supabase/migrations/20261106000022_contable_pro_partida_doble_puc_niif.sql?raw'
 
 export type SqlBundleId =
   | 'contable_pro'
@@ -38,6 +39,16 @@ export interface SqlScriptBundle {
 }
 
 export const SQL_SCRIPT_BUNDLES: SqlScriptBundle[] = [
+  {
+    id: 'contable_pro',
+    title: 'Contable_Pro: PUC NIIF, Partida Doble e Inmutabilidad',
+    filename: '20261106000022_contable_pro_partida_doble_puc_niif.sql',
+    category: 'Recomendado',
+    summary:
+      'Fase 1 Contable_Pro: Tablas accounts, journal_entries, journal_lines, trigger verify_journal_entry_posting (Luca Pacioli: débitos = créditos) y enforce_journal_immutability para bloquear cambios en asientos posteados.',
+    targetTables: ['accounts', 'journal_entries', 'journal_lines'],
+    sql: sqlContableProPartidaDoble,
+  },
   {
     id: 'consolidated',
     title: 'Paquete Consolidado Maestro (Todo en 1 · Recomendado)',

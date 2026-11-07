@@ -280,11 +280,80 @@ export function createAdminSqlHandler(deps?: {
       sql?: string
       scriptId?: string
       scriptTitle?: string
+      migrationFile?: string
     }
     const sql = (body.sql || '').trim()
     if (!sql) {
       res.status(400).json({ ok: false, error: 'El script SQL está vacío.' })
       return
+    }
+
+    const startedAt = Date.now()
+
+    /**
+     * Registra la ejecución en public.sql_migration_log.
+     * Se hace en una CONSULTA SEPARADA para que el registro sobreviva
+     * aunque la ejecución original haya fallado (una transacción abortada
+     * revierte también sus propios INSERT).
+     */
+    const logExecution = async (opts: {
+      status: 'aplicado' | 'error'
+      errorMessage?: string | null
+      source: string
+      resultRows?: number | null
+    }) => {
+      const esc = (v: string) => v.replace(/'/g, "''")
+      const safeId = esc((body.scriptId || 'management_api')).slice(0, 120)
+      const safeTitle = esc((body.scriptTitle || 'Ejecución directa Management API')).slice(0, 200)
+      const safeFile = esc((body.migrationFile || '')).slice(0, 200)
+      const safeSql = esc(sql)
+      const safeError = esc(opts.errorMessage || '').slice(0, 2000)
+      const safeUserId =
+        authUser?.id && /^[0-9a-f-]{36}$/i.test(authUser.id) ? `'${authUser.id}'::uuid` : 'NULL'
+      const durationMs = Date.now() - startedAt
+      const logSql = `
+        DO $log$
+        DECLARE v_id uuid;
+        BEGIN
+          IF to_regclass('public.sql_migration_log') IS NOT NULL THEN
+            v_id := public.registrar_ejecucion_sql(
+              p_script_id      => '${safeId}',
+              p_script_title   => '${safeTitle}',
+              p_sql            => '${safeSql}',
+              p_status         => '${opts.status}',
+              p_error_message  => ${safeError ? `'${safeError}'` : 'NULL'},
+              p_duration_ms    => ${durationMs},
+              p_source         => '${opts.source}',
+              p_migration_file => ${safeFile ? `'${safeFile}'` : 'NULL'},
+              p_result_rows    => ${opts.resultRows ?? 'NULL'},
+              p_executed_by    => ${safeUserId},
+              p_executed_email => '${MASTER_ADMIN_EMAIL}',
+              p_summary        => '${
+                opts.status === 'aplicado'
+                  ? 'Ejecutado vía la pasarela administrativa (Management API).'
+                  : 'La ejecución falló; se conserva el error para auditoría.'
+              }'
+            );
+          END IF;
+        EXCEPTION WHEN OTHERS THEN
+          NULL;
+        END $log$;
+      `
+      try {
+        await fetchFn(
+          `https://api.supabase.com/v1/projects/${encodeURIComponent(projectRef)}/database/query`,
+          {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${managementToken}`,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ query: logSql }),
+          }
+        )
+      } catch {
+        /* ignore log failure */
+      }
     }
 
     const mgmtResp = await fetchFn(
@@ -323,6 +392,7 @@ export function createAdminSqlHandler(deps?: {
             p_sql: sql,
             p_script_id: body.scriptId || 'management_fallback',
             p_script_title: body.scriptTitle || 'Migración SQL InventarioPro',
+            p_migration_file: body.migrationFile || null,
           }),
         })
         const rpcRaw = await rpcResp.text()
@@ -333,6 +403,7 @@ export function createAdminSqlHandler(deps?: {
           } catch {
             rpcData = rpcRaw
           }
+          // El RPC ya registró el éxito en su propia transacción.
           res.status(200).json({
             ok: true,
             via: 'rpc_security_definer',
@@ -341,59 +412,36 @@ export function createAdminSqlHandler(deps?: {
           })
           return
         }
+        let rpcErr = rpcRaw
+        try {
+          const parsed = JSON.parse(rpcRaw) as { message?: string; error?: string }
+          rpcErr = parsed.message || parsed.error || rpcRaw
+        } catch {
+          /* ignore */
+        }
+        // El RPC no pudo registrar el fallo (la transacción se revierte),
+        // así que lo registramos aquí, en una consulta independiente.
+        await logExecution({
+          status: 'error',
+          errorMessage: rpcErr,
+          source: 'app_rpc',
+        })
         res.status(200).json({
           ok: false,
           fallbackToRpc: true,
-          error: msg || `Error HTTP ${mgmtResp.status}`,
+          error: rpcErr || msg || `Error HTTP ${mgmtResp.status}`,
         })
         return
       }
 
+      await logExecution({
+        status: 'error',
+        errorMessage: msg || `Error HTTP ${mgmtResp.status}`,
+        source: 'management_api',
+      })
+
       res.status(400).json({ ok: false, error: msg || `Error HTTP ${mgmtResp.status}` })
       return
-    }
-
-    // Registrar en bitácora sql_migration_log si la tabla ya existe
-    const safeId = (body.scriptId || 'management_api').replace(/'/g, "''").slice(0, 80)
-    const safeTitle = (body.scriptTitle || 'Ejecución directa Management API')
-      .replace(/'/g, "''")
-      .slice(0, 180)
-    const safeUserId =
-      authUser?.id && /^[0-9a-f-]{36}$/i.test(authUser.id) ? `'${authUser.id}'::uuid` : 'NULL'
-    const logSql = `
-      DO $log$
-      BEGIN
-        IF to_regclass('public.sql_migration_log') IS NOT NULL THEN
-          INSERT INTO public.sql_migration_log (
-            script_id, script_title, executed_by, executed_email, status, summary, statements_length
-          ) VALUES (
-            '${safeId}',
-            '${safeTitle}',
-            ${safeUserId},
-            '${MASTER_ADMIN_EMAIL}',
-            'aplicado',
-            'Aplicado vía Supabase Management API',
-            ${sql.length}
-          );
-        END IF;
-      EXCEPTION WHEN OTHERS THEN
-        NULL;
-      END $log$;
-    `
-    try {
-      await fetchFn(
-        `https://api.supabase.com/v1/projects/${encodeURIComponent(projectRef)}/database/query`,
-        {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${managementToken}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ query: logSql }),
-        }
-      )
-    } catch {
-      /* ignore log failure */
     }
 
     let resultData: unknown = null
@@ -402,6 +450,15 @@ export function createAdminSqlHandler(deps?: {
     } catch {
       resultData = rawText
     }
+
+    const resultRows = Array.isArray(resultData) ? resultData.length : null
+
+    // Registrar en la bitácora el SQL exacto, su hash, la duración y el origen.
+    await logExecution({
+      status: 'aplicado',
+      source: 'management_api',
+      resultRows,
+    })
 
     res.status(200).json({
       ok: true,

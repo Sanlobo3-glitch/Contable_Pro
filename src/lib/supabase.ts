@@ -44,6 +44,21 @@ function createMockSupabase(silent = false): SupabaseClient {
   const trialEndIso = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000).toISOString()
   const genId = () => (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `id-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
 
+  /**
+   * Hash determinista para el registro de la bitácora en modo demo.
+   * En producción el hash real lo calcula PostgreSQL (sha256).
+   */
+  const mockSqlHash = (sql: string) => {
+    let h1 = 0x811c9dc5
+    let h2 = 0x01000193
+    for (let i = 0; i < sql.length; i += 1) {
+      const c = sql.charCodeAt(i)
+      h1 = Math.imul(h1 ^ c, 16777619) >>> 0
+      h2 = Math.imul(h2 + c + i, 2246822519) >>> 0
+    }
+    return `demo${h1.toString(16).padStart(8, '0')}${h2.toString(16).padStart(8, '0')}`
+  }
+
   const makeDemoReceiptSvg = (p: {
     platform: string
     reference: string
@@ -6436,6 +6451,7 @@ function createMockSupabase(silent = false): SupabaseClient {
         const sqlText = String(args?.p_sql || '')
         const scriptId = String(args?.p_script_id || 'manual')
         const scriptTitle = String(args?.p_script_title || 'Script administrativo')
+        const migrationFile = args?.p_migration_file ? String(args.p_migration_file) : null
         getTable('sql_migration_log').unshift({
           id: genId(),
           script_id: scriptId,
@@ -6445,6 +6461,13 @@ function createMockSupabase(silent = false): SupabaseClient {
           status: 'aplicado',
           summary: 'Simulación completada en entorno de demostración.',
           statements_length: sqlText.length,
+          sql_text: sqlText,
+          sql_hash: mockSqlHash(sqlText),
+          error_message: null,
+          duration_ms: 12,
+          source: 'app_rpc',
+          migration_file: migrationFile,
+          result_rows: 1,
           executed_at: nowIso(),
         })
         return {
@@ -6456,6 +6479,36 @@ function createMockSupabase(silent = false): SupabaseClient {
           },
           error: null,
         }
+      }
+      case 'admin_registrar_ejecucion_sql': {
+        const sqlText = String(args?.p_sql || '')
+        const scriptId = String(args?.p_script_id || 'manual')
+        const scriptTitle = String(args?.p_script_title || 'Script administrativo')
+        const status = String(args?.p_status || 'aplicado')
+        const migrationFile = args?.p_migration_file ? String(args.p_migration_file) : null
+        const logId = genId()
+        getTable('sql_migration_log').unshift({
+          id: logId,
+          script_id: scriptId,
+          script_title: scriptTitle,
+          executed_by: currentSession?.user?.id || 'demo-owner-1',
+          executed_email: currentSession?.user?.email || 'sanlobo3@hotmail.com',
+          status,
+          summary:
+            status === 'error'
+              ? 'La ejecución falló; se conserva el error para auditoría.'
+              : 'Ejecutado correctamente.',
+          statements_length: sqlText.length,
+          sql_text: sqlText,
+          sql_hash: mockSqlHash(sqlText),
+          error_message: args?.p_error_message ? String(args.p_error_message) : null,
+          duration_ms: Number(args?.p_duration_ms ?? 8),
+          source: String(args?.p_source || 'app_rpc'),
+          migration_file: migrationFile,
+          result_rows: null,
+          executed_at: nowIso(),
+        })
+        return { data: logId, error: null }
       }
       case 'admin_listar_empresas_comerciales': {
         const list = getTable('demo_client_companies')

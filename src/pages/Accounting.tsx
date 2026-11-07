@@ -17,7 +17,7 @@ interface AccountNode extends AccountRow {
   children?: AccountNode[];
 }
 
-export default function Accounting() {
+export default function Accounting({ onNavigate }: { onNavigate?: (page: string) => void }) {
   const [accountTree, setAccountTree] = useState<AccountNode[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
@@ -98,12 +98,23 @@ export default function Accounting() {
           <h1 className="text-2xl font-bold text-slate-800">Catálogo de Cuentas (PUC)</h1>
           <p className="text-sm text-slate-500">Plan de cuentas de tu empresa</p>
         </div>
-        <button 
-          onClick={fetchAccounts}
-          className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm"
-        >
-          🔄 Sincronizar
-        </button>
+        <div className="flex items-center gap-2">
+          {onNavigate && (
+            <button
+              type="button"
+              onClick={() => onNavigate('cpa')}
+              className="px-3 py-2 rounded-lg border border-slate-200 text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors"
+            >
+              ← Escritorio contable
+            </button>
+          )}
+          <button
+            onClick={fetchAccounts}
+            className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors shadow-sm"
+          >
+            🔄 Sincronizar
+          </button>
+        </div>
       </div>
 
       <div className="bg-white rounded-xl shadow-md border border-slate-100 p-6">

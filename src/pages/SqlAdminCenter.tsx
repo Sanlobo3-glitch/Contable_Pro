@@ -40,6 +40,14 @@ interface MigrationLogRow {
   summary: string | null
   statements_length: number
   executed_at: string
+  // Trazabilidad completa (migración 000049)
+  sql_text: string | null
+  sql_hash: string | null
+  error_message: string | null
+  duration_ms: number | null
+  source: string | null
+  migration_file: string | null
+  result_rows: number | null
 }
 
 const PROBE_TABLES: { name: string; label: string }[] = [
@@ -258,7 +266,12 @@ export default function SqlAdminCenter() {
     window.setTimeout(() => URL.revokeObjectURL(url), 1500)
   }
 
-  async function executeSqlInSupabase(scriptId: string, scriptTitle: string, sqlContent: string) {
+  async function executeSqlInSupabase(
+    scriptId: string,
+    scriptTitle: string,
+    sqlContent: string,
+    migrationFile?: string
+  ) {
     const clean = sqlContent.trim()
     if (!clean) {
       setFeedback({ ok: false, text: 'El contenido SQL está vacío.' })
@@ -293,6 +306,7 @@ export default function SqlAdminCenter() {
               sql: clean,
               scriptId,
               scriptTitle,
+              migrationFile: migrationFile || null,
             }),
           })
           const payload = (await resp.json()) as {
@@ -323,6 +337,7 @@ export default function SqlAdminCenter() {
         p_sql: clean,
         p_script_id: scriptId,
         p_script_title: scriptTitle,
+        p_migration_file: migrationFile || null,
       })
 
       if (error) {
@@ -344,6 +359,24 @@ export default function SqlAdminCenter() {
           })
           return
         }
+
+        // El RPC revierte su transacción al fallar, así que su propio
+        // registro de error se pierde. Lo registramos aquí, en una
+        // llamada aparte, para que el fallo quede en la bitácora.
+        try {
+          await supabase.rpc('admin_registrar_ejecucion_sql', {
+            p_script_id: scriptId,
+            p_script_title: scriptTitle,
+            p_sql: clean,
+            p_status: 'error',
+            p_error_message: error.message,
+            p_source: 'app_rpc',
+            p_migration_file: migrationFile || null,
+          })
+        } catch {
+          /* el registro del fallo es best-effort */
+        }
+
         throw new Error(error.message)
       }
 
@@ -664,7 +697,8 @@ export default function SqlAdminCenter() {
                     void executeSqlInSupabase(
                       activeBundle.id,
                       activeBundle.title,
-                      activeBundle.sql
+                      activeBundle.sql,
+                      activeBundle.filename
                     )
                   }
                   className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-xs font-semibold text-white disabled:opacity-50 whitespace-nowrap shrink-0"
@@ -768,7 +802,12 @@ export default function SqlAdminCenter() {
               type="button"
               disabled={executing || !customSql.trim()}
               onClick={() =>
-                void executeSqlInSupabase('custom', customTitle || 'Script manual', customSql)
+                void executeSqlInSupabase(
+                  'custom',
+                  customTitle || 'Script manual',
+                  customSql,
+                  customFilename || undefined
+                )
               }
               className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-xs font-semibold text-white disabled:opacity-50 whitespace-nowrap shrink-0"
             >
@@ -888,21 +927,58 @@ export default function SqlAdminCenter() {
                     Aún no hay ejecuciones registradas en `public.sql_migration_log`.
                   </p>
                 ) : (
-                  <div className="divide-y divide-slate-100 max-h-80 overflow-y-auto">
+                  <div className="divide-y divide-slate-100 max-h-[28rem] overflow-y-auto">
                     {logs.map(l => (
-                      <div key={l.id} className="px-5 py-3 text-xs space-y-0.5">
+                      <div key={l.id} className="px-5 py-3 text-xs space-y-1">
                         <div className="flex items-center justify-between gap-2">
                           <span className="font-semibold text-slate-900 truncate">
                             {l.script_title}
                           </span>
-                          <span className="text-emerald-700 font-semibold whitespace-nowrap">
+                          <span
+                            className={`font-semibold whitespace-nowrap ${
+                              l.status === 'error' ? 'text-rose-600' : 'text-emerald-700'
+                            }`}
+                          >
                             {l.status}
                           </span>
                         </div>
+
                         <p className="text-slate-500 tabular-nums">
-                          {fmtDateTime(l.executed_at)} · {l.executed_email} ·{' '}
-                          {l.statements_length} caracteres
+                          {fmtDateTime(l.executed_at)} · {l.executed_email}
+                          {l.source ? ` · ${l.source}` : ''}
+                          {l.duration_ms != null ? ` · ${l.duration_ms} ms` : ''}
+                          {l.result_rows != null ? ` · ${l.result_rows} filas` : ''}
+                          {` · ${l.statements_length} caracteres`}
                         </p>
+
+                        {l.migration_file && (
+                          <p className="text-slate-500">
+                            Archivo:{' '}
+                            <span className="font-mono text-slate-700">{l.migration_file}</span>
+                          </p>
+                        )}
+
+                        {l.sql_hash && (
+                          <p className="text-slate-400 font-mono truncate">sha256: {l.sql_hash}</p>
+                        )}
+
+                        {l.error_message && (
+                          <pre className="mt-1 whitespace-pre-wrap break-words rounded-md bg-rose-50 text-rose-700 p-2 text-[11px]">
+                            {l.error_message}
+                          </pre>
+                        )}
+
+                        {l.sql_text && (
+                          <details className="mt-1">
+                            <summary className="cursor-pointer text-slate-500 hover:text-slate-800">
+                              Ver SQL ejecutado
+                            </summary>
+                            <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-md bg-slate-50 p-2 text-[11px] text-slate-700">
+                              {l.sql_text}
+                            </pre>
+                          </details>
+                        )}
+
                         {l.summary && <p className="text-slate-600">{l.summary}</p>}
                       </div>
                     ))}

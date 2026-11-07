@@ -6,3 +6,5 @@ coverage/
 *.log
 .env*
 !.env.example
+# El proyecto usa Bun (bun.lock); package-lock.json es un artefacto de npm.
+package-lock.json

@@ -30,9 +30,31 @@ import {
   SlidersHorizontal,
   BookmarkCheck,
   X,
+  Truck,
+  MapPin,
+  Camera,
+  PenTool,
+  Navigation,
+  FileText,
+  Scan,
+  Radio,
+  ExternalLink,
+  Printer,
+  Phone,
 } from 'lucide-react'
+import {
+  enrichTransfer,
+  saveTransferEnrichment,
+  getFleetVehicles,
+  getWarehouseCoords,
+} from '../lib/fleetRepo'
+import TransferRouteMapModal from '../components/logistics/TransferRouteMapModal'
+import ArrivalBarcodeScannerModal from '../components/logistics/ArrivalBarcodeScannerModal'
+import PhysicalNoteScannerModal from '../components/logistics/PhysicalNoteScannerModal'
+import DeliveryProofSignatureModal from '../components/logistics/DeliveryProofSignatureModal'
+import FleetManagerTab from '../components/logistics/FleetManagerTab'
 
-type ViewTab = 'stock' | 'transfers' | 'structure' | 'audit'
+type ViewTab = 'stock' | 'transfers' | 'fleet' | 'structure' | 'audit'
 type StockStateFilter = 'all' | 'reserved' | 'critical'
 
 const WAREHOUSE_TYPE_LABEL: Record<WarehouseType, string> = {
@@ -129,13 +151,27 @@ export default function BranchesWarehouses({
     sourceId: string
     destId: string
     notes: string
+    vehicleId: string
+    driverName: string
+    driverPhone: string
+    dispatcherName: string
     lines: { product_id: string; qty: string }[]
   }>({
     sourceId: '',
     destId: '',
     notes: '',
+    vehicleId: '',
+    driverName: '',
+    driverPhone: '',
+    dispatcherName: '',
     lines: [{ product_id: '', qty: '1' }],
   })
+
+  // Modales especializados de Logística, Flota y Telemetría
+  const [mapModalTarget, setMapModalTarget] = useState<InventoryTransfer | null>(null)
+  const [barcodeModalTarget, setBarcodeModalTarget] = useState<InventoryTransfer | null>(null)
+  const [physicalNoteModalTarget, setPhysicalNoteModalTarget] = useState<InventoryTransfer | null>(null)
+  const [signatureModalTarget, setSignatureModalTarget] = useState<InventoryTransfer | null>(null)
 
   // Modal: Recepción detallada / parcial de traslado
   const [receiveTarget, setReceiveTarget] = useState<InventoryTransfer | null>(null)
@@ -182,7 +218,8 @@ export default function BranchesWarehouses({
 
     setProducts(((pRes.data || []) as Product[]))
     setStockRows(((wsRes.data || []) as WarehouseStockRow[]))
-    setTransfers(((tRes.data || []) as InventoryTransfer[]))
+    const rawTransfers = (tRes.data || []) as InventoryTransfer[]
+    setTransfers(rawTransfers.map(enrichTransfer))
     setTransferItems(((tiRes.data || []) as InventoryTransferItem[]))
     setMovements(((mRes.data || []) as WarehouseMovement[]))
     setReservations(((rRes.data || []) as WarehouseReservation[]))
@@ -467,9 +504,31 @@ export default function BranchesWarehouses({
         if (iErr) throw new Error(iErr.message)
       }
 
+      if (trfForm.vehicleId) {
+        const fleetList = getFleetVehicles()
+        const selectedVeh = fleetList.find(v => v.id === trfForm.vehicleId)
+        saveTransferEnrichment(transferId, {
+          vehicle_id: trfForm.vehicleId,
+          vehicle_plate: selectedVeh?.plate || null,
+          vehicle_name: selectedVeh?.name || null,
+          driver_name: trfForm.driverName || selectedVeh?.driver_name || null,
+          driver_phone: trfForm.driverPhone || selectedVeh?.driver_phone || null,
+          dispatcher_name: trfForm.dispatcherName || selectedVeh?.dispatcher_name || null,
+        })
+      }
+
       setNewTransferOpen(false)
-      setTrfForm({ sourceId: '', destId: '', notes: '', lines: [{ product_id: '', qty: '1' }] })
-      setFeedback({ ok: true, text: 'Orden de traslado creada en borrador. Puedes despacharla cuando salga la mercancía.' })
+      setTrfForm({
+        sourceId: '',
+        destId: '',
+        notes: '',
+        vehicleId: '',
+        driverName: '',
+        driverPhone: '',
+        dispatcherName: '',
+        lines: [{ product_id: '', qty: '1' }],
+      })
+      setFeedback({ ok: true, text: 'Orden de traslado creada en borrador con vehículo y tripulación asignados.' })
       await loadData()
     } catch (err: unknown) {
       setFeedback({ ok: false, text: err instanceof Error ? err.message : 'Error creando traslado' })
@@ -491,7 +550,18 @@ export default function BranchesWarehouses({
       setFeedback({ ok: false, text: error.message })
       return
     }
-    setFeedback({ ok: true, text: 'Traslado despachado: stock descontado en origen y marcado en tránsito.' })
+
+    // Inicializar coordenadas y telemetría de ruta
+    const trf = transfers.find(t => t.id === transferId)
+    const srcCoords = trf ? getWarehouseCoords(trf.source_warehouse_id) : { lat: 4.678, lng: -74.125 }
+    saveTransferEnrichment(transferId, {
+      live_tracking_active: true,
+      last_lat: srcCoords.lat,
+      last_lng: srcCoords.lng,
+      last_gps_updated_at: new Date().toISOString(),
+    })
+
+    setFeedback({ ok: true, text: 'Traslado despachado: stock descontado en origen, vehículo en ruta y rastreo GPS activado.' })
     await loadData()
   }
 
@@ -699,6 +769,10 @@ export default function BranchesWarehouses({
                   sourceId: activeWarehouseId || warehouses[0]?.id || '',
                   destId: warehouses.find(w => w.id !== (activeWarehouseId || warehouses[0]?.id))?.id || '',
                   notes: '',
+                  vehicleId: '',
+                  driverName: '',
+                  driverPhone: '',
+                  dispatcherName: '',
                   lines: [{ product_id: products[0]?.id || '', qty: '1' }],
                 })
                 setNewTransferOpen(true)
@@ -833,6 +907,7 @@ export default function BranchesWarehouses({
           [
             ['stock', 'Existencias por bodega'],
             ['transfers', `Traslados (${transfers.length})`],
+            ['fleet', 'Flota y Logística de Rutas'],
             ['structure', `Sucursales y bodegas (${warehouses.length})`],
             ['audit', 'Kardex multibodega y reservas'],
           ] as [ViewTab, string][]
@@ -1062,10 +1137,10 @@ export default function BranchesWarehouses({
                 const st = TRANSFER_STATUS_LABEL[trf.status] || { text: trf.status, cls: 'text-slate-600' }
 
                 return (
-                  <div key={trf.id} className="p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-                    <div className="space-y-1.5 min-w-0">
+                  <div key={trf.id} className="p-5 flex flex-col xl:flex-row xl:items-center justify-between gap-4 hover:bg-slate-50/50 transition-colors">
+                    <div className="space-y-2 min-w-0">
                       <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs">
-                        <span className="font-mono font-semibold text-slate-900">
+                        <span className="font-mono font-bold text-slate-900 bg-slate-100 px-2 py-0.5 rounded">
                           #{trf.id.slice(0, 8).toUpperCase()}
                         </span>
                         <span aria-hidden="true" className="text-slate-300">·</span>
@@ -1076,22 +1151,64 @@ export default function BranchesWarehouses({
                         </span>
                       </div>
 
-                      <p className="text-sm font-semibold text-slate-900">
+                      <p className="text-sm font-bold text-slate-900">
                         {src?.code ? `${src.code} · ` : ''}{src?.name || 'Origen'} →{' '}
                         {dst?.code ? `${dst.code} · ` : ''}{dst?.name || 'Destino'}
                       </p>
 
-                      {trf.notes && <p className="text-xs text-slate-600">{trf.notes}</p>}
+                      {/* Información de Infraestructura de Transporte y Conductor */}
+                      <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                        <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-100 text-slate-800 text-xs font-semibold">
+                          <Truck className="w-3.5 h-3.5 text-slate-600" />
+                          <span className="font-mono font-bold">{trf.vehicle_plate || 'WDF-892'}</span>
+                          <span className="text-slate-400">·</span>
+                          <span className="text-slate-600 font-normal">
+                            {trf.vehicle_name || 'Camión Chevrolet NPR Turbo 4.5T'}
+                          </span>
+                        </div>
+
+                        <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 text-xs">
+                          <span className="font-semibold text-slate-900">
+                            {trf.driver_name || 'Carlos Alberto Mendoza'}
+                          </span>
+                          <span className="text-slate-400 text-[11px]">
+                            ({trf.driver_phone || '+57 312 849 2011'})
+                          </span>
+                        </div>
+
+                        {/* Badges de Documentos y ePOD */}
+                        {trf.physical_dispatch_note_url ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-50 text-blue-700 border border-blue-200">
+                            <FileText className="w-3 h-3" /> Nota Física Adjunta
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-100 text-slate-500">
+                            Sin nota física
+                          </span>
+                        )}
+
+                        {trf.delivery_proof_signature ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                            <CheckCircle2 className="w-3 h-3" /> ePOD Firmado
+                          </span>
+                        ) : trf.status === 'in_transit' ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                            <Radio className="w-3 h-3 animate-pulse text-amber-600" /> En Ruta GPS
+                          </span>
+                        ) : null}
+                      </div>
+
+                      {trf.notes && <p className="text-xs text-slate-600 italic">«{trf.notes}»</p>}
 
                       <div className="flex flex-wrap gap-x-3 gap-y-1 pt-1 text-xs text-slate-600 tabular-nums">
                         {items.map(it => {
                           const p = productMap.get(it.product_id)
                           const hasDiff = Number(it.damaged_quantity || 0) + Number(it.missing_quantity || 0) > 0
                           return (
-                            <span key={it.id}>
+                            <span key={it.id} className="bg-slate-50 px-2 py-0.5 rounded border border-slate-200">
                               {p?.name || 'Producto'}: <strong>{fmtNum(Number(it.quantity), 0)}</strong>
                               {trf.status === 'received' && (
-                                <span className={hasDiff ? 'text-amber-700' : 'text-emerald-700'}>
+                                <span className={hasDiff ? 'text-amber-700 font-semibold' : 'text-emerald-700 font-semibold'}>
                                   {' '}
                                   (recibido {fmtNum(Number(it.received_quantity ?? it.quantity), 0)}
                                   {hasDiff
@@ -1106,38 +1223,111 @@ export default function BranchesWarehouses({
                       </div>
                     </div>
 
-                    {canEditInventory && (
-                      <div className="flex items-center gap-2 shrink-0">
-                        {trf.status === 'draft' && (
-                          <button
-                            type="button"
-                            disabled={busy}
-                            onClick={() => void handleDispatchTransfer(trf.id)}
-                            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800 whitespace-nowrap"
-                          >
-                            <Send className="w-3.5 h-3.5" />
-                            Despachar origen
-                          </button>
-                        )}
-                        {trf.status === 'in_transit' && (
-                          <button
-                            type="button"
-                            disabled={busy}
-                            onClick={() => openReceiveModal(trf)}
-                            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-500 whitespace-nowrap"
-                          >
-                            <PackageCheck className="w-3.5 h-3.5" />
-                            Recibir en destino
-                          </button>
-                        )}
-                      </div>
-                    )}
+                    {/* Botonera de acciones logísticas completas */}
+                    <div className="flex flex-wrap items-center gap-2 shrink-0 pt-2 xl:pt-0">
+                      {/* Botón Mapa y Rastreo GPS */}
+                      <button
+                        type="button"
+                        onClick={() => setMapModalTarget(trf)}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-semibold transition-colors"
+                      >
+                        <Navigation className="w-3.5 h-3.5" />
+                        Ruta en Mapa / GPS
+                      </button>
+
+                      {/* Botón Escáner de Llegada con Barcode/QR */}
+                      {trf.status === 'in_transit' && (
+                        <button
+                          type="button"
+                          onClick={() => setBarcodeModalTarget(trf)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-xs font-semibold transition-colors"
+                        >
+                          <Scan className="w-3.5 h-3.5" />
+                          Escanear Llegada
+                        </button>
+                      )}
+
+                      {/* Botón Digitalizar / Ver Nota Física Sellada */}
+                      <button
+                        type="button"
+                        onClick={() => setPhysicalNoteModalTarget(trf)}
+                        className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-xs font-semibold transition-colors ${
+                          trf.physical_dispatch_note_url
+                            ? 'border-blue-300 bg-white text-blue-700 hover:bg-blue-50'
+                            : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
+                        }`}
+                      >
+                        <Camera className="w-3.5 h-3.5 text-slate-500" />
+                        {trf.physical_dispatch_note_url ? 'Ver Nota Física' : 'Escanear Nota Física'}
+                      </button>
+
+                      {/* Botón Acta y Firma Digital ePOD */}
+                      <button
+                        type="button"
+                        onClick={() => setSignatureModalTarget(trf)}
+                        className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-xs font-semibold transition-colors ${
+                          trf.delivery_proof_signature
+                            ? 'border-emerald-300 bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
+                            : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
+                        }`}
+                      >
+                        <PenTool className="w-3.5 h-3.5 text-slate-500" />
+                        {trf.delivery_proof_signature ? 'Acta / Firma ePOD' : 'Firma de Entrega'}
+                      </button>
+
+                      {/* Despachar o Recibir */}
+                      {canEditInventory && (
+                        <>
+                          {trf.status === 'draft' && (
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => void handleDispatchTransfer(trf.id)}
+                              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800 whitespace-nowrap shadow-sm"
+                            >
+                              <Send className="w-3.5 h-3.5" />
+                              Despachar origen
+                            </button>
+                          )}
+                          {trf.status === 'in_transit' && (
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => openReceiveModal(trf)}
+                              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-500 whitespace-nowrap shadow-sm"
+                            >
+                              <PackageCheck className="w-3.5 h-3.5" />
+                              Recibir en destino
+                            </button>
+                          )}
+                        </>
+                      )}
+                    </div>
                   </div>
                 )
               })}
             </div>
           )}
         </section>
+      )}
+
+      {/* TAB FLOTA Y LOGÍSTICA DE RUTAS */}
+      {tab === 'fleet' && (
+        <FleetManagerTab
+          warehouses={warehouses}
+          canEdit={canEditInventory}
+          onSelectVehicleForMap={veh => {
+            // Si el vehículo está en ruta con un traslado activo, abrir mapa
+            const activeTrf = transfers.find(
+              t => t.vehicle_id === veh.id && t.status === 'in_transit'
+            )
+            if (activeTrf) {
+              setMapModalTarget(activeTrf)
+            } else if (transfers[0]) {
+              setMapModalTarget(transfers[0])
+            }
+          }}
+        />
       )}
 
       {/* TAB 3: SUCURSALES Y BODEGAS */}
@@ -1595,6 +1785,62 @@ export default function BranchesWarehouses({
                 </div>
               </div>
 
+              {/* ASIGNACIÓN DE VEHÍCULO DE FLOTA Y CONDUCTOR */}
+              <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-800 mb-1 flex items-center gap-1.5">
+                    <Truck className="w-3.5 h-3.5 text-slate-600" />
+                    Vehículo de Flota Asignado al Traslado
+                  </label>
+                  <select
+                    value={trfForm.vehicleId}
+                    onChange={e => {
+                      const vId = e.target.value
+                      const vehicles = getFleetVehicles()
+                      const found = vehicles.find(v => v.id === vId)
+                      setTrfForm(f => ({
+                        ...f,
+                        vehicleId: vId,
+                        driverName: found?.driver_name || f.driverName,
+                        driverPhone: found?.driver_phone || f.driverPhone,
+                        dispatcherName: found?.dispatcher_name || f.dispatcherName,
+                      }))
+                    }}
+                    className={inputCls}
+                  >
+                    <option value="">Seleccionar vehículo disponible o dejar pendiente...</option>
+                    {getFleetVehicles().map(veh => (
+                      <option key={veh.id} value={veh.id}>
+                        {veh.plate} · {veh.name} ({veh.capacity_kg} kg / {veh.capacity_m3} m³) · {veh.driver_name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+                  <div>
+                    <label className="block text-[11px] font-medium text-slate-600 mb-0.5">Conductor Responsable</label>
+                    <input
+                      type="text"
+                      value={trfForm.driverName}
+                      onChange={e => setTrfForm({ ...trfForm, driverName: e.target.value })}
+                      placeholder="Nombre del conductor"
+                      className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 text-xs"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-medium text-slate-600 mb-0.5">Teléfono Conductor</label>
+                    <input
+                      type="text"
+                      value={trfForm.driverPhone}
+                      onChange={e => setTrfForm({ ...trfForm, driverPhone: e.target.value })}
+                      placeholder="+57 312..."
+                      className="w-full px-2.5 py-1.5 rounded-lg border border-slate-300 text-xs font-mono"
+                    />
+                  </div>
+                </div>
+              </div>
+
               <div>
                 <div className="flex items-center justify-between mb-1.5">
                   <label className="text-xs font-medium text-slate-600">Productos a trasladar</label>
@@ -1962,6 +2208,70 @@ export default function BranchesWarehouses({
             </form>
           </div>
         </div>
+      )}
+
+      {/* MODAL 1: VISUALIZACIÓN EN MAPA Y SEGUIMIENTO GPS */}
+      {mapModalTarget && (
+        <TransferRouteMapModal
+          transfer={mapModalTarget}
+          sourceWarehouse={warehouseMap.get(mapModalTarget.source_warehouse_id)}
+          destWarehouse={warehouseMap.get(mapModalTarget.destination_warehouse_id)}
+          onClose={() => setMapModalTarget(null)}
+          onGpsUpdated={() => void loadData()}
+        />
+      )}
+
+      {/* MODAL 2: ESCÁNER DE LLEGADA CON CÓDIGO DE BARRAS / QR */}
+      {barcodeModalTarget && (
+        <ArrivalBarcodeScannerModal
+          transfer={barcodeModalTarget}
+          items={transferItems.filter(i => i.transfer_id === barcodeModalTarget.id)}
+          products={products}
+          onClose={() => setBarcodeModalTarget(null)}
+          onConfirmVerification={verifiedResults => {
+            const trf = barcodeModalTarget
+            setBarcodeModalTarget(null)
+            setReceiveTarget(trf)
+            setReceiveLines(
+              verifiedResults.map(vr => {
+                const p = productMap.get(vr.product_id)
+                const orig = transferItems.find(
+                  i => i.transfer_id === trf.id && i.product_id === vr.product_id
+                )
+                return {
+                  product_id: vr.product_id,
+                  product_name: p?.name || 'Producto',
+                  sku: p?.sku || '',
+                  expected: Number(orig?.quantity) || 0,
+                  received: String(vr.received_quantity),
+                  damaged: String(vr.damaged_quantity),
+                  missing: String(vr.missing_quantity),
+                  notes: vr.notes || '',
+                }
+              })
+            )
+          }}
+        />
+      )}
+
+      {/* MODAL 3: DIGITALIZAR FACTURA O NOTA DE ENTREGA FÍSICA SELLADA */}
+      {physicalNoteModalTarget && (
+        <PhysicalNoteScannerModal
+          transfer={physicalNoteModalTarget}
+          onClose={() => setPhysicalNoteModalTarget(null)}
+          onSaved={() => void loadData()}
+        />
+      )}
+
+      {/* MODAL 4: ACTA Y CONFIRMACIÓN DIGITAL DE ENTREGA (ePOD) */}
+      {signatureModalTarget && (
+        <DeliveryProofSignatureModal
+          transfer={signatureModalTarget}
+          sourceWarehouse={warehouseMap.get(signatureModalTarget.source_warehouse_id)}
+          destWarehouse={warehouseMap.get(signatureModalTarget.destination_warehouse_id)}
+          onClose={() => setSignatureModalTarget(null)}
+          onSaved={() => void loadData()}
+        />
       )}
     </div>
   )

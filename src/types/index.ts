@@ -572,7 +572,83 @@ export interface InventoryTransfer {
   approved_at: string | null
   received_at: string | null
   updated_at?: string
+  // Infraestructura de Transporte y Flota
+  vehicle_id?: string | null
+  vehicle_plate?: string | null
+  vehicle_name?: string | null
+  driver_name?: string | null
+  driver_phone?: string | null
+  driver_license?: string | null
+  dispatcher_name?: string | null
+  // Digitalización de factura o nota física firmada
+  physical_dispatch_note_url?: string | null
+  physical_dispatch_note_name?: string | null
+  physical_dispatch_note_date?: string | null
+  // Confirmación de entrega y firma digital (ePOD)
+  delivery_proof_signature?: string | null
+  receiver_name?: string | null
+  receiver_document?: string | null
+  received_condition?: 'conforme' | 'con_observaciones' | 'averia_parcial' | null
+  delivery_confirmation_sent?: boolean
+  delivery_confirmation_email?: string | null
+  delivery_confirmation_whatsapp?: string | null
+  // Telemetría GPS en tiempo real
+  last_lat?: number | null
+  last_lng?: number | null
+  last_gps_updated_at?: string | null
+  live_tracking_active?: boolean
+  estimated_duration_min?: number | null
+  distance_km?: number | null
 }
+
+export type VehicleOperationalStatus = 'operativo' | 'en_ruta' | 'en_taller' | 'inactivo'
+export type VehicleType = 'camion' | 'furgon' | 'furgon_frio' | 'camioneta' | 'moto_carga'
+
+export interface FleetVehicle {
+  id: string
+  company_id?: string
+  name: string
+  plate: string
+  brand_model: string
+  vehicle_type: VehicleType
+  capacity_kg: number
+  capacity_m3: number
+  odometer_km: number
+  warehouse_id: string // Bodega conectada
+  warehouse_name?: string
+  driver_name: string
+  driver_phone: string
+  driver_license: string
+  dispatcher_name?: string
+  status: VehicleOperationalStatus
+  soat_expires_at: string
+  rtm_expires_at: string // Revisión técnico mecánica
+  insurance_policy?: string
+  last_maintenance_at?: string
+  next_maintenance_km?: number
+  current_lat?: number
+  current_lng?: number
+  last_gps_at?: string
+  is_gps_active?: boolean
+  notes?: string
+  created_at: string
+}
+
+export interface VehicleMaintenanceRecord {
+  id: string
+  vehicle_id: string
+  maintenance_type: 'preventivo' | 'correctivo' | 'cambio_aceite' | 'frenos' | 'llantas' | 'revision_general'
+  description: string
+  cost: number
+  odometer_km: number
+  performed_at: string
+  workshop_name: string
+  invoice_doc_url?: string
+  performed_by: string
+  next_due_date?: string
+  next_due_km?: number
+}
+
 
 export interface WarehouseReservation {
   id: string

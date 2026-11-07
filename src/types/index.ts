@@ -300,6 +300,11 @@ export interface CompanySummary {
   owner_name: string | null
   owner_email: string | null
   members_count: number
+  plan_type?: string | null
+  subscription_status?: string | null
+  trial_end?: string | null
+  subscription_end?: string | null
+  created_at?: string | null
 }
 
 export interface Subscription {
@@ -1121,5 +1126,210 @@ export interface SupportPassSession {
   created_at: string
   revoked_at?: string | null
 }
+
+// 13. Equipo Global de Plataforma y Auditoría Central
+export type PlatformStaffRole =
+  | 'developer'
+  | 'operations_manager'
+  | 'support_manager'
+  | 'technician'
+  | 'commercial'
+  | 'billing'
+  | 'customer_success'
+
+export interface PlatformStaffMember {
+  id: string
+  user_id: string
+  full_name: string
+  email: string
+  role?: PlatformStaffRole
+  staff_role: PlatformStaffRole
+  profile_role?: string
+  active: boolean
+  permissions: {
+    manage_plans?: boolean
+    view_commercial_companies?: boolean
+    support_inbox?: boolean
+    sql_diagnostics?: boolean
+    audit_logs?: boolean
+    [key: string]: any
+  }
+  notes?: string | null
+  created_at: string
+  updated_at?: string | null
+}
+
+export interface PlatformAuditEntry {
+  id: string
+  event_type: string
+  event_data?: Record<string, any> | null
+  actor_email?: string | null
+  actor_id: string
+  target_email?: string | null
+  target_company_id?: string | null
+  target_company_name?: string | null
+  target_user_id?: string | null
+  operator_id?: string | null
+  operator_email?: string | null
+  action?: string | null
+  details?: Record<string, any> | null
+  ip_address?: string | null
+  created_at: string
+}
+
+// 14. Modelo Contable Profesional NIIF y Partida Doble
+export type AccountType = 'activo' | 'pasivo' | 'patrimonio' | 'ingreso' | 'costo' | 'gasto'
+export type AccountNature = 'debito' | 'credito'
+
+export interface Account {
+  id: string
+  company_id: string
+  code: string
+  name: string
+  parent_id?: string | null
+  account_type: AccountType
+  nature: AccountNature
+  level: number
+  is_postable: boolean
+  active: boolean
+  created_at: string
+  updated_at?: string
+}
+
+export type JournalEntryStatus = 'borrador' | 'posteado' | 'cerrado' | 'anulado'
+export type JournalSourceModule = 'manual' | 'ventas' | 'compras' | 'pos' | 'nomina' | 'ajuste' | 'reversion'
+
+export interface JournalEntry {
+  id: string
+  company_id: string
+  entry_number: string
+  entry_date: string
+  concept: string
+  status: JournalEntryStatus
+  source_module: JournalSourceModule
+  source_id?: string | null
+  created_by?: string | null
+  posted_by?: string | null
+  posted_at?: string | null
+  created_at: string
+  updated_at: string
+  lines?: JournalLine[]
+  total_debit?: number
+  total_credit?: number
+}
+
+export interface JournalLine {
+  id: string
+  company_id: string
+  entry_id: string
+  account_id: string
+  line_number: number
+  description?: string | null
+  debit: number
+  credit: number
+  created_at: string
+  account?: Pick<Account, 'id' | 'code' | 'name' | 'nature' | 'account_type'> | null
+}
+
+export interface CreateJournalEntryPayload {
+  company_id: string
+  entry_date: string
+  concept: string
+  status: 'borrador' | 'posteado'
+  source_module?: JournalSourceModule
+  source_id?: string | null
+  lines: Array<{
+    account_id: string
+    debit: number
+    credit: number
+    description?: string
+  }>
+}
+
+export interface TrialBalanceAccountRow {
+  account_id: string
+  account_code: string
+  account_name: string
+  account_type: AccountType
+  nature: AccountNature
+  level: number
+  is_postable: boolean
+  initial_balance: number
+  period_debit: number
+  period_credit: number
+  final_balance: number
+}
+
+export interface TrialBalanceReport {
+  company_id: string
+  start_date: string
+  end_date: string
+  total_period_debit: number
+  total_period_credit: number
+  difference: number
+  is_balanced: boolean
+  accounts: TrialBalanceAccountRow[]
+}
+
+export interface BalanceSheetAccountRow {
+  id: string
+  code: string
+  name: string
+  level: number
+  is_postable: boolean
+  balance: number
+}
+
+export interface BalanceSheetReport {
+  company_id: string
+  as_of_date: string
+  assets: {
+    accounts: BalanceSheetAccountRow[]
+    total: number
+  }
+  liabilities: {
+    accounts: BalanceSheetAccountRow[]
+    total: number
+  }
+  equity: {
+    accounts: BalanceSheetAccountRow[]
+    base_total: number
+    net_income_current_period: number
+    total_equity_with_income: number
+  }
+  liabilities_and_equity_total: number
+  difference: number
+  is_balanced: boolean
+}
+
+export interface IncomeStatementItem {
+  id: string
+  code: string
+  name: string
+  level: number
+  amount: number
+}
+
+export interface IncomeStatementReport {
+  company_id: string
+  start_date: string
+  end_date: string
+  revenues: {
+    items: IncomeStatementItem[]
+    total: number
+  }
+  costs: {
+    items: IncomeStatementItem[]
+    total: number
+  }
+  gross_profit: number
+  expenses: {
+    items: IncomeStatementItem[]
+    total: number
+  }
+  operating_profit: number
+  net_income: number
+}
+
 
 

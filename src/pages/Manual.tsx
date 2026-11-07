@@ -11,10 +11,23 @@ export default function Manual({ standalone = false, role, onNavigate }: {
   onNavigate?: (page: string) => void
 }) {
   const myRole: RoleKey =
-    role === 'vendedor' ? 'vendedor' : role === 'contador' ? 'contador' : 'dueno'
+    role === 'admin' || role === 'super_admin' ? 'admin'
+    : role === 'contador' ? 'contador'
+    : role === 'vendedor' ? 'vendedor'
+    : role === 'transportador' ? 'transportador'
+    : role === 'gerente' ? 'gerente'
+    : role === 'almacen' ? 'almacen'
+    : role === 'tecnico' ? 'tecnico'
+    : 'dueno'
+
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<'todos' | RoleKey>(
-    role === 'vendedor' ? 'vendedor' : role === 'contador' ? 'contador' : 'todos'
+    role === 'admin' || role === 'super_admin' ? 'admin'
+    : role === 'contador' ? 'contador'
+    : role === 'vendedor' ? 'vendedor'
+    : role === 'transportador' ? 'transportador'
+    : role === 'gerente' ? 'gerente'
+    : 'todos'
   )
   const [open, setOpen] = useState<string | null>(null)
   const [all, setAll] = useState(false)
@@ -79,9 +92,13 @@ export default function Manual({ standalone = false, role, onNavigate }: {
         </div>
         <div className="flex gap-2 overflow-x-auto pb-1">
           <button onClick={() => setFilter('todos')} className={chip(filter === 'todos')}>Todos ({CHAPTERS.length})</button>
-          <button onClick={() => setFilter('dueno')} className={chip(filter === 'dueno')}>Soy dueño / admin</button>
-          <button onClick={() => setFilter('vendedor')} className={chip(filter === 'vendedor')}>Soy vendedor</button>
-          <button onClick={() => setFilter('contador')} className={chip(filter === 'contador')}>Soy contador</button>
+          <button onClick={() => setFilter('admin')} className={chip(filter === 'admin')}>Admin Central</button>
+          <button onClick={() => setFilter('dueno')} className={chip(filter === 'dueno')}>Dueño / Empresa</button>
+          <button onClick={() => setFilter('gerente')} className={chip(filter === 'gerente')}>Gerente</button>
+          <button onClick={() => setFilter('contador')} className={chip(filter === 'contador')}>Contador (NIIF)</button>
+          <button onClick={() => setFilter('vendedor')} className={chip(filter === 'vendedor')}>Vendedor</button>
+          <button onClick={() => setFilter('transportador')} className={chip(filter === 'transportador')}>Transporte</button>
+          <button onClick={() => setFilter('tecnico')} className={chip(filter === 'tecnico')}>Soporte Técnico</button>
           <button onClick={() => setAll(v => !v)} className={chip(false) + ' ml-auto'}>{all ? 'Contraer todo' : 'Expandir todo'}</button>
         </div>
       </div>
@@ -128,10 +145,13 @@ export default function Manual({ standalone = false, role, onNavigate }: {
                   <p className="font-semibold text-slate-800">{idx + 1}. {c.title}</p>
                   <p className="text-xs text-slate-500 mt-0.5 line-clamp-2">{c.summary}</p>
                 </div>
-                <div className="hidden sm:flex gap-1 shrink-0">
+                <div className="hidden sm:flex flex-wrap gap-1 shrink-0 max-w-[200px] justify-end">
+                  {c.roles.includes('admin') && <Chip tone="red">Admin Central</Chip>}
                   {c.roles.includes('dueno') && <Chip tone="slate">Dueño</Chip>}
-                  {c.roles.includes('vendedor') && <Chip tone="indigo">Vendedor</Chip>}
+                  {c.roles.includes('gerente') && <Chip tone="amber">Gerente</Chip>}
                   {c.roles.includes('contador') && <Chip tone="green">Contador</Chip>}
+                  {c.roles.includes('vendedor') && <Chip tone="indigo">Vendedor</Chip>}
+                  {c.roles.includes('transportador') && <Chip tone="indigo">Transporte</Chip>}
                 </div>
                 <ChevronDown className={`w-4 h-4 text-slate-400 shrink-0 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
               </button>

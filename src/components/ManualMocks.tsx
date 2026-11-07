@@ -6,6 +6,7 @@ export type MockKind =
   | 'catalog' | 'catorders' | 'ocr' | 'warehouses' | 'expenses' | 'cpa' | 'erpbridge' | 'support'
   | 'blindcount' | 'layaways' | 'exchanges' | 'bankrecon' | 'priceshield'
   | 'omnichannel' | 'ai_actions' | 'branch_balance' | 'supplier_intel' | 'anomaly_detector' | 'epod' | 'equipment_assets' | 'employee_portal' | 'compliance' | 'api_ecosystem'
+  | 'sqlcenter' | 'companies' | 'adminplans' | 'journal_entry' | 'dispatch_history'
 
 /* ───────── Ilustraciones (pantallas de ejemplo) ───────── */
 
@@ -484,6 +485,41 @@ export function Mock({ kind }: { kind: MockKind }) {
         <Field label="API Key Activa" value="ip_live_84b9f2...<Pin n={1} />" />
         <Card><Between a="GET /api/v1/products" b={<Chip tone="slate">200 OK</Chip>} /><Between a="POST /api/v1/orders" b={<Chip tone="slate">201 Creado</Chip>} /></Card>
         <Btn tone="dark" pin={2}>Copiar cURL / Ver docs</Btn>
+      </Body></>)
+      break
+    case 'sqlcenter':
+      screen = (<><Top t="Centro de Scripts SQL" /><Body>
+        <Card><Between a={<b className="text-slate-800">Supabase Service Role</b>} b={<Chip tone="green">Conectado</Chip>} /><p className="text-slate-400">Migraciones: 21 tablas activas<Pin n={1} /></p></Card>
+        <Card><Between a="20261107...contabilidad" b={<Chip tone="indigo">Aplicada</Chip>} /></Card>
+        <Btn tone="dark" pin={2}>Ejecutar diagnóstico / 1-Clic</Btn>
+      </Body></>)
+      break
+    case 'companies':
+      screen = (<><Top t="Empresas Clientes (Multi-tenant)" /><Body>
+        <Card><Between a={<b className="text-slate-800">Inquilinos SaaS</b>} b={<Chip tone="slate">Aislados</Chip>} /><p className="text-slate-500">Cubeta de prueba central<Pin n={1} /></p></Card>
+        <Card><Between a="Distribuidora Los Andes" b={<Chip tone="green">Activo</Chip>} /><p className="text-slate-400">Plan Profesional · 8 sedes</p></Card>
+        <Btn tone="dark" pin={2}>Auditar / Gestionar inquilino</Btn>
+      </Body></>)
+      break
+    case 'adminplans':
+      screen = (<><Top t="Activar Planes y Licencias" /><Body>
+        <Card><Between a={<b className="text-slate-800">Prueba 90 Días</b>} b={<Chip tone="green">Activa</Chip>} /><p className="text-slate-500">Renovación de licencias<Pin n={1} /></p></Card>
+        <Card><Between a="Plan Profesional" b="$19.99/mes" /><Between a="Plan Corporativo" b="$49.99/mes" /></Card>
+        <Btn tone="green" pin={2}>Aprobar suscripción manual</Btn>
+      </Body></>)
+      break
+    case 'journal_entry':
+      screen = (<><Top t="Registrar Asiento (Partida Doble)" /><Body>
+        <Card><Between a={<b className="text-slate-800">Luca Pacioli</b>} b={<Chip tone="green">Cuadrado</Chip>} /><p className="text-slate-500">Débitos = Créditos ($0.00)<Pin n={1} /></p></Card>
+        <Card><Between a="110505 · Caja" b="$150.000 (D)" /><Between a="413505 · Ventas" b="$150.000 (C)" /></Card>
+        <Btn tone="dark" pin={2}>Asentar y Postear (Inmutable)</Btn>
+      </Body></>)
+      break
+    case 'dispatch_history':
+      screen = (<><Top t="Trazabilidad de Despachos" /><Body>
+        <Card><Between a={<b className="text-slate-800">Remisión #REM-1048</b>} b={<Chip tone="green">Entregado</Chip>} /><p className="text-slate-400">Furgón NHR #01 · Bogotá → Norte<Pin n={1} /></p></Card>
+        <Card><Between a="Café Gourmet 500g" b="48 uds" /><p className="text-slate-500">Firma receptor + foto e-POD<Pin n={2} /></p></Card>
+        <Btn tone="dark" pin={3}>Ver bitácora de auditoría</Btn>
       </Body></>)
       break
     case 'plan':

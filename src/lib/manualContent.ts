@@ -4,11 +4,20 @@ import {
   Store, QrCode, LogIn, WifiOff, BookOpen, Lock, Calculator, Sparkles, ShoppingBasket, Banknote, CalendarDays, MessageCircleQuestion, CalendarClock, TrendingUp, PieChart,
   Tag, Percent, Gauge, Route as RouteIcon, UserPlus,
   ClipboardCheck, ScanLine, Building2, TrendingDown, BadgeCheck, ArrowLeftRight, LifeBuoy, Layers, Receipt, EyeOff, ShieldCheck, FileSpreadsheet,
+  Database, Gift, History, Plus,
   type LucideIcon,
 } from 'lucide-react'
 import type { MockKind } from '../components/ManualMocks'
 
-export type RoleKey = 'dueno' | 'vendedor' | 'contador'
+export type RoleKey =
+  | 'admin'
+  | 'dueno'
+  | 'gerente'
+  | 'contador'
+  | 'vendedor'
+  | 'transportador'
+  | 'almacen'
+  | 'tecnico'
 
 export interface Chapter {
   id: string
@@ -22,12 +31,156 @@ export interface Chapter {
   mock: MockKind
 }
 
-const ALL_ROLES: RoleKey[] = ['dueno', 'vendedor', 'contador']
-const BOTH: RoleKey[] = ['dueno', 'vendedor']
-const OWNER: RoleKey[] = ['dueno']
-const OWNER_CPA: RoleKey[] = ['dueno', 'contador']
+const ALL_ROLES: RoleKey[] = ['admin', 'dueno', 'gerente', 'contador', 'vendedor', 'transportador', 'almacen', 'tecnico']
+const ADMIN_ONLY: RoleKey[] = ['admin']
+const OWNER: RoleKey[] = ['dueno', 'admin']
+const OWNER_CPA: RoleKey[] = ['dueno', 'contador', 'admin']
+const BOTH: RoleKey[] = ['dueno', 'vendedor', 'admin']
+const CPA_ROLES: RoleKey[] = ['contador', 'dueno', 'admin']
+const LOGISTICS_ROLES: RoleKey[] = ['transportador', 'dueno', 'admin']
+const GERENTE_ROLES: RoleKey[] = ['gerente', 'dueno', 'admin']
 
 export const CHAPTERS: Chapter[] = [
+  {
+    id: 'companies',
+    title: 'Gestión de Empresas Clientes y Aislamiento Multi-inquilino',
+    icon: Building2,
+    roles: ADMIN_ONLY,
+    page: 'companies',
+    mock: 'companies',
+    summary: 'Panel del Administrador Central para supervisar inquilinos SaaS, asignar planes, gestionar bloqueos y mantener estricto aislamiento de datos privados.',
+    steps: [
+      'Entra a «Empresas clientes» desde el perfil de Administrador Central.',
+      'Revisa el listado de empresas con su ID único, NIT, nombre comercial, plan asignado y fecha de vencimiento de suscripción.',
+      'Filtra por estado: Activas, En prueba, Vencidas o Bloqueadas.',
+      'Pulsa «Gestionar empresa» para cambiar el plan, extender el período de prueba o bloquear temporalmente el acceso.',
+      'Seguridad y privacidad: El Administrador Central NO puede visualizar los asientos, productos ni finanzas privadas de terceros; solo gestiona su licencia y cuenta con su propia cubeta de prueba para producción.',
+    ],
+    tips: [
+      'El aislamiento multi-tenant se rige por Row Level Security (RLS) en Supabase: ninguna empresa puede leer datos de otra.',
+      'El Administrador Central tiene su propia cubeta de prueba aislada para verificar operaciones del sistema sin contaminar a los clientes.',
+    ],
+  },
+  {
+    id: 'sqlcenter',
+    title: 'Centro de Scripts SQL y Migraciones Supabase',
+    icon: Database,
+    roles: ADMIN_ONLY,
+    page: 'sqlcenter',
+    mock: 'sqlcenter',
+    summary: 'Consola técnica del Administrador Central para auditar migraciones, ejecutar scripts DDL/DML, verificar triggers de partida doble y diagnosticar tablas.',
+    steps: [
+      'Entra a «Centro de Scripts SQL y Supabase» (módulo exclusivo de Administrador Central).',
+      'Revisa el catálogo de migraciones estructuradas (incluyendo la migración 0045, partida doble y reglas de inmutabilidad).',
+      'Pulsa «Copiar SQL» o utiliza el botón de ejecución para aplicar políticas RLS, funciones PL/pgSQL y triggers de auditoría.',
+      'Verifica el semáforo de integridad: confirma que las tablas accounts, journal_entries, journal_lines y companies existan con sus índices correspondientes.',
+    ],
+    tips: [
+      'Este centro está restringido exclusivamente a la cuenta maestra y Administrador Central; ningún usuario de empresa cliente tiene acceso.',
+    ],
+  },
+  {
+    id: 'adminplans',
+    title: 'Activación Central de Planes y Licencias',
+    icon: Gift,
+    roles: ADMIN_ONLY,
+    page: 'adminplans',
+    mock: 'adminplans',
+    summary: 'Control maestro de licencias: activa planes Básico, Pro o Enterprise, registra extensiones de cortesía y aprueba comprobantes de pago.',
+    steps: [
+      'Entra a «Activar planes» en la sección de Administración.',
+      'Busca la empresa por NIT o nombre comercial.',
+      'Selecciona el nivel de plan: Prueba (90 días), Básico, Profesional o Empresarial.',
+      'Indica la vigencia (meses o anual) y confirma la activación con un solo clic.',
+      'El sistema actualiza de inmediato el acceso de todos los usuarios vinculados a esa empresa sin interrumpir su sesión.',
+    ],
+  },
+  {
+    id: 'puc_niif',
+    title: 'Catálogo PUC Colombiano NIIF (4 Niveles Jerárquicos)',
+    icon: BookOpen,
+    roles: CPA_ROLES,
+    page: 'accounting',
+    mock: 'accounting',
+    summary: 'Catálogo de cuentas oficial estructurado según NIIF: Clases 1 a 6 (Activo, Pasivo, Patrimonio, Ingresos, Gastos, Costos) con árbol jerárquico recursivo.',
+    steps: [
+      'Entra a «Catálogo PUC NIIF» en el módulo Contabilidad.',
+      'Visualiza las cuentas organizadas por niveles: Nivel 1 (Clase), Nivel 2 (Grupo), Nivel 3 (Cuenta) y Nivel 4 (Subcuenta).',
+      'Filtra rápidamente por código o nombre mediante la barra de búsqueda en tiempo real.',
+      'Cada cuenta muestra su insignia de Naturaleza: Débito (Activo, Gastos, Costos) o Crédito (Pasivo, Patrimonio, Ingresos).',
+      'Las cuentas de último nivel (Subcuentas) están habilitadas para recibir movimientos contables directos.',
+    ],
+    tips: [
+      'El algoritmo recursivo buildAccountTree arma el árbol dinámico respetando la codificación estándar colombiana.',
+    ],
+  },
+  {
+    id: 'journal_entry',
+    title: 'Registro de Asientos con Partida Doble e Inmutabilidad',
+    icon: Plus,
+    roles: CPA_ROLES,
+    page: 'journal_entry',
+    mock: 'journal_entry',
+    summary: 'Formulario dinámico para registrar asientos contables con validación de partida doble en tiempo real (Principio de Luca Pacioli) e inmutabilidad garantizada.',
+    steps: [
+      'Entra a «Registrar Asiento Diario» (o pestaña correspondiente en Contabilidad).',
+      'Ingresa fecha del comprobante, número consecutivo y concepto o descripción de la transacción.',
+      'Agrega renglones contables seleccionando la cuenta PUC e indicando el valor en Débito o Crédito.',
+      'Verifica el semáforo de Partida Doble en vivo: el asiento solo se puede guardar cuando Suma Débitos = Suma Créditos (diferencia = $0).',
+      'Pulsa «Contabilizar asiento»: una vez registrado en estado «posteado» o «cerrado», la base de datos bloquea cualquier edición o borrado para garantizar inmutabilidad contable.',
+    ],
+    tips: [
+      'Para corregir un asiento posteado, utiliza la función de Reversión: el sistema genera un contra-asiento auditable manteniendo el histórico.',
+    ],
+  },
+  {
+    id: 'accstate',
+    title: 'Centro de Estados Financieros (Balances y PyG con Excel/PDF)',
+    icon: FileBarChart,
+    roles: OWNER_CPA,
+    page: 'accstate',
+    mock: 'statements',
+    summary: 'Generación instantánea de Balance de Comprobación, Balance General NIIF y Estado de Resultados (Pérdidas y Ganancias) con exportación a Excel y PDF.',
+    steps: [
+      'Entra a «Centro de Estados Financieros (Balances)» desde el menú de Contabilidad NIIF.',
+      'Selecciona el reporte deseado: Balance de Comprobación, Balance General o Estado de Resultados.',
+      'Elige el rango de fechas (Desde / Hasta) o la fecha de corte.',
+      'Comprueba que el Balance General cumpla la Ecuación Patrimonial: Activo = Pasivo + Patrimonio.',
+      'Pulsa «Exportar a Excel (XLSX)» para descargar la hoja de cálculo completa o «Exportar a PDF» para imprimir el informe oficial listo para firma del Contador y Representante Legal.',
+    ],
+  },
+  {
+    id: 'dispatch_history',
+    title: 'Trazabilidad y Auditoría de Despachos',
+    icon: History,
+    roles: LOGISTICS_ROLES,
+    page: 'dispatch_history',
+    mock: 'dispatch_history',
+    summary: 'Control logístico completo de mercancía despachada: auditoría de cantidades enviadas vs. entregadas, registro de transportador y correcciones en sitio.',
+    steps: [
+      'Entra a «Trazabilidad y Auditoría Despachos» desde el menú de Transporte y Despacho.',
+      'Revisa cada remisión con su fecha, número de guía, bodega de salida, cliente o sede destino y chofer asignado.',
+      'Verifica si hubo diferencias o novedades (mercancía rechazada, cambio de talla o avería en ruta).',
+      'Consulta quién autorizó cada ajuste y visualiza la constancia digital con firma y GPS.',
+    ],
+  },
+  {
+    id: 'demo_simulation',
+    title: 'Simulador de Roles y Demostración en Vivo',
+    icon: LayoutDashboard,
+    roles: ALL_ROLES,
+    page: 'dashboard',
+    mock: 'panel',
+    summary: 'Herramienta de demostración para experimentar el sistema desde la perspectiva exacta de cada rol operativo y administrativo.',
+    steps: [
+      'En la barra superior de demostración, selecciona cualquier rol disponible: Dueño, Admin. Empresa, Gerente, Contador Público, Almacén, Vendedor, Transporte o Soporte Técnico.',
+      'Observa cómo el menú lateral se reconfigura de inmediato para mostrar únicamente las opciones y accesos autorizados para ese perfil.',
+      'Por ejemplo, al elegir «Contador Público» verás únicamente Catálogo PUC NIIF, Registrar Asiento Diario y Centro de Estados Financieros.',
+      'Al seleccionar «Vendedor» tendrás acceso a Mostrador/POS, Inventario de Bodega y Cierre de Caja.',
+      'Al seleccionar «Transporte» verás Traslados Multisede, Mapa GPS en Vivo, Despachos y Trazabilidad.',
+      'El rol «Administrador Central» cuenta con acceso a Empresas Clientes, Scripts SQL y Activación de Planes, manteniendo su cubeta de prueba de producción separada de los clientes.',
+    ],
+  },
   {
     id: 'inicio', title: 'Crear cuenta e iniciar sesión', icon: LogIn, roles: ALL_ROLES, mock: 'login',
     summary: 'Entra al sistema desde el navegador de tu teléfono, tablet o computador. Al registrarte tienes 3 meses de prueba gratis.',
@@ -788,6 +941,9 @@ export const FAQ = [
   { q: '¿Cada cuánto debo cerrar los libros contables?', a: 'Una vez al mes: concilia en «Despacho contable» o «Config. contable», contabiliza pendientes y bloquea el período en «Cierre de libros».' },
   { q: '¿Cómo agrego a un vendedor y autorizo su celular?', a: 'En «Planificar rutas» crea un enlace de invitación y envíaselo por WhatsApp. Cuando inicie sesión, aprueba su teléfono en «Equipo y dispositivos».' },
   { q: '¿Cómo cambio la moneda o el IVA de mi empresa?', a: 'En «Configuración» defines la moneda base (COP, USD, VES, etc.), el porcentaje de impuesto y si está incluido o se suma al precio.' },
+  { q: '¿Cómo funciona el aislamiento de datos para el Administrador Central?', a: 'El Administrador Central tiene una cubeta de prueba aislada para producción y pruebas. Por estrictas políticas de seguridad y Row Level Security (RLS) en Supabase, el Administrador Central NO puede observar las transacciones ni los datos privados de las empresas de terceros, únicamente sus datos de membresía, plan y estado administrativo.' },
+  { q: '¿Cómo se estructura el Catálogo PUC NIIF y cómo se asegura la Partida Doble?', a: 'El catálogo de cuentas sigue la estructura estándar NIIF colombiana organizada en 4 niveles jerárquicos (Clase, Grupo, Cuenta, Subcuenta). Todo asiento contable exige que la sumatoria de débitos sea estrictamente igual a la sumatoria de créditos (diferencia = $0) y que tenga al menos dos líneas válidas. Una vez posteado o cerrado, los registros son inmutables por base de datos.' },
+  { q: '¿Cómo funciona el modo simulación y la demostración en vivo?', a: 'En la parte superior de la aplicación (o en el menú de demostración) puedes alternar entre cualquier rol: Dueño, Administrador de Empresa, Gerente, Contador Público, Almacén, Vendedor, Transporte y Soporte Técnico. La interfaz y la barra lateral se adaptan en tiempo real según los permisos exactos de cada perfil.' },
 ]
 
 export function norm(s: string) {

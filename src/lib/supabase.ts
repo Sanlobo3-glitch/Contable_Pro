@@ -7391,6 +7391,7 @@ function createMockSupabase(silent = false): SupabaseClient {
 export type DemoRole =
   | 'dueno'
   | 'admin_empresa'
+  | 'gerente'
   | 'contador'
   | 'almacen'
   | 'vendedor'
@@ -7403,6 +7404,7 @@ const DEMO_ROLE_STORAGE_KEY = 'ip_demo_role'
 const VALID_DEMO_ROLES: DemoRole[] = [
   'dueno',
   'admin_empresa',
+  'gerente',
   'contador',
   'almacen',
   'vendedor',

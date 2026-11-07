@@ -29,7 +29,11 @@ interface StatementRow {
 
 const finalBalance = (r: TrialBalanceRow) => Number(r.closing_debit) - Number(r.closing_credit);
 
-export default function AccountingStatements() {
+export default function AccountingStatements({
+  onNavigate,
+}: {
+  onNavigate?: (page: string) => void;
+} = {}) {
   const [balanceData, setBalanceData] = useState<TrialBalanceRow[]>([]);
   const [sheetRows, setSheetRows] = useState<StatementRow[]>([]);
   const [incomeRows, setIncomeRows] = useState<StatementRow[]>([]);

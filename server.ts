@@ -7,6 +7,7 @@
 // y el servidor se lo reenvía a Supabase (nunca usa una llave con privilegios elevados).
 import { serve, env } from "bun";
 import { createClient } from "@supabase/supabase-js";
+import path from "path";
 
 const SUPABASE_URL = (env.SUPABASE_URL || env.VITE_SUPABASE_URL || "").trim().replace(/\/+$/, "");
 const SUPABASE_ANON_KEY = (env.SUPABASE_ANON_KEY || env.VITE_SUPABASE_ANON_KEY || "").trim();
@@ -53,8 +54,31 @@ serve({
     if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders });
 
     try {
+      // 1. Health check de servidor
       if (url.pathname === "/api/health" && req.method === "GET") {
         return json({ ok: true, runtime: "bun", supabaseConfigured: Boolean(SUPABASE_URL && SUPABASE_ANON_KEY) });
+      }
+
+      // 2. Si la ruta NO empieza por /api, servir la SPA estática desde dist
+      if (!url.pathname.startsWith("/api")) {
+        const cleanPath = url.pathname.replace(/^\/+/, "");
+        if (cleanPath) {
+          const filePath = path.join(process.cwd(), "dist", cleanPath);
+          const file = (globalThis as any).Bun?.file ? (globalThis as any).Bun.file(filePath) : null;
+          if (file && (await file.exists())) {
+            return new Response(file);
+          }
+        }
+
+        // Fallback SPA (index.html)
+        const indexPath = path.join(process.cwd(), "dist", "index.html");
+        const indexFile = (globalThis as any).Bun?.file ? (globalThis as any).Bun.file(indexPath) : null;
+        if (indexFile && (await indexFile.exists())) {
+          return new Response(indexFile, {
+            headers: { "Content-Type": "text/html; charset=utf-8" },
+          });
+        }
+        return json({ success: false, error: "Frontend no compilado. Ejecuta npm run build" }, 404);
       }
 
       if (!url.pathname.startsWith("/api/accounting/")) {

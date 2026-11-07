@@ -2,12 +2,17 @@ import React, { useEffect, useState } from 'react';
 import { supabase } from '../lib/supabase'; // Asegura que la ruta a tu cliente de Supabase sea correcta
 
 // 1. Tipado estricto de la estructura contable
-interface AccountNode {
+// Modelo contable vigente: tabla acc_accounts (jerarquía por parent_id)
+interface AccountRow {
   id: string;
   code: string;
   name: string;
   type: string;
   nature: string;
+  parent_id: string | null;
+}
+
+interface AccountNode extends AccountRow {
   level: number;
   children?: AccountNode[];
 }
@@ -21,19 +26,19 @@ export default function Accounting() {
     fetchAccounts();
   }, []);
 
-  // 2. Consulta de datos a Supabase sobre tus tablas reales (accounting_accounts)
+  // 2. Consulta de datos a Supabase sobre la tabla real (acc_accounts)
   const fetchAccounts = async () => {
     try {
       setLoading(true);
       const { data, error: supabaseError } = await supabase
-        .from('accounting_accounts')
-        .select('id, code, name, type, nature, level')
+        .from('acc_accounts')
+        .select('id, code, name, type, nature, parent_id')
         .order('code', { ascending: true });
 
       if (supabaseError) throw supabaseError;
 
       if (data) {
-        const tree = buildAccountTree(data as AccountNode[]);
+        const tree = buildAccountTree(data as AccountRow[]);
         setAccountTree(tree);
       }
     } catch (err: any) {
@@ -43,36 +48,28 @@ export default function Accounting() {
     }
   };
 
-  // 3. Algoritmo de conversión de lista plana a árbol jerárquico del PUC
-  const buildAccountTree = (flatAccounts: AccountNode[]): AccountNode[] => {
+  // 3. Conversión de lista plana a árbol jerárquico usando parent_id
+  const buildAccountTree = (flatAccounts: AccountRow[]): AccountNode[] => {
+    const lookup: { [id: string]: AccountNode } = {};
+    flatAccounts.forEach((account) => {
+      lookup[account.id] = { ...account, level: 1, children: [] };
+    });
+
     const rootNodes: AccountNode[] = [];
-    const lookup: { [code: string]: AccountNode } = {};
-
     flatAccounts.forEach((account) => {
-      lookup[account.code] = { ...account, children: [] };
+      const node = lookup[account.id];
+      const parent = account.parent_id ? lookup[account.parent_id] : undefined;
+      if (parent) parent.children!.push(node);
+      else rootNodes.push(node); // raíces y huérfanos
     });
 
-    flatAccounts.forEach((account) => {
-      const currentNode = lookup[account.code];
-      const code = account.code;
-
-      if (account.level === 1) {
-        rootNodes.push(currentNode);
-      } else {
-        let parentCode = '';
-        if (account.level === 2) parentCode = code.substring(0, 1);       // Grupo -> Clase
-        else if (account.level === 3) parentCode = code.substring(0, 2);  // Cuenta -> Grupo
-        else if (account.level === 4) parentCode = code.substring(0, 4);  // Subcuenta -> Cuenta
-        else if (account.level > 4) parentCode = code.substring(0, code.length - 2); // Niveles auxiliares
-
-        const parentNode = lookup[parentCode];
-        if (parentNode && parentNode.children) {
-          parentNode.children.push(currentNode);
-        } else {
-          rootNodes.push(currentNode); // Salvaguarda para huérfanos
-        }
-      }
-    });
+    const setLevels = (nodes: AccountNode[], level: number) => {
+      nodes.forEach((n) => {
+        n.level = level;
+        if (n.children && n.children.length) setLevels(n.children, level + 1);
+      });
+    };
+    setLevels(rootNodes, 1);
 
     return rootNodes;
   };
@@ -81,7 +78,7 @@ export default function Accounting() {
     return (
       <div className="flex h-64 items-center justify-center">
         <div className="h-8 w-8 animate-spin rounded-full border-4 border-emerald-500 border-t-transparent"></div>
-        <span className="ml-3 text-slate-600 font-medium">Cargando Catálogo PUC...</span>
+        <span className="ml-3 text-slate-600 font-medium">Cargando catálogo de cuentas...</span>
       </div>
     );
   }
@@ -99,7 +96,7 @@ export default function Accounting() {
       <div className="mb-6 flex justify-between items-center">
         <div>
           <h1 className="text-2xl font-bold text-slate-800">Catálogo de Cuentas (PUC)</h1>
-          <p className="text-sm text-slate-500">Estructura jerárquica bajo estándares NIIF / IFRS</p>
+          <p className="text-sm text-slate-500">Plan de cuentas de tu empresa</p>
         </div>
         <button 
           onClick={fetchAccounts}
@@ -147,9 +144,9 @@ function AccountRenderItem({ node }: { node: AccountNode }) {
 
         <div className="flex items-center gap-3">
           <span className={`text-[10px] uppercase px-2 py-0.5 rounded-full font-semibold font-mono ${
-            node.nature === 'Débito' ? 'bg-blue-50 text-blue-700 border border-blue-200' : 'bg-purple-50 text-purple-700 border border-purple-200'
+            node.nature === 'debito' ? 'bg-blue-50 text-blue-700 border border-blue-200' : 'bg-purple-50 text-purple-700 border border-purple-200'
           }`}>
-            {node.nature}
+            {node.nature === 'debito' ? 'Débito' : node.nature === 'credito' ? 'Crédito' : node.nature}
           </span>
           <span className="text-xs text-slate-400 uppercase font-mono w-16 text-right hidden sm:inline">
             {node.type}

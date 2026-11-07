@@ -29,7 +29,7 @@ interface StatementRow {
 
 const finalBalance = (r: TrialBalanceRow) => Number(r.closing_debit) - Number(r.closing_credit);
 
-export default function AccountingStatements() {
+export default function AccountingStatements({ onNavigate }: { onNavigate?: (page: string) => void }) {
   const [balanceData, setBalanceData] = useState<TrialBalanceRow[]>([]);
   const [sheetRows, setSheetRows] = useState<StatementRow[]>([]);
   const [incomeRows, setIncomeRows] = useState<StatementRow[]>([]);
@@ -148,7 +148,17 @@ export default function AccountingStatements() {
           <h1 className="text-2xl font-bold tracking-tight">Centro de Estados Financieros</h1>
           <p className="text-slate-400 text-sm">Monitoreo y auditoría transaccional en tiempo real</p>
         </div>
-        
+
+        {onNavigate && (
+          <button
+            type="button"
+            onClick={() => onNavigate('cpa')}
+            className="mt-4 md:mt-0 self-start md:self-auto px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-sm font-medium text-slate-200 transition-colors"
+          >
+            ← Escritorio contable
+          </button>
+        )}
+
         <div className="flex flex-wrap md:flex-nowrap gap-3 mt-4 md:mt-0 bg-slate-800 p-2 rounded-xl border border-slate-700 items-center">
           <div className="flex gap-1 items-center">
             <input 

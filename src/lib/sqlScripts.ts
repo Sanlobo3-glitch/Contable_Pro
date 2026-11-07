@@ -11,7 +11,6 @@ import sqlCatalogCommerce from '../../supabase/migrations/20261103000018_ventas_
 import sqlWhatsappStoreLink from '../../supabase/migrations/20261103000019_enlace_tienda_og_y_estudio_whatsapp.sql?raw'
 import sqlAutoBrandSync from '../../supabase/migrations/20261103000020_sincronizacion_automatica_marca_y_cache_whatsapp.sql?raw'
 import sqlCommercialSuite21 from '../../supabase/migrations/20261104000021_cinco_soluciones_comerciales_avanzadas.sql?raw'
-import sqlContablePro from '../../supabase/migrations/20261106000022_contable_pro_partida_doble_puc_niif.sql?raw'
 
 export type SqlBundleId =
   | 'contable_pro'
@@ -39,16 +38,6 @@ export interface SqlScriptBundle {
 }
 
 export const SQL_SCRIPT_BUNDLES: SqlScriptBundle[] = [
-  {
-    id: 'contable_pro',
-    title: 'Contable_Pro: Partida Doble, Inmutabilidad y Catálogo PUC NIIF',
-    filename: '20261106000022_contable_pro_partida_doble_puc_niif.sql',
-    category: 'Recomendado',
-    summary:
-      'Crea las tablas accounts, journal_entries y journal_lines, instala el trigger trg_verify_journal_entry_posting que valida la partida doble estricta al asentar (POSTED), instala el trigger de inmutabilidad y siembra el PUC Colombiano NIIF.',
-    targetTables: ['accounts', 'journal_entries', 'journal_lines'],
-    sql: sqlContablePro,
-  },
   {
     id: 'consolidated',
     title: 'Paquete Consolidado Maestro (Todo en 1 · Recomendado)',

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { supabase } from '../lib/supabase'
-import { useAuth, canManageInventory, isCompanyManager, isReadOnly } from '../lib/auth'
+import { useAuth, canManageInventory, canManageTransport, isCompanyManager, isReadOnly } from '../lib/auth'
 import { useWarehouse } from '../lib/warehouseContext'
 import { useCurrency, fmtDate, fmtNum } from '../lib/currency'
 import type {
@@ -107,10 +107,10 @@ export default function BranchesWarehouses({
   } = useWarehouse()
 
   const readOnly = isReadOnly(user)
-  const canEditInventory = canManageInventory(user?.role) && !readOnly
+  const canEditInventory = (canManageInventory(user?.role) || canManageTransport(user?.role)) && !readOnly
   const canEditBranches = isCompanyManager(user?.role) && !readOnly
 
-  const [tab, setTab] = useState<ViewTab>('stock')
+  const [tab, setTab] = useState<ViewTab>(() => (user?.role === 'transportador' ? 'transfers' : 'stock'))
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [feedback, setFeedback] = useState<{ ok: boolean; text: string } | null>(null)

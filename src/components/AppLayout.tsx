@@ -322,11 +322,14 @@ export default function AppLayout({
   }
 
   const role = user?.role
-  // REGLA 1: Administrador Central estricto ('super_admin' o 'admin' de plataforma / cuenta maestra)
-  // Queda ROTUNDAMENTE PROHIBIDO para Contador, Gerente o Vendedor
+  // REGLA 1: Administrador Central estricto ('super_admin' o 'admin' de plataforma)
+  // SOLO el rol de Administrador Central puede visualizarlo.
+  // Queda rotundamente prohibido para Contador, Gerente, Vendedor, Transporte, etc.
+  const isSimulatingNonAdmin = Boolean(masterRoleOverride && masterRoleOverride !== 'admin')
   const isSuperAdmin =
-    (role === 'admin' || (role as string) === 'super_admin' || isMasterAccount) &&
-    !['contador', 'gerente', 'vendedor'].includes(role || '')
+    !isSimulatingNonAdmin &&
+    (role === 'admin' || (role as string) === 'super_admin' || (isMasterAccount && !masterRoleOverride)) &&
+    !['contador', 'gerente', 'vendedor', 'transportador', 'cajero', 'almacen', 'comprador', 'tecnico', 'dueno', 'admin_empresa'].includes(role || '')
   const isCompanyOwner = role === 'dueno'
 
   const navItems: NavItem[] = useMemo(() => {
@@ -433,6 +436,69 @@ export default function AppLayout({
           section: 'Control Gerencial',
           keywords: 'auditoria de cumplimiento legal vencimientos soat camara comercio impuestos normatividad',
           icon: <Scale className="w-4 h-4 shrink-0" />,
+          allowed: true,
+        },
+      ]
+    }
+
+    // ------------------------------------------------------------------------
+    // REGLA 5: Si el usuario es 'Transporte y Despacho' ('transportador')
+    // Su menú debe estar estrictamente enfocado en su operación logística:
+    // 1. Traslados y Despacho Multisede (Bodegas, escáner en sitio, fotos/firmas, remisiones)
+    // 2. Mapa y Rutas GPS en Vivo (Monitoreo satelital, simulación y reproductor de historial)
+    // 3. Despacho de Ruta (Hoja de carga, entregas presenciales)
+    // 4. Planificar Rutas (Itinerario y optimización de visitas)
+    // 5. Trazabilidad y Auditoría de Despachos (Historial producto/cliente/tienda, correcciones)
+    // 6. Vehículos y Mantenimiento de Flota (Estado de camiones, SOAT, odómetro, conductores)
+    // ------------------------------------------------------------------------
+    if (role === 'transportador') {
+      return [
+        {
+          id: 'warehouses',
+          label: 'Traslados y Despacho Multisede',
+          section: 'Operaciones de Transporte',
+          keywords: 'traslados multibodega despacho escaner qr remision firma entrega vehiculos recepcion en sitio',
+          icon: <Building2 className="w-4 h-4 shrink-0" />,
+          allowed: true,
+        },
+        {
+          id: 'map',
+          label: 'Mapa y Rutas GPS en Vivo',
+          section: 'Operaciones de Transporte',
+          keywords: 'mapa rutas gps telemetria vehiculos vivo historial reproductor conductor satelital velocidad',
+          icon: <MapPin className="w-4 h-4 shrink-0" />,
+          allowed: true,
+        },
+        {
+          id: 'dispatch',
+          label: 'Despacho de Ruta',
+          section: 'Operaciones de Transporte',
+          keywords: 'despacho hoja de ruta entregas transportador camion carga liquidacion',
+          icon: <Truck className="w-4 h-4 shrink-0" />,
+          allowed: true,
+        },
+        {
+          id: 'routeplan',
+          label: 'Planificar Rutas',
+          section: 'Operaciones de Transporte',
+          keywords: 'planificar rutas paradas optimizacion visitas entregas clientes',
+          icon: <RouteIcon className="w-4 h-4 shrink-0" />,
+          allowed: true,
+        },
+        {
+          id: 'dispatch_history',
+          label: 'Trazabilidad y Auditoría Despachos',
+          section: 'Operaciones de Transporte',
+          keywords: 'trazabilidad auditoria despachos quien movio corrigio cantidades faltante producto cliente tienda',
+          icon: <History className="w-4 h-4 shrink-0" />,
+          allowed: true,
+        },
+        {
+          id: 'equipment_assets',
+          label: 'Vehículos y Mantenimiento Flota',
+          section: 'Operaciones de Transporte',
+          keywords: 'vehiculos camiones flota mantenimiento preventivo soat tecnicomecanica odometro conductor',
+          icon: <Wrench className="w-4 h-4 shrink-0" />,
           allowed: true,
         },
       ]

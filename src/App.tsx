@@ -114,12 +114,12 @@ function isPageAllowedForRole(
 ): boolean {
   // REGLA 1: Centro de Scripts SQL y Supabase
   // SOLO el rol de Administrador Central ('super_admin' o 'admin') puede visualizarlo o ver sus rutas.
-  // Queda ROTUNDAMENTE PROHIBIDO mostrar este panel o el acceso a Supabase a los roles de Contador, Gerente o Vendedor.
+  // Queda ROTUNDAMENTE PROHIBIDO mostrar este panel o el acceso a Supabase a los roles de Contador, Gerente, Vendedor o Transporte.
   if (page === 'sqlcenter') {
-    if (role === 'contador' || role === 'gerente' || role === 'vendedor') {
+    if (role === 'contador' || role === 'gerente' || role === 'vendedor' || role === 'transportador') {
       return false
     }
-    return role === 'admin' || (role as string) === 'super_admin' || Boolean(opts?.isMasterAccount)
+    return role === 'admin' || (role as string) === 'super_admin'
   }
 
   // REGLA 2: Rol 'Contador Público' ('contador')
@@ -150,6 +150,20 @@ function isPageAllowedForRole(
       page === 'compliance_monitor' ||
       page === 'history' ||
       page === 'anomaly_detector'
+    )
+  }
+
+  // REGLA 5: Rol 'Transporte y Despacho' ('transportador')
+  // Su acceso está estrictamente limitado a operaciones logísticas:
+  // Traslados multisede (bodegas, escáner, recepción), mapa satelital GPS en vivo, despacho de ruta, planificar rutas, trazabilidad y mantenimiento de flota.
+  if (role === 'transportador') {
+    return (
+      page === 'warehouses' ||
+      page === 'map' ||
+      page === 'dispatch' ||
+      page === 'routeplan' ||
+      page === 'dispatch_history' ||
+      page === 'equipment_assets'
     )
   }
 
@@ -264,7 +278,9 @@ function AppContent() {
           ? 'pos'
           : user?.role === 'gerente'
             ? 'stats'
-            : 'dashboard'
+            : user?.role === 'transportador'
+              ? 'warehouses'
+              : 'dashboard'
 
   const {
     current,

@@ -165,9 +165,16 @@ function textNode(text: string): HTMLElement {
 export default function MapRoutes() {
   const { user } = useAuth()
   const { fmt: money } = useCurrency()
-  const isManager = user?.role === 'dueno' || user?.role === 'admin'
+  const isManager =
+    user?.role === 'dueno' ||
+    user?.role === 'admin' ||
+    user?.role === 'admin_empresa' ||
+    user?.role === 'gerente' ||
+    user?.role === 'transportador' ||
+    user?.role === 'almacen' ||
+    user?.role === 'vendedor'
 
-  const [tab, setTab] = useState<Tab>('cobertura')
+  const [tab, setTab] = useState<Tab>(() => (user?.role === 'transportador' ? 'flota_vivo' : 'cobertura'))
   const [period, setPeriod] = useState<Period>('7d')
   const [day, setDay] = useState(toInput(new Date()))
   const [sellerId, setSellerId] = useState('')
@@ -816,7 +823,7 @@ export default function MapRoutes() {
   /* --------------------------------- Interfaz --------------------------------- */
 
   if (!isManager) {
-    return <p className="text-sm text-slate-500">Esta sección es solo para el dueño o el administrador.</p>
+    return <p className="text-sm text-slate-500">Esta sección es solo para el personal autorizado de operaciones y rutas.</p>
   }
 
   const btn = (active: boolean) =>

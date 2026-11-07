@@ -2,7 +2,43 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/auth'
 import { useCurrency } from '../lib/currency'
-import { Printer, Maximize2, MapPin, AlertTriangle, Loader2, Users, Navigation, BarChart3, Moon, Phone } from 'lucide-react'
+import {
+  Printer,
+  Maximize2,
+  MapPin,
+  AlertTriangle,
+  Loader2,
+  Users,
+  Navigation,
+  BarChart3,
+  Moon,
+  Phone,
+  Truck,
+  Clock,
+  Play,
+  Pause,
+  RotateCcw,
+  Radio,
+  Compass,
+  Calendar,
+  FastForward,
+  CheckCircle2,
+  Share2,
+  ShieldCheck,
+  Gauge,
+  Activity,
+} from 'lucide-react'
+import {
+  getFleetLiveTelemetry,
+  startNativeDeviceTracking,
+  stopNativeDeviceTracking,
+  getRouteHistories,
+  getRouteHistoryById,
+  type VehicleRouteHistory,
+  type LiveVehicleTelemetry,
+} from '../lib/geoTrackingService'
+import { getFleetVehicles } from '../lib/fleetRepo'
+import type { FleetVehicle } from '../types'
 
 /* ----------------------------- Tipos y constantes ---------------------------- */
 
@@ -32,7 +68,7 @@ interface CovInfo { venta: boolean; presencial: boolean; visita: boolean; last: 
 type Status = 'venta' | 'remoto' | 'visita' | 'sin'
 type BarMetric = 'monto' | 'pedidos'
 
-type Tab = 'cobertura' | 'rutas' | 'dormidos'
+type Tab = 'cobertura' | 'rutas' | 'dormidos' | 'flota_vivo' | 'historial'
 type Period = 'hoy' | '7d' | 'mes' | 'todo'
 type Selected = { kind: 'customer' | 'visit'; id: string } | null
 
@@ -154,6 +190,108 @@ export default function MapRoutes() {
   const [dormSrc, setDormSrc] = useState<DormSrc | null>(null)
   const [showRoute, setShowRoute] = useState(false)
   const [routeN, setRouteN] = useState(10)
+
+  // Estados para Telemetría y Flota en Vivo (GPS)
+  const [telemetries, setTelemetries] = useState<LiveVehicleTelemetry[]>(() => getFleetLiveTelemetry())
+  const [selectedVehicleId, setSelectedVehicleId] = useState<string>('all')
+  const [isTransmittingGps, setIsTransmittingGps] = useState(false)
+  const [transmittingInfo, setTransmittingInfo] = useState<string | null>(null)
+  const [simulatingMovement, setSimulatingMovement] = useState(false)
+
+  // Estados para Historial de Rutas Recorridas
+  const [histories, setHistories] = useState<VehicleRouteHistory[]>(() => getRouteHistories())
+  const [historyVehicleId, setHistoryVehicleId] = useState<string>('all')
+  const [historyDate, setHistoryDate] = useState<string>(toInput(new Date()))
+  const [selectedHistoryId, setSelectedHistoryId] = useState<string>(() => {
+    const list = getRouteHistories()
+    return list[0]?.id || ''
+  })
+  const [playbackIndex, setPlaybackIndex] = useState(0)
+  const [isPlaying, setIsPlaying] = useState(false)
+  const [playbackSpeed, setPlaybackSpeed] = useState<number>(2)
+
+  // Actualizar telemetría de flota periódicamente
+  useEffect(() => {
+    if (tab !== 'flota_vivo') return
+    const interval = setInterval(() => {
+      setTelemetries(getFleetLiveTelemetry())
+    }, 4000)
+    return () => clearInterval(interval)
+  }, [tab])
+
+  // Simulación de movimiento de vehículos en vivo
+  useEffect(() => {
+    if (!simulatingMovement || tab !== 'flota_vivo') return
+    const timer = setInterval(() => {
+      setTelemetries(prev =>
+        prev.map(t => {
+          if (t.vehicle.status !== 'en_ruta' && t.vehicle.id !== 'veh-1') return t
+          const dLat = (Math.random() - 0.48) * 0.001
+          const dLng = (Math.random() - 0.48) * 0.001
+          return {
+            ...t,
+            current_lat: t.current_lat + dLat,
+            current_lng: t.current_lng + dLng,
+            speed_kmh: Math.round(30 + Math.random() * 25),
+            heading_deg: Math.round((t.heading_deg + Math.random() * 20 - 10 + 360) % 360),
+            last_ping: new Date().toISOString(),
+          }
+        })
+      )
+    }, 1500)
+    return () => clearInterval(timer)
+  }, [simulatingMovement, tab])
+
+  // Ruta seleccionada en el historial
+  const selectedHistory = useMemo(() => {
+    return histories.find(h => h.id === selectedHistoryId) || histories[0] || null
+  }, [histories, selectedHistoryId])
+
+  // Reproductor interactivo de ruta (Playback player)
+  useEffect(() => {
+    if (!isPlaying || !selectedHistory) return
+    const totalPoints = selectedHistory.points.length
+    if (totalPoints <= 1) return
+
+    const intervalMs = Math.max(80, Math.floor(800 / playbackSpeed))
+    const timer = setInterval(() => {
+      setPlaybackIndex(prev => {
+        if (prev >= totalPoints - 1) {
+          setIsPlaying(false)
+          return prev
+        }
+        return prev + 1
+      })
+    }, intervalMs)
+    return () => clearInterval(timer)
+  }, [isPlaying, selectedHistory, playbackSpeed])
+
+  // Activar / Desactivar transmisión GPS nativa del navegador
+  const handleToggleTransmitGps = () => {
+    if (isTransmittingGps) {
+      stopNativeDeviceTracking()
+      setIsTransmittingGps(false)
+      setTransmittingInfo(null)
+    } else {
+      const targetVehId = selectedVehicleId !== 'all' ? selectedVehicleId : telemetries[0]?.vehicle.id || 'veh-1'
+      const ok = startNativeDeviceTracking(
+        targetVehId,
+        coords => {
+          setIsTransmittingGps(true)
+          setTransmittingInfo(`Transmitiendo GPS: ±${coords.accuracy}m · ${coords.speed} km/h · Rumbo ${coords.heading}°`)
+          setTelemetries(getFleetLiveTelemetry())
+        },
+        err => {
+          alert('Error de geolocalización: ' + err.message)
+          setIsTransmittingGps(false)
+          setTransmittingInfo(null)
+        }
+      )
+      if (!ok) {
+        alert('Este navegador no tiene soporte para la API de geolocalización.')
+      }
+    }
+  }
 
   const mapDiv = useRef<HTMLDivElement>(null)
   const mapBox = useRef<HTMLDivElement>(null)
@@ -502,7 +640,7 @@ export default function MapRoutes() {
         })
         if (line.length > 1) L.polyline(line, { color: '#111827', weight: 3, opacity: 0.85, dashArray: '6 6' }).addTo(layer)
       }
-    } else {
+    } else if (tab === 'rutas') {
       bySeller.forEach((list: Visit[], sid: string) => {
         const color = sellerColor(sid)
         const line: [number, number][] = []
@@ -522,15 +660,124 @@ export default function MapRoutes() {
         if (line.length > 1) L.polyline(line, { color, weight: 3, opacity: 0.8 }).addTo(layer)
         pts.push(...line)
       })
+    } else if (tab === 'flota_vivo') {
+      const activeList = selectedVehicleId === 'all'
+        ? telemetries
+        : telemetries.filter(t => t.vehicle.id === selectedVehicleId)
+
+      activeList.forEach(item => {
+        const isOnline = item.is_online
+        const isSel = selectedVehicleId === item.vehicle.id
+        const icon = L.divIcon({
+          className: '',
+          html: `
+            <div style="position:relative; display:flex; flex-direction:column; align-items:center;">
+              <div style="width:38px; height:38px; border-radius:50%; background:${isOnline ? '#059669' : '#334155'}; color:#fff; border:3px solid #fff; display:flex; align-items:center; justify-content:center; font-size:18px; box-shadow:0 4px 6px -1px rgba(0,0,0,0.3); ${isOnline ? 'animation: pulse 2s infinite;' : ''}">
+                🚚
+              </div>
+              <div style="position:absolute; top:-22px; background:#0f172a; color:#fff; font-size:10px; font-weight:bold; font-family:monospace; padding:1px 6px; border-radius:4px; white-space:nowrap; box-shadow:0 2px 4px rgba(0,0,0,0.2); border:1px solid ${isSel ? '#38bdf8' : 'transparent'};">
+                ${item.vehicle.plate} ${item.speed_kmh > 0 ? `· ${item.speed_kmh} km/h` : ''}
+              </div>
+            </div>
+          `,
+          iconSize: [38, 38],
+          iconAnchor: [19, 19],
+        })
+
+        const mk = L.marker([item.current_lat, item.current_lng], { icon })
+        mk.bindPopup(`
+          <div style="font-size:12px; line-height:1.4;">
+            <b style="font-size:13px;">${item.vehicle.name}</b><br/>
+            <b>Placa:</b> ${item.vehicle.plate} (${item.vehicle.brand_model})<br/>
+            <b>Conductor:</b> ${item.vehicle.driver_name}<br/>
+            <b>Velocidad actual:</b> ${item.speed_kmh} km/h<br/>
+            <b>Telemetría:</b> ${isOnline ? '<span style="color:#059669; font-weight:bold;">En línea (GPS activo)</span>' : 'En reposo'}<br/>
+            <small style="color:#64748b;">Último ping: ${new Date(item.last_ping).toLocaleTimeString()}</small>
+          </div>
+        `)
+        mk.on('click', () => setSelectedVehicleId(item.vehicle.id))
+        mk.addTo(layer)
+        pts.push([item.current_lat, item.current_lng])
+      })
+    } else if (tab === 'historial') {
+      if (selectedHistory && selectedHistory.points.length > 0) {
+        const routeCoords: [number, number][] = selectedHistory.points.map(p => [p.lat, p.lng])
+        
+        // Polilínea del trayecto completo recorrido
+        L.polyline(routeCoords, {
+          color: '#2563eb',
+          weight: 5,
+          opacity: 0.85,
+        }).addTo(layer)
+        pts.push(...routeCoords)
+
+        // Marcador Punto de Partida
+        const startPt = routeCoords[0]
+        const startIcon = L.divIcon({
+          className: '',
+          html: `<div style="width:30px; height:30px; border-radius:50%; background:#16a34a; color:#fff; border:2px solid #fff; display:flex; align-items:center; justify-content:center; font-size:14px; box-shadow:0 2px 5px rgba(0,0,0,0.3);">🏁</div>`,
+          iconSize: [30, 30],
+          iconAnchor: [15, 15],
+        })
+        L.marker(startPt, { icon: startIcon })
+          .bindTooltip(textNode(`Inicio: ${selectedHistory.origin_name} (${selectedHistory.start_time.slice(11, 16)})`))
+          .addTo(layer)
+
+        // Marcadores de paradas registradas
+        selectedHistory.stops.forEach((s, idx) => {
+          const stopIcon = L.divIcon({
+            className: '',
+            html: `
+              <div style="width:26px; height:26px; border-radius:50%; background:#d97706; color:#fff; border:2px solid #fff; display:flex; align-items:center; justify-content:center; font-weight:bold; font-size:11px; box-shadow:0 2px 4px rgba(0,0,0,0.3);">
+                ${idx + 1}
+              </div>
+            `,
+            iconSize: [26, 26],
+            iconAnchor: [13, 13],
+          })
+          L.marker([s.lat, s.lng], { icon: stopIcon })
+            .bindPopup(`
+              <div style="font-size:12px; line-height:1.4;">
+                <b>Parada #${idx + 1}: ${s.location_name}</b><br/>
+                <b>Duración detenido:</b> ${s.duration_min} minutos<br/>
+                <b>Llegada:</b> ${new Date(s.arrival_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}<br/>
+                <b>Salida:</b> ${new Date(s.departure_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}<br/>
+                ${s.notes ? `<i>${s.notes}</i>` : ''}
+              </div>
+            `)
+            .addTo(layer)
+        })
+
+        // Marcador del vehículo en la posición de reproducción (Playback)
+        const currentPlaybackPt = selectedHistory.points[Math.min(playbackIndex, selectedHistory.points.length - 1)]
+        if (currentPlaybackPt) {
+          const playbackIcon = L.divIcon({
+            className: '',
+            html: `
+              <div style="position:relative; display:flex; flex-direction:column; align-items:center;">
+                <div style="width:42px; height:42px; border-radius:50%; background:#ea580c; color:#fff; border:3px solid #fff; display:flex; align-items:center; justify-content:center; font-size:20px; box-shadow:0 4px 10px rgba(0,0,0,0.4);">
+                  🚚
+                </div>
+                <div style="position:absolute; top:-24px; background:#0f172a; color:#fff; font-size:10px; font-weight:bold; font-family:monospace; padding:1px 6px; border-radius:4px; white-space:nowrap;">
+                  ${currentPlaybackPt.speed_kmh} km/h · ${currentPlaybackPt.timestamp.slice(11, 16)}
+                </div>
+              </div>
+            `,
+            iconSize: [42, 42],
+            iconAnchor: [21, 21],
+          })
+          L.marker([currentPlaybackPt.lat, currentPlaybackPt.lng], { icon: playbackIcon, zIndexOffset: 3000 }).addTo(layer)
+        }
+      }
     }
 
-    const key = `${tab}|${period}|${day}|${sellerId}|${reloadKey}|${customers.length}|${locs.length}|${visits.length}|${dormDays}|${dormRows.length}|${showRoute}|${routeN}`
+    const key = `${tab}|${period}|${day}|${sellerId}|${reloadKey}|${customers.length}|${locs.length}|${visits.length}|${dormDays}|${dormRows.length}|${showRoute}|${routeN}|${selectedVehicleId}|${selectedHistory?.id}|${playbackIndex}|${telemetries.length}`
     if (lastFit.current !== key && pts.length) {
-      map.fitBounds(pts, { padding: [30, 30], maxZoom: 17 })
+      map.fitBounds(pts, { padding: [35, 35], maxZoom: 16 })
       lastFit.current = key
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lReady, tab, customers, locMap, cov, bySeller, selected, sellers, showBars, barData, onlyPending, dormRows, dormDays, showRoute, dormRoute])
+  }, [lReady, tab, customers, locMap, cov, bySeller, selected, sellers, showBars, barData, onlyPending, dormRows, dormDays, showRoute, dormRoute, telemetries, selectedVehicleId, selectedHistory, playbackIndex])
 
   useEffect(() => { setTimeout(() => mapRef.current?.invalidateSize(), 100) }, [tab, isFs])
 
@@ -596,6 +843,8 @@ export default function MapRoutes() {
         <button onClick={() => { setTab('cobertura'); setSelected(null) }} className={btn(tab === 'cobertura')}><span className="inline-flex items-center gap-1.5"><Users className="w-4 h-4" /> Cobertura</span></button>
         <button onClick={() => { setTab('rutas'); setSelected(null) }} className={btn(tab === 'rutas')}><span className="inline-flex items-center gap-1.5"><Navigation className="w-4 h-4" /> Rutas</span></button>
         <button onClick={() => { setTab('dormidos'); setSelected(null) }} className={btn(tab === 'dormidos')}><span className="inline-flex items-center gap-1.5"><Moon className="w-4 h-4" /> Dormidos</span></button>
+        <button onClick={() => { setTab('flota_vivo'); setSelected(null) }} className={btn(tab === 'flota_vivo')}><span className="inline-flex items-center gap-1.5"><Truck className="w-4 h-4" /> Flota en Vivo (GPS)</span></button>
+        <button onClick={() => { setTab('historial'); setSelected(null) }} className={btn(tab === 'historial')}><span className="inline-flex items-center gap-1.5"><Clock className="w-4 h-4" /> Historial de Rutas</span></button>
       </div>
 
       <div className="no-print flex flex-wrap items-center gap-2 mb-4">
@@ -611,15 +860,122 @@ export default function MapRoutes() {
             <option value={60}>Sin atender hace 60+ días</option>
             <option value={90}>Sin atender hace 90+ días</option>
           </select>
+        ) : tab === 'flota_vivo' ? (
+          <>
+            <select
+              value={selectedVehicleId}
+              onChange={e => setSelectedVehicleId(e.target.value)}
+              className="px-3 py-1.5 rounded-lg border border-slate-300 text-sm bg-white font-medium"
+            >
+              <option value="all">Todos los vehículos ({telemetries.length})</option>
+              {telemetries.map(t => (
+                <option key={t.vehicle.id} value={t.vehicle.id}>
+                  {t.vehicle.plate} - {t.vehicle.brand_model} ({t.vehicle.driver_name || 'Sin conductor'})
+                </option>
+              ))}
+            </select>
+
+            <button
+              onClick={handleToggleTransmitGps}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-1.5 transition-colors ${
+                isTransmittingGps
+                  ? 'bg-emerald-600 text-white animate-pulse shadow-sm'
+                  : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-50'
+              }`}
+              title="Usa la API de geolocalización HTML5 para emitir la posición real de este dispositivo"
+            >
+              <Radio className="w-4 h-4" />
+              {isTransmittingGps ? 'Transmitiendo GPS (Activo)' : 'Modo Conductor (GPS Nativo)'}
+            </button>
+
+            <button
+              onClick={() => setSimulatingMovement(v => !v)}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-1.5 transition-colors ${
+                simulatingMovement
+                  ? 'bg-indigo-600 text-white'
+                  : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-50'
+              }`}
+            >
+              <Activity className="w-4 h-4" />
+              {simulatingMovement ? 'Simulación en Marcha' : 'Simular Movimiento'}
+            </button>
+          </>
+        ) : tab === 'historial' ? (
+          <>
+            <div className="flex items-center gap-1 bg-white border border-slate-300 rounded-lg px-2 py-1">
+              <Calendar className="w-4 h-4 text-slate-500" />
+              <input
+                type="date"
+                value={historyDate}
+                onChange={e => {
+                  const newD = e.target.value
+                  setHistoryDate(newD)
+                  const list = getRouteHistories(historyVehicleId, newD)
+                  setHistories(list)
+                  if (list.length > 0) {
+                    setSelectedHistoryId(list[0].id)
+                    setPlaybackIndex(0)
+                    setIsPlaying(false)
+                  }
+                }}
+                className="text-sm outline-none bg-transparent"
+              />
+            </div>
+
+            <select
+              value={historyVehicleId}
+              onChange={e => {
+                const newV = e.target.value
+                setHistoryVehicleId(newV)
+                const list = getRouteHistories(newV, historyDate)
+                setHistories(list)
+                if (list.length > 0) {
+                  setSelectedHistoryId(list[0].id)
+                  setPlaybackIndex(0)
+                  setIsPlaying(false)
+                }
+              }}
+              className="px-3 py-1.5 rounded-lg border border-slate-300 text-sm bg-white font-medium"
+            >
+              <option value="all">Todos los vehículos con historial</option>
+              {getFleetVehicles().map(v => (
+                <option key={v.id} value={v.id}>
+                  {v.plate} - {v.brand_model}
+                </option>
+              ))}
+            </select>
+
+            <select
+              value={selectedHistory?.id || ''}
+              onChange={e => {
+                setSelectedHistoryId(e.target.value)
+                setPlaybackIndex(0)
+                setIsPlaying(false)
+              }}
+              className="px-3 py-1.5 rounded-lg border border-slate-300 text-sm bg-white font-medium max-w-xs truncate"
+            >
+              {histories.length === 0 ? (
+                <option value="">Sin rutas para este día</option>
+              ) : (
+                histories.map(h => (
+                  <option key={h.id} value={h.id}>
+                    {h.vehicle_plate} · {h.origin_name} → {h.destination_name || 'Retorno'} ({h.total_distance_km} km)
+                  </option>
+                ))
+              )}
+            </select>
+          </>
         ) : (
           <input type="date" value={day} onChange={e => e.target.value && setDay(e.target.value)} className="px-3 py-1.5 rounded-lg border border-slate-300 text-sm" />
         )}
-        {tab !== 'dormidos' && (
+
+        {tab !== 'dormidos' && tab !== 'flota_vivo' && tab !== 'historial' && (
           <select value={sellerId} onChange={e => setSellerId(e.target.value)} className="px-3 py-1.5 rounded-lg border border-slate-300 text-sm bg-white">
             <option value="">Todos los vendedores</option>
             {sellers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
         )}
+
         {tab === 'dormidos' && (
           <>
             <button onClick={() => setShowRoute(v => !v)} className={btn(showRoute)}>
@@ -635,6 +991,7 @@ export default function MapRoutes() {
             )}
           </>
         )}
+
         {tab === 'cobertura' && (
           <>
             <button onClick={() => setOnlyPending(v => !v)} className={btn(onlyPending)}>
@@ -654,6 +1011,16 @@ export default function MapRoutes() {
         {loading && <span className="flex items-center gap-1 text-xs text-slate-400"><Loader2 className="w-3.5 h-3.5 animate-spin" /> Cargando…</span>}
       </div>
 
+      {transmittingInfo && (
+        <div className="no-print flex items-center justify-between gap-2 text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 mb-3 text-xs">
+          <span className="flex items-center gap-2">
+            <Radio className="w-4 h-4 animate-spin text-emerald-600" />
+            <strong>{transmittingInfo}</strong>
+          </span>
+          <button onClick={handleToggleTransmitGps} className="underline text-emerald-900 font-semibold shrink-0">Detener</button>
+        </div>
+      )}
+
       {error && <div className="no-print text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2 mb-4 text-xs">{error}</div>}
       {mapError && <div className="no-print text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2 mb-4 text-xs">{mapError}</div>}
 
@@ -671,8 +1038,12 @@ export default function MapRoutes() {
               ? `Cobertura de clientes · ${PERIODS.find(p => p.id === period)?.label}`
               : tab === 'dormidos'
                 ? `Clientes dormidos · sin atender hace ${dormDays}+ días`
-                : `Ruta del ${new Date(day + 'T00:00:00').toLocaleDateString()}`}
-            {tab !== 'dormidos' && sellerId ? ` · ${sellerName(sellerId)}` : ''}
+                : tab === 'flota_vivo'
+                  ? `Monitoreo GPS en Vivo · Flota de Vehículos (${telemetries.length} unidades activas)`
+                  : tab === 'historial'
+                    ? `Historial de Recorridos GPS · ${selectedHistory ? selectedHistory.vehicle_plate + ' (' + selectedHistory.origin_name + ' → ' + (selectedHistory.destination_name || 'Destino') + ')' : 'Seleccione una ruta'}`
+                    : `Ruta del ${new Date(day + 'T00:00:00').toLocaleDateString()}`}
+            {tab !== 'dormidos' && tab !== 'flota_vivo' && tab !== 'historial' && sellerId ? ` · ${sellerName(sellerId)}` : ''}
           </p>
         </div>
 
@@ -696,12 +1067,426 @@ export default function MapRoutes() {
           </div>
         )}
 
+        {tab === 'flota_vivo' && (
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-3">
+            <div className="bg-white rounded-xl border border-slate-200 p-3">
+              <p className="text-[11px] text-slate-400 uppercase flex items-center gap-1">
+                <Truck className="w-3.5 h-3.5 text-blue-500" /> Vehículos Flota
+              </p>
+              <p className="text-lg font-bold text-slate-800">{telemetries.length}</p>
+              <p className="text-[11px] text-slate-400">En registro operativo</p>
+            </div>
+            <div className="bg-white rounded-xl border border-slate-200 p-3">
+              <p className="text-[11px] text-slate-400 uppercase flex items-center gap-1">
+                <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 animate-ping" /> En Ruta / Movimiento
+              </p>
+              <p className="text-lg font-bold text-slate-800">
+                {telemetries.filter(t => t.vehicle.status === 'en_ruta' || t.speed_kmh > 0).length}
+              </p>
+              <p className="text-[11px] text-slate-400">Transmitiendo telemetría</p>
+            </div>
+            <div className="bg-white rounded-xl border border-slate-200 p-3">
+              <p className="text-[11px] text-slate-400 uppercase flex items-center gap-1">
+                <Gauge className="w-3.5 h-3.5 text-orange-500" /> Vel. Promedio
+              </p>
+              <p className="text-lg font-bold text-slate-800">
+                {telemetries.length
+                  ? Math.round(telemetries.reduce((acc, t) => acc + t.speed_kmh, 0) / telemetries.length)
+                  : 0}{' '}
+                km/h
+              </p>
+              <p className="text-[11px] text-slate-400">Flota en movimiento</p>
+            </div>
+            <div className="bg-white rounded-xl border border-slate-200 p-3">
+              <p className="text-[11px] text-slate-400 uppercase flex items-center gap-1">
+                <Radio className="w-3.5 h-3.5 text-indigo-500" /> Enlace GPS
+              </p>
+              <p className="text-lg font-bold text-slate-800">
+                {telemetries.filter(t => t.is_online).length} / {telemetries.length}
+              </p>
+              <p className="text-[11px] text-emerald-600 font-medium">100% Cobertura satelital</p>
+            </div>
+            <div className="bg-white rounded-xl border border-slate-200 p-3">
+              <p className="text-[11px] text-slate-400 uppercase flex items-center gap-1">
+                <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" /> Monitoreo Anti-Fraude
+              </p>
+              <p className="text-lg font-bold text-emerald-600">Activo</p>
+              <p className="text-[11px] text-slate-400">Geocercas y desvíos</p>
+            </div>
+          </div>
+        )}
+
+        {tab === 'historial' && (
+          <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mb-3">
+            <div className="bg-white rounded-xl border border-slate-200 p-3">
+              <p className="text-[11px] text-slate-400 uppercase">Distancia Total</p>
+              <p className="text-lg font-bold text-slate-800">{selectedHistory?.total_distance_km || 0} km</p>
+              <p className="text-[11px] text-slate-400">Odómetro de ruta</p>
+            </div>
+            <div className="bg-white rounded-xl border border-slate-200 p-3">
+              <p className="text-[11px] text-slate-400 uppercase">Tiempo Rodando</p>
+              <p className="text-lg font-bold text-slate-800">{selectedHistory?.moving_time_min || 0} min</p>
+              <p className="text-[11px] text-slate-400">En movimiento</p>
+            </div>
+            <div className="bg-white rounded-xl border border-slate-200 p-3">
+              <p className="text-[11px] text-slate-400 uppercase">Tiempo Detenido</p>
+              <p className="text-lg font-bold text-amber-600">{selectedHistory?.stopped_time_min || 0} min</p>
+              <p className="text-[11px] text-slate-400">En paradas / descargas</p>
+            </div>
+            <div className="bg-white rounded-xl border border-slate-200 p-3">
+              <p className="text-[11px] text-slate-400 uppercase">Velocidad Máx.</p>
+              <p className="text-lg font-bold text-slate-800">{selectedHistory?.max_speed_kmh || 0} km/h</p>
+              <p className="text-[11px] text-slate-400">Promedio: {selectedHistory?.avg_speed_kmh || 0} km/h</p>
+            </div>
+            <div className="bg-white rounded-xl border border-slate-200 p-3">
+              <p className="text-[11px] text-slate-400 uppercase">Paradas / Puntos</p>
+              <p className="text-lg font-bold text-slate-800">{selectedHistory?.stops.length || 0}</p>
+              <p className="text-[11px] text-slate-400">Entregas y escalas</p>
+            </div>
+            <div className="bg-white rounded-xl border border-slate-200 p-3">
+              <p className="text-[11px] text-slate-400 uppercase">Muestras GPS</p>
+              <p className="text-lg font-bold text-slate-800">{selectedHistory?.points.length || 0}</p>
+              <p className="text-[11px] text-slate-400">Waypoints registrados</p>
+            </div>
+          </div>
+        )}
+
         <div ref={mapBox} className="relative z-0 bg-white" style={{ isolation: 'isolate' }}>
           <div className="no-print absolute right-2 top-2 z-[500]">
             <button onClick={toggleFullscreen} title="Pantalla completa" className="p-2 rounded-lg bg-white border border-slate-300 shadow hover:bg-slate-50"><Maximize2 className="w-4 h-4 text-slate-700" /></button>
           </div>
           <div ref={mapDiv} className="w-full rounded-xl border border-slate-200" style={{ height: isFs ? '100vh' : 'min(60vh, 520px)', minHeight: 320 }} />
         </div>
+
+        {/* =========================================================================
+            PANEL DE HISTORIAL DE RUTAS: REPRODUCTOR PLAYBACK Y PARADAS AUDITADAS
+           ========================================================================= */}
+        {tab === 'historial' && selectedHistory && (
+          <div className="mt-4 space-y-4">
+            {/* Reproductor Interactivo (Playback Bar) */}
+            <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+                <div className="flex items-center gap-2">
+                  <div className="p-2 rounded-lg bg-orange-100 text-orange-700">
+                    <Truck className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-800">
+                      Reproductor de Trayecto · {selectedHistory.vehicle_plate}
+                    </h3>
+                    <p className="text-xs text-slate-500">
+                      Conductor: {selectedHistory.driver_name} · {selectedHistory.origin_name} → {selectedHistory.destination_name || 'Destino'}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Controles de reproducción */}
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => {
+                      setPlaybackIndex(0)
+                      setIsPlaying(false)
+                    }}
+                    title="Reiniciar al inicio"
+                    className="p-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-100"
+                  >
+                    <RotateCcw className="w-4 h-4" />
+                  </button>
+
+                  <button
+                    onClick={() => setIsPlaying(v => !v)}
+                    className="px-4 py-2 rounded-lg bg-orange-600 text-white font-medium text-sm flex items-center gap-2 hover:bg-orange-700 shadow-sm"
+                  >
+                    {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+                    {isPlaying ? 'Pausar' : 'Reproducir'}
+                  </button>
+
+                  {/* Multiplicador de velocidad */}
+                  <div className="flex items-center border border-slate-200 rounded-lg overflow-hidden text-xs">
+                    {[1, 2, 5, 10].map(s => (
+                      <button
+                        key={s}
+                        onClick={() => setPlaybackSpeed(s)}
+                        className={`px-2.5 py-1.5 font-medium transition-colors ${
+                          playbackSpeed === s ? 'bg-slate-800 text-white' : 'bg-white text-slate-600 hover:bg-slate-50'
+                        }`}
+                      >
+                        {s}x
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Barra de progreso / Scrubber Slider */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between text-xs text-slate-500">
+                  <span className="font-mono">
+                    {selectedHistory.points[0]?.timestamp.slice(11, 19) || 'Inicio'}
+                  </span>
+                  <span className="font-semibold text-slate-700">
+                    Punto {playbackIndex + 1} de {selectedHistory.points.length} (
+                    {Math.round(((playbackIndex + 1) / (selectedHistory.points.length || 1)) * 100)}%)
+                  </span>
+                  <span className="font-mono">
+                    {selectedHistory.points[selectedHistory.points.length - 1]?.timestamp.slice(11, 19) || 'Fin'}
+                  </span>
+                </div>
+
+                <input
+                  type="range"
+                  min={0}
+                  max={Math.max(0, selectedHistory.points.length - 1)}
+                  value={playbackIndex}
+                  onChange={e => {
+                    setPlaybackIndex(Number(e.target.value))
+                    setIsPlaying(false)
+                  }}
+                  className="w-full accent-orange-600 cursor-pointer h-2 bg-slate-100 rounded-lg"
+                />
+              </div>
+
+              {/* Métricas del punto actual en reproducción */}
+              {selectedHistory.points[playbackIndex] && (
+                <div className="mt-3 pt-3 border-t border-slate-100 grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+                  <div className="flex items-center gap-1.5 text-slate-600">
+                    <Clock className="w-3.5 h-3.5 text-slate-400" />
+                    <span>
+                      Hora: <strong>{new Date(selectedHistory.points[playbackIndex].timestamp).toLocaleTimeString()}</strong>
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5 text-slate-600">
+                    <Gauge className="w-3.5 h-3.5 text-orange-500" />
+                    <span>
+                      Velocidad: <strong className="text-orange-600">{selectedHistory.points[playbackIndex].speed_kmh} km/h</strong>
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5 text-slate-600">
+                    <Compass className="w-3.5 h-3.5 text-blue-500" />
+                    <span>
+                      Rumbo:{' '}
+                      <strong>
+                        {selectedHistory.points[playbackIndex].heading != null
+                          ? `${selectedHistory.points[playbackIndex].heading}°`
+                          : 'N/D'}
+                      </strong>
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5 text-slate-600 truncate">
+                    <MapPin className="w-3.5 h-3.5 text-red-500 shrink-0" />
+                    <span className="font-mono truncate">
+                      {selectedHistory.points[playbackIndex].lat.toFixed(5)}, {selectedHistory.points[playbackIndex].lng.toFixed(5)}
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Tabla de Auditoría de Paradas y Descargas */}
+            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
+              <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <MapPin className="w-4 h-4 text-slate-600" />
+                  <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wide">
+                    Registro de Paradas y Tiempos de Permanencia ({selectedHistory.stops.length})
+                  </h4>
+                </div>
+                <span className="text-xs text-slate-500">
+                  Total detenido: <strong>{selectedHistory.stopped_time_min} min</strong>
+                </span>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-slate-50 text-slate-500 border-b border-slate-100 uppercase">
+                    <tr>
+                      <th className="px-4 py-2.5">#</th>
+                      <th className="px-4 py-2.5">Punto / Establecimiento</th>
+                      <th className="px-4 py-2.5">Tipo</th>
+                      <th className="px-4 py-2.5">Llegada</th>
+                      <th className="px-4 py-2.5">Salida</th>
+                      <th className="px-4 py-2.5 text-center">Permanencia</th>
+                      <th className="px-4 py-2.5">Notas / Novedades</th>
+                      <th className="px-4 py-2.5 text-right">Acción</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-slate-700">
+                    {selectedHistory.stops.map((s, idx) => (
+                      <tr key={s.id} className="hover:bg-slate-50/80 transition-colors">
+                        <td className="px-4 py-2.5 font-bold">
+                          <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-slate-800 text-white text-[11px]">
+                            {idx + 1}
+                          </span>
+                        </td>
+                        <td className="px-4 py-2.5 font-medium text-slate-800">
+                          {s.location_name}
+                        </td>
+                        <td className="px-4 py-2.5">
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase ${
+                              s.kind === 'entrega'
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : s.kind === 'bodega'
+                                ? 'bg-blue-100 text-blue-800'
+                                : s.kind === 'combustible'
+                                ? 'bg-amber-100 text-amber-800'
+                                : 'bg-slate-100 text-slate-700'
+                            }`}
+                          >
+                            {s.kind.replace('_', ' ')}
+                          </span>
+                        </td>
+                        <td className="px-4 py-2.5 font-mono">
+                          {new Date(s.arrival_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </td>
+                        <td className="px-4 py-2.5 font-mono">
+                          {new Date(s.departure_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </td>
+                        <td className="px-4 py-2.5 text-center font-bold text-amber-700">
+                          {s.duration_min} min
+                        </td>
+                        <td className="px-4 py-2.5 text-slate-500 italic">
+                          {s.notes || 'Sin observaciones'}
+                        </td>
+                        <td className="px-4 py-2.5 text-right">
+                          <button
+                            onClick={() => focusPoint(s.lat, s.lng)}
+                            className="px-2.5 py-1 rounded bg-slate-100 text-slate-700 hover:bg-slate-200 text-[11px] font-medium transition-colors"
+                          >
+                            Ver en Mapa
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* =========================================================================
+            PANEL DE FLOTA EN VIVO: TARJETAS DE TELEMETRÍA Y ESTADO DE TRANSMISIÓN
+           ========================================================================= */}
+        {tab === 'flota_vivo' && (
+          <div className="mt-4 space-y-4">
+            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
+              <div className="px-4 py-3 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Truck className="w-4 h-4 text-slate-700" />
+                  <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wide">
+                    Telemetría Satelital de Unidades en Servicio ({telemetries.length})
+                  </h3>
+                </div>
+                <div className="flex items-center gap-3 text-xs text-slate-500">
+                  <span className="flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
+                    Frecuencia de refresco: <strong>4 segundos</strong>
+                  </span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 p-4">
+                {telemetries
+                  .filter(t => selectedVehicleId === 'all' || t.vehicle.id === selectedVehicleId)
+                  .map(t => {
+                    const isMoving = t.speed_kmh > 0
+                    return (
+                      <div
+                        key={t.vehicle.id}
+                        className="bg-white rounded-xl border border-slate-200 p-4 hover:border-slate-400 transition-shadow shadow-sm flex flex-col justify-between"
+                      >
+                        <div>
+                          <div className="flex items-start justify-between gap-2 mb-2">
+                            <div>
+                              <div className="flex items-center gap-1.5">
+                                <span className="font-mono text-base font-black text-slate-900 tracking-wider">
+                                  {t.vehicle.plate}
+                                </span>
+                                <span
+                                  className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
+                                    isMoving
+                                      ? 'bg-emerald-100 text-emerald-800'
+                                      : 'bg-amber-100 text-amber-800'
+                                  }`}
+                                >
+                                  {isMoving ? 'En movimiento' : 'Detenido'}
+                                </span>
+                              </div>
+                              <p className="text-xs text-slate-600">
+                                {t.vehicle.brand_model} · {t.vehicle.name}
+                              </p>
+                            </div>
+
+                            <div className="text-right">
+                              <span className="text-xs font-semibold px-2 py-0.5 rounded bg-slate-100 text-slate-700">
+                                {t.vehicle.capacity_kg} kg
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="space-y-1.5 my-3 text-xs text-slate-600">
+                            <div className="flex items-center justify-between">
+                              <span className="text-slate-400">Conductor:</span>
+                              <span className="font-medium text-slate-800">
+                                {t.vehicle.driver_name || 'Sin asignar'}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <span className="text-slate-400">Teléfono:</span>
+                              <span className="font-mono">
+                                {t.vehicle.driver_phone || 'N/D'}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between">
+                              <span className="text-slate-400">Sede asignada:</span>
+                              <span className="font-medium text-slate-800">
+                                {t.vehicle.warehouse_name || 'General'}
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Medidores de telemetría */}
+                          <div className="grid grid-cols-3 gap-2 py-2 px-2.5 rounded-lg bg-slate-50 border border-slate-100 text-xs">
+                            <div className="text-center">
+                              <span className="text-[10px] text-slate-400 uppercase block">Velocidad</span>
+                              <span className="font-bold text-slate-800 text-sm">
+                                {t.speed_kmh} <span className="text-[10px] text-slate-500 font-normal">km/h</span>
+                              </span>
+                            </div>
+                            <div className="text-center">
+                              <span className="text-[10px] text-slate-400 uppercase block">Batería</span>
+                              <span className="font-bold text-slate-800 text-sm">
+                                {t.battery_pct}%
+                              </span>
+                            </div>
+                            <div className="text-center">
+                              <span className="text-[10px] text-slate-400 uppercase block">Precisión</span>
+                              <span className="font-bold text-slate-800 text-sm">
+                                ±{t.accuracy_m}m
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
+                          <span className="text-[11px] text-slate-400">
+                            Ping: {new Date(t.last_ping).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                          </span>
+                          <button
+                            onClick={() => focusPoint(t.current_lat, t.current_lng)}
+                            className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-white text-xs font-medium flex items-center gap-1.5 transition-colors"
+                          >
+                            <MapPin className="w-3.5 h-3.5" /> Centrar en mapa
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  })}
+              </div>
+            </div>
+          </div>
+        )}
 
         {tab === 'dormidos' && showRoute && dormRoute.order.length > 0 && (
           <div className="mt-4 bg-white rounded-xl border border-slate-200 overflow-hidden">

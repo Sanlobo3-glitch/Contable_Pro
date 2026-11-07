@@ -59,14 +59,29 @@ const PROBE_TABLES: { name: string; label: string }[] = [
   { name: 'layaway_contracts', label: 'Contratos de Plan Separe y apartados' },
   { name: 'product_exchanges', label: 'Cambios mano a mano y garantías' },
   { name: 'bank_reconciliations', label: 'Actas de conciliación bancaria' },
-  { name: 'platform_staff', label: 'Equipo global de plataforma' },
-  { name: 'platform_admin_audit', label: 'Auditoría global de plataforma' },
   { name: 'sql_migration_log', label: 'Bitácora y motor SQL en 1 clic' },
 ]
 
 export default function SqlAdminCenter() {
   const { user, isDemo, isMasterAccount } = useAuth()
-  const allowed = user?.role === 'admin' || isMasterAccount || isDemo
+  const role = user?.role
+  const isSuperAdmin =
+    (role === 'admin' || (role as string) === 'super_admin' || isMasterAccount) &&
+    !['contador', 'gerente', 'vendedor'].includes(role || '')
+  const allowed = isSuperAdmin
+
+  if (!isSuperAdmin) {
+    return (
+      <div className="bg-red-50 border border-red-200 rounded-2xl p-8 text-center max-w-xl mx-auto my-12 shadow-sm">
+        <ShieldCheck className="w-12 h-12 text-red-600 mx-auto mb-4" />
+        <h2 className="text-lg font-bold text-red-950">Acceso Restringido: Administrador Central Requerido</h2>
+        <p className="text-sm text-red-700 mt-2">
+          El Centro de Scripts SQL y Supabase es exclusivo del Administrador Central ('super_admin').
+          Los roles de Contador, Gerente y Vendedor tienen prohibido el acceso o ejecución de este panel por políticas estrictas de seguridad.
+        </p>
+      </div>
+    )
+  }
 
   const realConfigured = hasRealSupabaseConfig()
   const supabaseHost = getConfiguredSupabaseHost()

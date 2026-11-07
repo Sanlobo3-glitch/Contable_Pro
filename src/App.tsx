@@ -1,8 +1,18 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   AuthProvider,
   useAuth,
   isCompanyManager,
+  canRegisterSales,
+  canManageUsers,
+  canManageTeam,
+  canManageSettings,
+  canViewStats,
+  canManageInventory,
+  canManagePurchases,
+  canAccessCashAndAudit,
+  canViewAccounting,
+  canManageTransport,
 } from './lib/auth'
 import { useAppNavigation } from './lib/navigation'
 import { getPublicStoreIdentifierFromLocation } from './lib/whatsappStudio'
@@ -89,170 +99,172 @@ import {
   touchDevice,
   type DeviceState,
 } from './lib/devices'
-import { isSessionAuthorizationActive } from './lib/supportTickets'
 import { useCurrency } from './lib/currency'
 import CurrencySetup from './components/CurrencySetup'
-import type { Role, SupportTicket } from './types'
+import type { Role } from './types'
 
 function getPublicCatalogStoreKey(): string | null {
   return getPublicStoreIdentifierFromLocation()
 }
 
-function getRoleHomePage(role?: Role): string {
-  switch (role) {
-    case 'admin': return 'companies'
-    case 'tecnico': return 'support'
-    case 'dueno':
-    case 'admin_empresa': return 'dashboard'
-    case 'gerente': return 'command'
-    case 'contador': return 'cpa'
-    case 'vendedor': return 'routeplan'
-    case 'cajero': return 'pos'
-    case 'almacen': return 'warehouses'
-    case 'comprador': return 'purchases'
-    case 'transportador': return 'dispatch'
-    default: return 'dashboard'
-  }
-}
-
-// Matriz de acceso a pantallas: debe mantenerse alineada con ROLE_MENU_ACCESS
-// de src/components/AppLayout.tsx. El acceso se deniega por defecto.
-const ROLE_PAGE_ACCESS: Record<Role, readonly string[]> = {
-  admin: ['companies','adminplans','users','support','sqlcenter','manual'],
-  tecnico: ['support','manual'],
-
-  dueno: [
-    'dashboard','command','summary','copilot','ask','ai_actions',
-    'pos','omnichannel','catalog','catorders','sales','dispatch_history',
-    'layaways','cartera','quotations','customers','devolutions','exchanges',
-    'sellers','employee_portal','routeplan','dispatch','goals',
-    'purchaseorders','purchases','payables','buyplan','suppliers','supplier_intel',
-    'products','priceshield','blindcount','warehouses','branch_balance',
-    'equipment_assets','categories','lots','kardex','labels',
-    'treasury','bankrecon','cash','expenses','anomaly_detector','compliance',
-    'reports','profit','predict','stats','map','history',
-    'cpa','accounting','accstate','costcenters','accsetup','accclose',
-    'taxes','erpbridge','support','api_ecosystem','team','subscription',
-    'settings','manual',
-  ],
-
-  admin_empresa: [
-    'dashboard','command','summary','copilot','ask','ai_actions',
-    'pos','omnichannel','catalog','catorders','sales','dispatch_history',
-    'layaways','cartera','quotations','customers','devolutions','exchanges',
-    'sellers','employee_portal','routeplan','dispatch','goals',
-    'purchaseorders','purchases','payables','buyplan','suppliers','supplier_intel',
-    'products','priceshield','blindcount','warehouses','branch_balance',
-    'equipment_assets','categories','lots','kardex','labels',
-    'treasury','bankrecon','cash','expenses','anomaly_detector','compliance',
-    'reports','profit','predict','stats','map','history',
-    'cpa','accounting','accstate','costcenters','accsetup','accclose',
-    'taxes','erpbridge','support','api_ecosystem','team','subscription',
-    'settings','manual',
-  ],
-
-  gerente: [
-    'dashboard','command','summary','copilot','ask','ai_actions',
-    'pos','omnichannel','catalog','catorders','sales','dispatch_history',
-    'layaways','cartera','quotations','customers','devolutions','exchanges',
-    'employee_portal','routeplan','dispatch','goals',
-    'purchaseorders','purchases','payables','buyplan','suppliers','supplier_intel',
-    'products','priceshield','blindcount','warehouses','branch_balance',
-    'equipment_assets','categories','lots','kardex','labels',
-    'cash','treasury','bankrecon','expenses','anomaly_detector','compliance',
-    'reports','profit','predict','stats','map','history','support','team','manual',
-  ],
-
-  contador: [
-    'dashboard','command','summary','copilot','ask',
-    'sales','dispatch_history','cartera','customers',
-    'purchaseorders','purchases','payables','suppliers',
-    'products','kardex','blindcount','treasury','bankrecon',
-    'cash','expenses','anomaly_detector','compliance',
-    'reports','profit','stats','history','cpa','accounting',
-    'accstate','costcenters','accsetup','accclose','taxes',
-    'erpbridge','manual',
-  ],
-
-  vendedor: [
-    'sales','catalog','catorders','customers','quotations',
-    'layaways','cartera','devolutions','exchanges',
-        'employee_portal','routeplan','dispatch','goals',
-    'products','dispatch_history','manual',
-  ],
-
-  cajero: [
-    'pos','sales','customers','devolutions','exchanges',
-    'layaways','cash','history','products','manual',
-  ],
-
-  almacen: [
-    'summary','products','warehouses','categories','kardex',
-    'lots','labels','priceshield','blindcount','branch_balance',
-    'purchaseorders','purchases','suppliers','buyplan',
-    'dispatch','dispatch_history','map','equipment_assets',
-    'predict','manual',
-  ],
-
-  comprador: [
-    'purchases','purchaseorders','payables','buyplan',
-    'suppliers','supplier_intel','products','categories',
-    'predict','manual',
-  ],
-
-  transportador: ['routeplan','dispatch','dispatch_history','map'],
-}
-
-const PAGE_ALIASES: Record<string, string> = {
-  despachos: 'dispatch_history',
-  trazabilidad: 'dispatch_history',
-  omnichannel_inbox: 'omnichannel',
-  ai_action_hub: 'ai_actions',
-  branch_rebalancing: 'branch_balance',
-  compliance_monitor: 'compliance',
-}
-
 function isPageAllowedForRole(
   page: string,
   role?: Role,
-  opts?: {
-    isMasterAccount?: boolean
-    isDemo?: boolean
-    inspectedSupportTicket?: SupportTicket | null
-  }
+  opts?: { isMasterAccount?: boolean; isDemo?: boolean }
 ): boolean {
-  if (!role) return false
-  const canonicalPage = PAGE_ALIASES[page] ?? page
-  if (canonicalPage === 'sqlcenter' && (opts?.isMasterAccount || opts?.isDemo)) {
-    return true
+  // REGLA 1: Centro de Scripts SQL y Supabase
+  // SOLO el rol de Administrador Central ('super_admin' o 'admin') puede visualizarlo o ver sus rutas.
+  // Queda ROTUNDAMENTE PROHIBIDO mostrar este panel o el acceso a Supabase a los roles de Contador, Gerente o Vendedor.
+  if (page === 'sqlcenter') {
+    if (role === 'contador' || role === 'gerente' || role === 'vendedor') {
+      return false
+    }
+    return role === 'admin' || (role as string) === 'super_admin' || Boolean(opts?.isMasterAccount)
   }
-  if (
-    opts?.inspectedSupportTicket &&
-    isSessionAuthorizationActive(opts.inspectedSupportTicket) &&
-    (opts.inspectedSupportTicket.module_page === canonicalPage ||
-      opts.inspectedSupportTicket.module_page === page)
-  ) {
-    return true
+
+  // REGLA 2: Rol 'Contador Público' ('contador')
+  // Su acceso está estrictamente limitado a: Catálogo PUC NIIF, Registrar Asiento Diario y Centro de Estados Financieros (Balances).
+  if (role === 'contador') {
+    return (
+      page === 'accounting' ||
+      page === 'accounting_puc' ||
+      page === 'journal_entry' ||
+      page === 'accstate'
+    )
   }
-  return ROLE_PAGE_ACCESS[role]?.includes(canonicalPage) ?? false
+
+  // REGLA 3: Rol 'Vendedor' ('vendedor')
+  // Su acceso está estrictamente limitado a: Mostrador/POS, Inventario de Bodega y Cierre de Caja.
+  if (role === 'vendedor') {
+    return page === 'pos' || page === 'products' || page === 'cash'
+  }
+
+  // REGLA 4: Rol 'Gerente' ('gerente')
+  // Su acceso está estrictamente limitado a: analíticas, utilidades netas y auditoría de cumplimiento.
+  if (role === 'gerente') {
+    return (
+      page === 'stats' ||
+      page === 'reports' ||
+      page === 'profit' ||
+      page === 'compliance' ||
+      page === 'compliance_monitor' ||
+      page === 'history' ||
+      page === 'anomaly_detector'
+    )
+  }
+
+  // REGLAS GENERALES PARA OTROS ROLES (Dueño, Admin Empresa, Jefe de Almacén, Soporte Técnico, etc.)
+  switch (page) {
+    case 'dashboard':
+    case 'copilot':
+    case 'ask':
+    case 'customers':
+    case 'products':
+    case 'catalog':
+    case 'kardex':
+    case 'manual':
+      return true
+    case 'command':
+    case 'treasury':
+    case 'bankrecon':
+    case 'costcenters':
+    case 'expenses':
+    case 'profit':
+      return isCompanyManager(role) || canViewAccounting(role)
+    case 'summary':
+      return isCompanyManager(role) || canManageInventory(role) || canViewAccounting(role)
+    case 'pos':
+    case 'quotations':
+    case 'layaways':
+      return canRegisterSales(role)
+    case 'sales':
+    case 'cartera':
+      return canRegisterSales(role) || canViewAccounting(role)
+    case 'catorders':
+      return canRegisterSales(role) || isCompanyManager(role) || canViewAccounting(role)
+    case 'devolutions':
+    case 'exchanges':
+      return canRegisterSales(role) || canManageInventory(role)
+    case 'sellers':
+      return canManageTeam(role) || canViewAccounting(role)
+    case 'routeplan':
+      return canRegisterSales(role) || canManageTransport(role)
+    case 'dispatch':
+      return canRegisterSales(role) || canManageTransport(role) || canManageInventory(role)
+    case 'goals':
+      return canRegisterSales(role) || isCompanyManager(role)
+    case 'purchaseorders':
+      return canManagePurchases(role) || canManageInventory(role) || canViewAccounting(role)
+    case 'purchases':
+    case 'payables':
+      return canManagePurchases(role) || canViewAccounting(role)
+    case 'buyplan':
+    case 'suppliers':
+    case 'predict':
+      return canManagePurchases(role) || canManageInventory(role)
+    case 'warehouses':
+    case 'categories':
+    case 'lots':
+    case 'labels':
+    case 'priceshield':
+      return canManageInventory(role)
+    case 'blindcount':
+      return canManageInventory(role) || canViewAccounting(role) || isCompanyManager(role)
+    case 'cash':
+    case 'history':
+      return canAccessCashAndAudit(role)
+    case 'reports':
+    case 'stats':
+      return canViewStats(role)
+    case 'map':
+      return isCompanyManager(role) || canManageTransport(role)
+    case 'accounting':
+    case 'accounting_puc':
+    case 'journal_entry':
+    case 'accstate':
+    case 'accsetup':
+    case 'accclose':
+    case 'taxes':
+    case 'cpa':
+      return canViewAccounting(role)
+    case 'erpbridge':
+      return canViewAccounting(role) || isCompanyManager(role)
+    case 'dispatch_history':
+    case 'despachos':
+    case 'trazabilidad':
+    case 'support':
+      return true
+    case 'team':
+      return canManageTeam(role)
+    case 'users':
+      return canManageUsers(role)
+    case 'companies':
+    case 'adminplans':
+      return role === 'admin' || (role as string) === 'super_admin'
+    case 'subscription':
+      return role === 'dueno' || role === 'admin' || (role as string) === 'super_admin'
+    case 'settings':
+      return canManageSettings(role)
+    default:
+      return true
+  }
 }
 
 function AppContent() {
-  const { user, loading, signOut, isDemo, isMasterAccount, switchMasterRole, enterDemo, exitDemo } = useAuth()
+  const { user, loading, signOut, isDemo, isMasterAccount, enterDemo, exitDemo } = useAuth()
   const cur = useCurrency()
 
-  const [inspectedSupportTicket, setInspectedSupportTicket] = useState<SupportTicket | null>(null)
-  const inspectedTicketRef = useRef<SupportTicket | null>(null)
-  const pendingRoleTargetPageRef = useRef<string | null>(null)
-
-  useEffect(() => {
-    setInspectedSupportTicket(null)
-    inspectedTicketRef.current = null
-    pendingRoleTargetPageRef.current = null
-  }, [user?.id])
-
   const scopeKey = isDemo ? 'demo' : (user?.id ?? null)
-  const defaultPageForRole = getRoleHomePage(user?.role)
+  const defaultPageForRole =
+    user?.role === 'tecnico'
+      ? 'support'
+      : user?.role === 'contador'
+        ? 'accounting'
+        : user?.role === 'vendedor'
+          ? 'pos'
+          : user?.role === 'gerente'
+            ? 'stats'
+            : 'dashboard'
 
   const {
     current,
@@ -273,37 +285,8 @@ function AppContent() {
     scopeKey,
     defaultPage: defaultPageForRole,
     isAllowedPage: page =>
-      isPageAllowedForRole(page, user?.role, {
-        isMasterAccount,
-        isDemo,
-        inspectedSupportTicket: inspectedSupportTicket ?? inspectedTicketRef.current,
-      }),
+      isPageAllowedForRole(page, user?.role, { isMasterAccount, isDemo }),
   })
-
-  // Alinear la pantalla inicial y el historial con el rol efectivo del usuario.
-  // Una URL con ?vista= explícita se respeta en el primer ingreso.
-  const previousEffectiveRoleRef = useRef<Role | null>(null)
-  useEffect(() => {
-    const nextRole = user?.role ?? null
-
-    if (!nextRole) {
-      previousEffectiveRoleRef.current = null
-      return
-    }
-
-    const previousRole = previousEffectiveRoleRef.current
-    previousEffectiveRoleRef.current = nextRole
-
-    if (previousRole === nextRole) return
-
-    const hasExplicitPage = Boolean(new URLSearchParams(window.location.search).get('vista'))
-    if (!previousRole && hasExplicitPage) return
-
-    const pendingTarget = pendingRoleTargetPageRef.current
-    pendingRoleTargetPageRef.current = null
-
-    navigateToPage(pendingTarget || getRoleHomePage(nextRole), { resetStack: true })
-  }, [user?.role, navigateToPage])
 
   // Nunca iniciar una sesión como autorizada por defecto.
   const [dev, setDev] = useState<DeviceState>({
@@ -391,7 +374,7 @@ function AppContent() {
       } finally {
         checking = false
       }
-          }
+    }
 
     const intervalId = window.setInterval(
       checkDeviceHeartbeat,
@@ -569,7 +552,7 @@ function AppContent() {
           <p className="text-sm text-slate-500 mt-2">
             El administrador de tu empresa bloqueó este dispositivo.
             Contáctalo para recuperar el acceso.
-                      </p>
+          </p>
 
           <button
             onClick={() => void handleSignOut()}
@@ -638,39 +621,9 @@ function AppContent() {
     )
   }
 
-  function handleInspectTicketModule(ticket: SupportTicket, simulateUserRole = false) {
-    if (!isSessionAuthorizationActive(ticket)) return
-    const targetModule = (ticket.module_page || 'dashboard').trim() || 'dashboard'
-
-    inspectedTicketRef.current = ticket
-    setInspectedSupportTicket(ticket)
-
-    if (simulateUserRole && isMasterAccount) {
-      if (user && ticket.user_role !== user.role) {
-        pendingRoleTargetPageRef.current = targetModule
-      }
-      switchMasterRole(
-        ticket.user_role,
-        ticket.company_id
-          ? {
-              id: ticket.company_id,
-              name: ticket.company_name || 'Empresa cliente',
-            }
-          : null
-      )
-      if (!user || ticket.user_role === user.role) {
-        navigateToPage(targetModule)
-      }
-      return
-    }
-
-    navigateToPage(targetModule)
-  }
-
   const safeCurrent = isPageAllowedForRole(current, user.role, {
     isMasterAccount,
     isDemo,
-    inspectedSupportTicket: inspectedSupportTicket ?? inspectedTicketRef.current,
   })
     ? current
     : defaultPageForRole
@@ -705,13 +658,15 @@ function AppContent() {
     users: <Users />,
     settings: <Settings />,
     history: <History />,
-    adminplans: <AdminPlans onNavigate={navigateToPage} />,
+    adminplans: <AdminPlans />,
     companies: <CompanyClients onNavigate={navigateToPage} />,
     team: <TeamDevices onNavigate={navigateToPage} />,
     sellers: <SellersPayroll onNavigate={navigateToPage} />,
     map: <MapRoutes />,
     cpa: <AccountantDesk onNavigate={navigateToPage} />,
     accounting: <Accounting onNavigate={navigateToPage} />,
+    accounting_puc: <Accounting initialTab="accounts" onNavigate={navigateToPage} />,
+    journal_entry: <Accounting initialTab="journal" autoOpenNewEntry={true} onNavigate={navigateToPage} />,
     erpbridge: <ErpBridge onNavigate={navigateToPage} />,
     accsetup: <AccountingSetup />,
     accclose: <AccountingClose />,
@@ -735,13 +690,7 @@ function AppContent() {
     trazabilidad: <DispatchHistory onNavigate={navigateToPage} />,
     ask: <AskCopilot onNavigate={navigateToPage} />,
     lots: <Lots onNavigate={navigateToPage} />,
-    support: (
-      <TechSupport
-        currentOriginPage={safeCurrent}
-        onNavigate={navigateToPage}
-        onInspectTicketModule={handleInspectTicketModule}
-      />
-    ),
+    support: <TechSupport currentOriginPage={safeCurrent} onNavigate={navigateToPage} />,
     sqlcenter: <SqlAdminCenter />,
     manual: <Manual role={user.role} onNavigate={navigateToPage} />,
     omnichannel: <OmnichannelInbox onNavigate={navigateToPage} />,
@@ -767,11 +716,6 @@ function AppContent() {
       previousPageLabel={previousPageLabel}
       onGoBack={goBack}
       exitHintVisible={exitHintVisible}
-      inspectedSupportTicket={inspectedSupportTicket}
-      onClearInspectedSupportTicket={() => {
-        inspectedTicketRef.current = null
-        setInspectedSupportTicket(null)
-      }}
       onSignOut={() => void handleSignOut()}
       onExitDemoToLogin={() => handleExitDemoToAuth('login')}
       onExitDemoToRegister={() => handleExitDemoToAuth('register')}

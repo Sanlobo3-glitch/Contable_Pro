@@ -220,6 +220,7 @@ export function useAuth() {
 
 export const ROLE_LABELS: Record<Role, string> = {
   admin: 'Administrador de plataforma',
+  super_admin: 'Administrador Central (Super Admin)',
   tecnico: 'Soporte técnico',
   dueno: 'Dueño',
   admin_empresa: 'Administrador de empresa',
@@ -230,6 +231,23 @@ export const ROLE_LABELS: Record<Role, string> = {
   cajero: 'Cajero POS',
   comprador: 'Compras y abastecimiento',
   transportador: 'Transporte y despacho',
+}
+
+export function isSuperAdmin(role: Role | string | undefined, isMasterAccount = false): boolean {
+  if (role === 'contador' || role === 'gerente' || role === 'vendedor') return false
+  return role === 'admin' || role === 'super_admin' || isMasterAccount
+}
+
+export function isStrictContador(role: Role | string | undefined): boolean {
+  return role === 'contador'
+}
+
+export function isStrictVendedor(role: Role | string | undefined): boolean {
+  return role === 'vendedor'
+}
+
+export function isStrictGerente(role: Role | string | undefined): boolean {
+  return role === 'gerente'
 }
 
 export const MASTER_SWITCHABLE_ROLES: { id: Role; shortLabel: string; fullLabel: string }[] = [

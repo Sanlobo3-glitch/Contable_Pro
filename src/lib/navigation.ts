@@ -77,8 +77,10 @@ export const PAGE_LABELS: Record<string, string> = {
   map: 'Mapa y rutas',
   history: 'Historial de auditoría',
   cpa: 'Despacho contable',
-  accounting: 'Contabilidad',
-  accstate: 'Estados financieros',
+  accounting: 'Catálogo PUC NIIF',
+  accounting_puc: 'Catálogo PUC NIIF',
+  journal_entry: 'Registrar Asiento Diario',
+  accstate: 'Centro de Estados Financieros (Balances)',
   costcenters: 'Centros de costo',
   accsetup: 'Config. contable',
   accclose: 'Cierre de libros',
@@ -986,7 +988,11 @@ export function useAppNavigation({
     ) => {
       hideExitHint()
 
-      const safePage = isValidAppPage(nextEntry.page) ? nextEntry.page : 'dashboard'
+      const fallbackTarget = isValidAppPage(defaultPageRef.current)
+        ? defaultPageRef.current
+        : 'dashboard'
+      const requestedPage = isValidAppPage(nextEntry.page) ? nextEntry.page : fallbackTarget
+      const safePage = isAllowedPageRef.current(requestedPage) ? requestedPage : fallbackTarget
       const cleanEntry: NavRouteEntry = {
         page: safePage,
         previewCatalogId: nextEntry.previewCatalogId || null,

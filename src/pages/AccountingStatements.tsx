@@ -4,18 +4,35 @@ import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
+// Modelo contable vigente: acc_* (acc_trial_balance / acc_balance_sheet / acc_income_statement)
 interface TrialBalanceRow {
-  account_code: string;
-  account_name: string;
-  account_type: string;
-  total_debit: number;
-  total_credit: number;
-  initial_balance: number;
-  final_balance: number;
+  account_id: string;
+  code: string;
+  name: string;
+  type: string;
+  nature: string;
+  opening_debit: number;
+  opening_credit: number;
+  period_debit: number;
+  period_credit: number;
+  closing_debit: number;
+  closing_credit: number;
 }
+
+interface StatementRow {
+  account_id: string;
+  code: string;
+  name: string;
+  type: string;
+  amount: number;
+}
+
+const finalBalance = (r: TrialBalanceRow) => Number(r.closing_debit) - Number(r.closing_credit);
 
 export default function AccountingStatements() {
   const [balanceData, setBalanceData] = useState<TrialBalanceRow[]>([]);
+  const [sheetRows, setSheetRows] = useState<StatementRow[]>([]);
+  const [incomeRows, setIncomeRows] = useState<StatementRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -34,12 +51,17 @@ export default function AccountingStatements() {
     try {
       setLoading(true);
       setError(null);
-      const { data, error: rpcError } = await supabase.rpc('get_trial_balance', {
-        p_start_date: startDate,
-        v_end_date: endDate
-      });
-      if (rpcError) throw rpcError;
-      if (data) setBalanceData(data as TrialBalanceRow[]);
+      const [tb, bs, is] = await Promise.all([
+        supabase.rpc('acc_trial_balance', { p_from: startDate, p_to: endDate }),
+        supabase.rpc('acc_balance_sheet', { p_to: endDate }),
+        supabase.rpc('acc_income_statement', { p_from: startDate, p_to: endDate })
+      ]);
+      if (tb.error) throw tb.error;
+      if (bs.error) throw bs.error;
+      if (is.error) throw is.error;
+      setBalanceData((tb.data || []) as TrialBalanceRow[]);
+      setSheetRows((bs.data || []) as StatementRow[]);
+      setIncomeRows((is.data || []) as StatementRow[]);
     } catch (err: any) {
       setError(err.message || 'Error calculando el balance de comprobación');
     } finally {
@@ -47,25 +69,28 @@ export default function AccountingStatements() {
     }
   };
 
-  const totalDebits = balanceData.reduce((sum, row) => sum + Number(row.total_debit), 0);
-  const totalCredits = balanceData.reduce((sum, row) => sum + Number(row.total_credit), 0);
+  const totalDebits = balanceData.reduce((sum, row) => sum + Number(row.period_debit), 0);
+  const totalCredits = balanceData.reduce((sum, row) => sum + Number(row.period_credit), 0);
 
-  const totalAssets = balanceData.filter(r => r.account_type === 'asset' || r.account_code.startsWith('1')).reduce((sum, r) => sum + Number(r.final_balance), 0);
-  const totalLiabilities = balanceData.filter(r => r.account_type === 'liability' || r.account_code.startsWith('2')).reduce((sum, r) => sum + Number(r.final_balance), 0);
-  const totalIncome = balanceData.filter(r => r.account_type === 'income' || r.account_code.startsWith('4')).reduce((sum, r) => sum + Number(r.final_balance), 0);
-  const totalExpenses = balanceData.filter(r => r.account_type === 'expense' || r.account_code.startsWith('5') || r.account_code.startsWith('6')).reduce((sum, r) => sum + Number(r.final_balance), 0);
+  const sumBy = (rows: StatementRow[], types: string[]) =>
+    rows.filter(r => types.includes(r.type)).reduce((sum, r) => sum + Number(r.amount), 0);
+
+  const totalAssets = sumBy(sheetRows, ['activo']);
+  const totalLiabilities = sumBy(sheetRows, ['pasivo']);
+  const totalIncome = sumBy(incomeRows, ['ingreso']);
+  const totalExpenses = sumBy(incomeRows, ['costo', 'gasto']);
 
   const netUtility = totalIncome - totalExpenses;
 
   const exportToExcel = () => {
     if (!balanceData || balanceData.length === 0) return;
     const worksheetData = balanceData.map(row => ({
-      "Código Cuenta": row.account_code,
-      "Nombre de Cuenta": row.account_name,
-      "Tipo": row.account_type.toUpperCase(),
-      "Débitos": Number(row.total_debit),
-      "Créditos": Number(row.total_credit),
-      "Saldo Final": Number(row.final_balance)
+      "Código Cuenta": row.code,
+      "Nombre de Cuenta": row.name,
+      "Tipo": String(row.type || '').toUpperCase(),
+      "Débitos": Number(row.period_debit),
+      "Créditos": Number(row.period_credit),
+      "Saldo Final": finalBalance(row)
     }));
     worksheetData.push({
       "Código Cuenta": "TOTALES",
@@ -93,11 +118,11 @@ export default function AccountingStatements() {
     doc.text(`Periodo: ${startDate} al ${endDate}`, 14, 33);
 
     const tableRows = balanceData.map(row => [
-      row.account_code,
-      row.account_name,
-      `$${Number(row.total_debit).toFixed(2)}`,
-      `$${Number(row.total_credit).toFixed(2)}`,
-      `$${Number(row.final_balance).toFixed(2)}`
+      row.code,
+      row.name,
+      `$${Number(row.period_debit).toFixed(2)}`,
+      `$${Number(row.period_credit).toFixed(2)}`,
+      `$${finalBalance(row).toFixed(2)}`
     ]);
     tableRows.push([
       "TOTALES",
@@ -213,13 +238,13 @@ export default function AccountingStatements() {
               </thead>
               <tbody className="divide-y divide-slate-100 text-sm">
                 {balanceData && balanceData.map((row) => (
-                  <tr key={row.account_code} className="hover:bg-slate-50/60 transition-colors">
-                    <td className="p-3 pl-6 font-mono font-semibold text-slate-500">{row.account_code}</td>
-                    <td className="p-3 text-slate-700 font-medium">{row.account_name}</td>
-                    <td className="p-3 text-right font-mono text-slate-600">${Number(row.total_debit).toFixed(2)}</td>
-                    <td className="p-3 text-right font-mono text-slate-600">${Number(row.total_credit).toFixed(2)}</td>
-                    <td className={`p-3 text-right font-mono pr-6 font-bold ${Number(row.final_balance) < 0 ? 'text-rose-600' : 'text-slate-800'}`}>
-                      ${Number(row.final_balance).toFixed(2)}
+                  <tr key={row.account_id} className="hover:bg-slate-50/60 transition-colors">
+                    <td className="p-3 pl-6 font-mono font-semibold text-slate-500">{row.code}</td>
+                    <td className="p-3 text-slate-700 font-medium">{row.name}</td>
+                    <td className="p-3 text-right font-mono text-slate-600">${Number(row.period_debit).toFixed(2)}</td>
+                    <td className="p-3 text-right font-mono text-slate-600">${Number(row.period_credit).toFixed(2)}</td>
+                    <td className={`p-3 text-right font-mono pr-6 font-bold ${finalBalance(row) < 0 ? 'text-rose-600' : 'text-slate-800'}`}>
+                      ${finalBalance(row).toFixed(2)}
                     </td>
                   </tr>
                 ))}

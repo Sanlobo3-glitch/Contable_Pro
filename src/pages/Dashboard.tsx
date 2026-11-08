@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { supabase } from '../lib/supabase'
+import { isPageAllowedForRole } from '../lib/pagePermissions'
 import {
   useAuth,
   isCompanyManager,
@@ -168,6 +169,8 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
   const canSell = canRegisterSales(user?.role)
   const canInventory = canManageInventory(user?.role)
   const showGoal = !!user && !isManager && canSell
+  // Solo se muestran atajos a páginas a las que este rol realmente puede entrar (misma tabla que el menú)
+  const canGo = (page: string) => isPageAllowedForRole(page, user?.role)
   // Almacén y Compras NO ven cifras comerciales (ventas, cartera por cobrar, ingresos, clientes): solo lo suyo.
   const showCommercial = isManager || canSell || canViewAccounting(user?.role)
   // Cuentas por pagar: la RPC cuentas_por_pagar() de la base SOLO responde a dueño/admin; el resto ve «Restringido»
@@ -1090,6 +1093,7 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
             </div>
 
             <div className="flex items-center gap-2 flex-wrap">
+              {canGo('omnichannel') && (
               <button
                 type="button"
                 onClick={() => onNavigate('omnichannel')}
@@ -1103,6 +1107,8 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
                   </span>
                 )}
               </button>
+              )}
+              {canGo('ai_actions') && (
               <button
                 type="button"
                 onClick={() => onNavigate('ai_actions')}
@@ -1116,10 +1122,12 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
                   </span>
                 )}
               </button>
+              )}
             </div>
           </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5 pt-3.5">
+            {canGo('omnichannel') && (
             <button
               type="button"
               onClick={() => onNavigate('omnichannel')}
@@ -1134,7 +1142,9 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
               </div>
               <p className="text-[10px] text-indigo-300/70 truncate">WhatsApp, Tienda, Ruta</p>
             </button>
+            )}
 
+            {canGo('ai_actions') && (
             <button
               type="button"
               onClick={() => onNavigate('ai_actions')}
@@ -1149,7 +1159,9 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
               </div>
               <p className="text-[10px] text-indigo-300/70 truncate">Human-in-the-loop</p>
             </button>
+            )}
 
+            {canGo('branch_balance') && (
             <button
               type="button"
               onClick={() => onNavigate('branch_balance')}
@@ -1164,7 +1176,9 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
               </div>
               <p className="text-[10px] text-indigo-300/70 truncate">Traslados sugeridos</p>
             </button>
+            )}
 
+            {canGo('anomaly_detector') && (
             <button
               type="button"
               onClick={() => onNavigate('anomaly_detector')}
@@ -1179,7 +1193,9 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
               </div>
               <p className="text-[10px] text-indigo-300/70 truncate">Auditoría anti-fraude</p>
             </button>
+            )}
 
+            {canGo('compliance') && (
             <button
               type="button"
               onClick={() => onNavigate('compliance')}
@@ -1194,6 +1210,7 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
               </div>
               <p className="text-[10px] text-indigo-300/70 truncate">SOAT, DIAN, Cámaras</p>
             </button>
+            )}
           </div>
         </div>
       )}

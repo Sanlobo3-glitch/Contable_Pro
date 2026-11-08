@@ -27,10 +27,11 @@ Registro = tabla `public.sql_migration_log` (columnas clave: `script_id`, `migra
 | Migraciones anteriores al registro | Relleno verificado el 2026-11-07 (`source = backfill_verificado`). |
 
 Funciones del registro (todas en `public`):
+- `registrar_ejecucion_sql(...)` (interna) y `admin_registrar_ejecucion_sql(...)` (registra un fallo desde el cliente): definidas en `20261107000040_bitacora_sql_trazabilidad_base.sql`.
 - `sql_registrar_migracion(script_id, title, file, source, summary)` → idempotente; solo `postgres`/`service_role`.
 - `admin_registrar_migracion_manual(script_id, title, file, summary)` → solo cuenta maestra.
 - `admin_estado_objetos(tablas[], funciones[])` → estado real de objetos + lo registrado; lo usa el Centro SQL para marcar «Activo» o «Listo para aplicar».
-- `admin_ejecutar_migracion_sql(sql, id, título, archivo)` → motor; ignora `BEGIN;`/`COMMIT;` sueltos (antes fallaba con `0A000 EXECUTE of transaction commands is not implemented` en paquetes con varios archivos).
+- `admin_ejecutar_migracion_sql(sql, id, título, archivo)` → motor (**una sola versión**, de 4 parámetros; la de 3 se eliminó en `…000050`); ignora `BEGIN;`/`COMMIT;` sueltos (antes fallaba con `0A000 EXECUTE of transaction commands is not implemented` en paquetes con varios archivos).
 - `sql_migration_log` solo se **lee** desde la app (sin INSERT/UPDATE/DELETE/TRUNCATE para `authenticated`).
 
 ## 3. Modelo contable vigente (`acc_*`) y estado de la consolidación
@@ -120,8 +121,10 @@ Resultado de la verificación contra la base (2026-11-07): **todas las migracion
 | 72 | `20261105000043_revocar_acceso_anon_inventario_multibodega.sql` | ✅ Aplicada | Verificada por estado: `anon` no tiene privilegios sobre las tablas multibodega. |
 | 73 | `20261105000044_seguridad_pin_seguimiento_pedidos_catalogo.sql` | ✅ Aplicada | Verificada: sus tablas/funciones existen en la base. |
 | 74 | `20261105000045_admin_global_comercial_y_equipo_plataforma.sql` | ✅ Aplicada | Verificada: sus tablas/funciones existen en la base. |
-| 75 | `20261107000048_consolidar_contabilidad_acc_y_rendimiento.sql` | ✅ Aplicada | Consolida el modelo contable y agrega índices de rendimiento (ver sección 3). |
-| 76 | `20261107000049_registro_unico_migraciones.sql` | ✅ Aplicada | Registro único + motor SQL corregido (ver sección 2). |
+| 75 | `20261107000040_bitacora_sql_trazabilidad_base.sql` | ✅ Aplicada | Bitácora SQL base: tabla `sql_migration_log`, `registrar_ejecucion_sql`, `admin_registrar_ejecucion_sql`. Se aplicó antes desde el SQL Editor y se **reconstruyó del esquema vivo** el 2026-11-07 (registrada como `backfill_reconstruido`). |
+| 76 | `20261107000048_consolidar_contabilidad_acc_y_rendimiento.sql` | ✅ Aplicada | Consolida el modelo contable y agrega índices de rendimiento (ver sección 3). |
+| 77 | `20261107000049_registro_unico_migraciones.sql` | ✅ Aplicada | Registro único + motor SQL corregido (ver sección 2). |
+| 78 | `20261107000050_quitar_sobrecarga_admin_ejecutar_migracion_sql.sql` | ✅ Aplicada | Quita la sobrecarga antigua `(text,text,text)` del motor SQL, que no tenía el arreglo de transacciones. |
 
 **Reemplazadas, NO ejecutar** (`supabase/migrations_superseded/`): `20261106000022_contable_pro_partida_doble_puc_niif.sql`, `20261106000046_sistema_contable_partida_doble.sql`, `20261106000047_reportes_financieros_contables.sql`.
 Crean un libro contable paralelo (`accounts`, `journal_entries`, `journal_lines`, `fn_*`) que nunca se aplicó.

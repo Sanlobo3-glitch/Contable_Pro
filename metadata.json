@@ -1,0 +1,12 @@
+{
+  "name": "InventarioPro - Sistema de Gestión de Inventario, Ventas y Contabilidad",
+  "description": "Software web para gestionar inventario, ventas, compras, clientes y contabilidad básica de tu negocio.",
+  "requestFramePermissions": [
+    "camera",
+    "geolocation"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
+

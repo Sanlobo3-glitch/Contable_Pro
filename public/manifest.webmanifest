@@ -1,0 +1,15 @@
+{
+  "id": "/",
+  "name": "InventarioPro",
+  "short_name": "InventarioPro",
+  "description": "Inventario, ventas y contabilidad para tu negocio",
+  "lang": "es",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f8fafc",
+  "theme_color": "#1e293b",
+  "icons": [
+    { "src": "/logo_inventarioPro.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}

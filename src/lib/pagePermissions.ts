@@ -123,14 +123,30 @@ const GENERIC_RULES: Record<string, Rule> = {
 export function isPageAllowedForRole(
   page: string,
   role?: Role,
-  _opts?: { isMasterAccount?: boolean; isDemo?: boolean }
+  opts?: { isMasterAccount?: boolean; isDemo?: boolean; masterRoleOverride?: Role | null }
 ): boolean {
+  const effectiveRole = opts?.masterRoleOverride || role
   // Centro de Scripts SQL y Supabase: solo Administrador Central; nunca roles de alcance estricto
   if (page === 'sqlcenter') {
-    return role === 'admin' || (role as string) === 'super_admin'
+    if (
+      effectiveRole === 'contador' ||
+      effectiveRole === 'gerente' ||
+      effectiveRole === 'vendedor' ||
+      effectiveRole === 'transportador' ||
+      effectiveRole === 'cajero' ||
+      effectiveRole === 'almacen' ||
+      effectiveRole === 'comprador' ||
+      effectiveRole === 'tecnico'
+    ) {
+      return false
+    }
+    return (
+      (effectiveRole === 'admin' || (effectiveRole as string) === 'super_admin') &&
+      (!opts?.masterRoleOverride || opts.masterRoleOverride === 'admin')
+    )
   }
-  const strict = role ? STRICT_ROLE_PAGES[role] : undefined
+  const strict = effectiveRole ? STRICT_ROLE_PAGES[effectiveRole] : undefined
   if (strict) return strict.includes(page)
   const rule = GENERIC_RULES[page]
-  return rule ? rule(role) : true
+  return rule ? rule(effectiveRole) : true
 }

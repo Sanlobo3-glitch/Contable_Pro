@@ -114,17 +114,17 @@ function getPublicCatalogStoreKey(): string | null {
 function isPageAllowedForRole(
   page: string,
   role?: Role,
-  opts?: { isMasterAccount?: boolean; isDemo?: boolean }
+  opts?: { isMasterAccount?: boolean; isDemo?: boolean; masterRoleOverride?: Role | null }
 ): boolean {
   return canAccessPage(page, role, opts)
 }
 
 function AppContent() {
-  const { user, loading, signOut, isDemo, isMasterAccount, enterDemo, exitDemo } = useAuth()
+  const { user, loading, signOut, isDemo, isMasterAccount, enterDemo, exitDemo, masterRoleOverride } = useAuth()
   const cur = useCurrency()
 
   const scopeKey = isDemo ? 'demo' : (user?.id ?? null)
-  const defaultPageForRole = getDefaultPageForRole(user?.role)
+  const defaultPageForRole = getDefaultPageForRole(masterRoleOverride || user?.role)
 
   const {
     current,
@@ -145,7 +145,7 @@ function AppContent() {
     scopeKey,
     defaultPage: defaultPageForRole,
     isAllowedPage: page =>
-      isPageAllowedForRole(page, user?.role, { isMasterAccount, isDemo }),
+      isPageAllowedForRole(page, user?.role, { isMasterAccount, isDemo, masterRoleOverride }),
   })
 
   // Nunca iniciar una sesión como autorizada por defecto.
@@ -484,6 +484,7 @@ function AppContent() {
   const safeCurrent = isPageAllowedForRole(current, user.role, {
     isMasterAccount,
     isDemo,
+    masterRoleOverride,
   })
     ? current
     : defaultPageForRole

@@ -324,7 +324,7 @@ export default function AppLayout({
     setProfileModalOpen(false)
   }
 
-  const role = user?.role
+  const role = (masterRoleOverride || user?.role) as Role | undefined
   // REGLA 1: Administrador Central estricto ('super_admin' o 'admin' de plataforma)
   // SOLO el rol de Administrador Central puede visualizarlo.
   // Queda rotundamente prohibido para Contador, Gerente, Vendedor, Transporte, etc.
@@ -657,7 +657,17 @@ export default function AppLayout({
     ]
   }, [role, isSuperAdmin, isCompanyOwner, isMasterAccount, isDemo])
 
-  const allowedItems = useMemo(() => navItems.filter(n => n.allowed), [navItems])
+  const allowedItems = useMemo(() => {
+    return navItems.filter(
+      n =>
+        n.allowed &&
+        isPageAllowedForRole(n.id, role, {
+          isMasterAccount,
+          isDemo,
+          masterRoleOverride,
+        })
+    )
+  }, [navItems, role, isMasterAccount, isDemo, masterRoleOverride])
 
   const paletteItems: PaletteItem[] = useMemo(
     () =>

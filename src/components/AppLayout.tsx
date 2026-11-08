@@ -19,6 +19,8 @@ import {
   canViewAccounting,
   canManageTransport,
   canManageTechSupport,
+  canViewDashboard,
+  getDefaultPageForRole,
   getTrialDaysLeft,
   isTrialActive,
   isSubscriptionActive,
@@ -509,7 +511,7 @@ export default function AppLayout({
     // ------------------------------------------------------------------------
     return [
       // Inicio y mando
-      { id: 'dashboard', label: 'Panel ejecutivo', section: 'Principal', keywords: 'inicio kpi resumen', icon: <LayoutDashboard className="w-4 h-4 shrink-0" />, allowed: true },
+      { id: 'dashboard', label: 'Panel ejecutivo', section: 'Principal', keywords: 'inicio kpi resumen', icon: <LayoutDashboard className="w-4 h-4 shrink-0" />, allowed: canViewDashboard(role) },
       { id: 'command', label: 'Centro de mando', section: 'Principal', keywords: 'cfo coo finanzas vivo pulso sedes', icon: <Gauge className="w-4 h-4 shrink-0" />, allowed: isCompanyManager(role) || canViewAccounting(role) },
       { id: 'summary', label: 'Resumen del día', section: 'Principal', keywords: 'cierre diario corte', icon: <CalendarDays className="w-4 h-4 shrink-0" />, allowed: isCompanyManager(role) || canManageInventory(role) || canViewAccounting(role) },
       { id: 'copilot', label: 'Copiloto', section: 'Principal', keywords: 'alertas avisos', icon: <Sparkles className="w-4 h-4 shrink-0" />, allowed: true },
@@ -736,13 +738,10 @@ export default function AppLayout({
   function handleMasterRoleChange(nextRole: Role) {
     if (!isMasterAccount) return
     switchMasterRole(nextRole)
-    if (nextRole === 'tecnico') {
-      onNavigate('support')
-    } else if (nextRole === 'contador' && (current === 'dashboard' || current === 'support' || current === 'users' || current === 'companies' || current === 'adminplans')) {
-      onNavigate('cpa')
-    } else if (nextRole === 'transportador' && (current === 'dashboard' || current === 'cpa' || current === 'users' || current === 'companies' || current === 'adminplans')) {
-      onNavigate('dispatch')
-    }
+    // Al simular un rol se aterriza en SU pantalla de inicio (la misma que tendría el usuario real):
+    // así el simulador y la cuenta real muestran siempre lo mismo.
+    const home = getDefaultPageForRole(nextRole)
+    if (home !== 'dashboard') onNavigate(home)
   }
 
   function handleMasterCompanyChange(companyId: string) {

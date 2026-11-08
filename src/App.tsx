@@ -13,6 +13,8 @@ import {
   canAccessCashAndAudit,
   canViewAccounting,
   canManageTransport,
+  canViewDashboard,
+  getDefaultPageForRole,
 } from './lib/auth'
 import { useAppNavigation } from './lib/navigation'
 import { getPublicStoreIdentifierFromLocation } from './lib/whatsappStudio'
@@ -170,6 +172,8 @@ function isPageAllowedForRole(
   // REGLAS GENERALES PARA OTROS ROLES (Dueño, Admin Empresa, Jefe de Almacén, Soporte Técnico, etc.)
   switch (page) {
     case 'dashboard':
+      // Caja/ventas no ven el panel ejecutivo (misma regla que el menú)
+      return canViewDashboard(role)
     case 'copilot':
     case 'ask':
     case 'customers':
@@ -269,18 +273,7 @@ function AppContent() {
   const cur = useCurrency()
 
   const scopeKey = isDemo ? 'demo' : (user?.id ?? null)
-  const defaultPageForRole =
-    user?.role === 'tecnico'
-      ? 'support'
-      : user?.role === 'contador'
-        ? 'accounting'
-        : user?.role === 'vendedor'
-          ? 'pos'
-          : user?.role === 'gerente'
-            ? 'stats'
-            : user?.role === 'transportador'
-              ? 'warehouses'
-              : 'dashboard'
+  const defaultPageForRole = getDefaultPageForRole(user?.role)
 
   const {
     current,

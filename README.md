@@ -16,7 +16,10 @@ Stack: Vite + React 19 + TypeScript + Tailwind 4 · Supabase (Postgres + RLS + R
 - `supabase/migrations/` historial SQL · `supabase/migrations_superseded/` descartadas · `supabase/audits/` informes.
 
 ## Roles
-`admin`/`super_admin` (administrador central; Centro SQL solo para la cuenta maestra), `gerente`, `contador`, `vendedor` y roles de soporte técnico. El acceso por página se define en `src/lib/navigation.ts`.
+`admin`/`super_admin` (administrador central; Centro SQL solo para la cuenta maestra), `dueno`, `admin_empresa`, `gerente`, `contador`, `vendedor`, `cajero`, `almacen`, `comprador`, `transportador` y `tecnico`.
+El acceso se define en **tres sitios que deben cambiarse juntos**: el menú (`src/components/AppLayout.tsx`, `navItems`), el guardián de páginas (`isPageAllowedForRole` en `src/App.tsx`) y las funciones de `src/lib/auth.tsx` (`canViewDashboard`, `getDefaultPageForRole`, `can*`).
+El «Paso Maestro» (simulador de roles de `sanlobo3@hotmail.com`) usa exactamente esas mismas reglas: simulado y real deben coincidir.
+Caja/ventas (`cajero`, `vendedor`) no ven el Panel ejecutivo; su inicio es el Mostrador (POS).
 
 ## Comandos
 `bun install` · `bun run build` (Vercel) · `bun --watch server.ts` (servidor Bun, requiere `SUPABASE_URL` y `SUPABASE_ANON_KEY`) · `bun run lint`.

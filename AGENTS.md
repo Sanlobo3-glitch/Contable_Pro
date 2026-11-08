@@ -8,3 +8,4 @@ Reglas no negociables:
 - Todo SQL nuevo: archivo idempotente en `supabase/migrations/` (sin BEGIN/COMMIT) + pie `select public.sql_registrar_migracion(...)` + fila en `supabase/MIGRATIONS.md`.
 - No dejes README/LEEME con estados que no verificaste; actualiza `MIGRATIONS.md` y borra lo obsoleto.
 - Si cambias `src/lib/sqlScripts.ts`, lista todas las tablas del paquete en `targetTables`.
+- Permisos por rol: al cambiar lo que ve un rol, actualiza JUNTOS el menú (`AppLayout.tsx`), el guardián (`isPageAllowedForRole` en `App.tsx`) y `auth.tsx` (`getDefaultPageForRole`/`canViewDashboard`). El simulador de roles usa las mismas reglas.

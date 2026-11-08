@@ -82,6 +82,7 @@ import SupplierIntelligence from './pages/SupplierIntelligence'
 import AnomalyDetector from './pages/AnomalyDetector'
 import EquipmentAssets from './pages/EquipmentAssets'
 import EmployeePortal from './pages/EmployeePortal'
+import MyRoute from './pages/MyRoute'
 import ComplianceMonitor from './pages/ComplianceMonitor'
 import ApiEcosystem from './pages/ApiEcosystem'
 import CatalogOrders from './pages/CatalogOrders'
@@ -562,6 +563,7 @@ function AppContent() {
     anomaly_detector: <AnomalyDetector onNavigate={navigateToPage} />,
     equipment_assets: <EquipmentAssets onNavigate={navigateToPage} />,
     employee_portal: <EmployeePortal onNavigate={navigateToPage} />,
+    myroute: <MyRoute onNavigate={navigateToPage} />,
     compliance: <ComplianceMonitor onNavigate={navigateToPage} />,
     compliance_monitor: <ComplianceMonitor onNavigate={navigateToPage} />,
     api_ecosystem: <ApiEcosystem onNavigate={navigateToPage} />,

@@ -25,13 +25,26 @@ type Rule = (role?: Role) => boolean
 /** Reglas de los roles de alcance ESTRICTO (solo ven estas páginas). */
 const STRICT_ROLE_PAGES: Partial<Record<Role, string[]>> = {
   contador: ['accounting', 'accounting_puc', 'journal_entry', 'accstate'],
-  vendedor: ['pos', 'products', 'cash'],
+  // Vendedor (tienda o ruta): vende, consulta sus ventas, su ruta asignada, clientes, metas e inventario. NO maneja caja.
+  vendedor: [
+    'pos',
+    'sales',
+    'quotations',
+    'catalog',
+    'customers',
+    'myroute',
+    'map',
+    'goals',
+    'employee_portal',
+    'products',
+  ],
   gerente: ['stats', 'reports', 'profit', 'compliance', 'compliance_monitor', 'history', 'anomaly_detector'],
   transportador: ['warehouses', 'map', 'dispatch', 'routeplan', 'dispatch_history', 'equipment_assets'],
 }
 
 /** Reglas del resto de roles (dueño, admin empresa, almacén, compras, cajero, soporte...). */
 const GENERIC_RULES: Record<string, Rule> = {
+  myroute: role => role === 'vendedor',
   dashboard: role => canViewDashboard(role),
   command: role => isCompanyManager(role) || canViewAccounting(role),
   summary: role => role === 'admin' || role === 'dueno',

@@ -38,7 +38,6 @@ const STRICT_ROLE_PAGES: Partial<Record<Role, string[]>> = {
     'employee_portal',
     'products',
   ],
-  gerente: ['stats', 'reports', 'profit', 'compliance', 'compliance_monitor', 'history', 'anomaly_detector'],
   transportador: ['warehouses', 'map', 'dispatch', 'routeplan', 'dispatch_history', 'equipment_assets'],
 }
 

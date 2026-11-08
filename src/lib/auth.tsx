@@ -273,6 +273,11 @@ export function canManageTechSupport(role: Role | undefined): boolean {
   return role === 'admin' || role === 'tecnico'
 }
 
+export function canViewDashboard(role: Role | undefined): boolean {
+  if (!role) return false
+  return isCompanyManager(role) || !['contador', 'vendedor', 'cajero', 'almacen', 'transportador', 'tecnico'].includes(role)
+}
+
 export function isCompanyManager(role: Role | undefined): boolean {
   return (
     role === 'admin' ||

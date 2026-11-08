@@ -4,7 +4,7 @@ import {
   Store, QrCode, LogIn, WifiOff, BookOpen, Lock, Calculator, Sparkles, ShoppingBasket, Banknote, CalendarDays, MessageCircleQuestion, CalendarClock, TrendingUp, PieChart,
   Tag, Percent, Gauge, Route as RouteIcon, UserPlus,
   ClipboardCheck, ScanLine, Building2, TrendingDown, BadgeCheck, ArrowLeftRight, LifeBuoy, Layers, Receipt, EyeOff, ShieldCheck, FileSpreadsheet,
-  Database, Gift, History, Plus,
+  Database, Gift, History, Plus, Briefcase, CheckCircle2,
   type LucideIcon,
 } from 'lucide-react'
 import type { MockKind } from '../components/ManualMocks'
@@ -41,6 +41,82 @@ const LOGISTICS_ROLES: RoleKey[] = ['transportador', 'dueno', 'gerente', 'admin'
 const GERENTE_ROLES: RoleKey[] = ['gerente', 'dueno', 'admin']
 
 export const CHAPTERS: Chapter[] = [
+  {
+    id: 'manager_center',
+    title: 'Centro de Dirección Gerencial y Resumen Ejecutivo',
+    icon: Briefcase,
+    roles: GERENTE_ROLES,
+    page: 'manager_center',
+    mock: 'panel',
+    summary: 'Tablero maestro exclusivo para el rol Gerente: supervisión holística, ventas hoy vs mes anterior, margen bruto real, flujo de caja y pulso de sucursales.',
+    steps: [
+      'Entra a «Centro de Dirección Gerencial» desde el menú de Dirección Estratégica.',
+      'Revisa los 6 KPIs maestros en la barra superior: Ventas de hoy, Ventas del mes, Utilidad bruta, Caja cobrada, Cartera y Autorizaciones.',
+      'Navega entre los 10 módulos directivos mediante las pestañas integradas.',
+      'Inspecciona el Diagnóstico Gerencial del Día para responder inmediatamente: ¿Cómo está funcionando mi empresa hoy?',
+    ],
+    tips: [
+      'El centro gerencial sintetiza datos en tiempo real de toda la operación empresarial con aislamiento multiempresa.',
+    ],
+  },
+  {
+    id: 'manager_authorizations',
+    title: 'Centro de Autorizaciones y Aprobaciones Gerenciales',
+    icon: CheckCircle2,
+    roles: GERENTE_ROLES,
+    page: 'manager_authorizations',
+    mock: 'ai_actions',
+    summary: 'Bandeja de dictamen para solicitudes de compras extraordinarias, gastos fuera de presupuesto, descuentos comerciales especiales y ajustes de inventario.',
+    steps: [
+      'Accede a la pestaña «6. Autorizaciones» o desde el acceso directo del menú lateral.',
+      'Examina el solicitante, monto, cantidades, documentos de respaldo y justificación de cada solicitud pendiente.',
+      'Pulsa «Aprobar solicitud», «Rechazar», «Solicitar corrección» o «Devolver para revisión».',
+      'Ingresa las notas y justificación de auditoría que quedarán registradas permanentemente con fecha y autor.',
+    ],
+  },
+  {
+    id: 'manager_action_plans',
+    title: 'Planes de Acción Gerencial y Objetivos Estratégicos',
+    icon: Layers,
+    roles: GERENTE_ROLES,
+    page: 'manager_action_plans',
+    mock: 'goals',
+    summary: 'Sistema de gestión de objetivos y problemas: asignación de responsables, fechas límite, prioridades, seguimiento porcentual y evidencias.',
+    steps: [
+      'Ingresa a «7. Planes de Acción» y haz clic en «Crear plan de acción».',
+      'Define el título, área (operaciones, comercial, financiera, etc.), prioridad y fecha límite de entrega.',
+      'Asigna un colaborador responsable y el indicador KPI de cumplimiento esperado.',
+      'Monitorea el avance con los botones de ajuste rápido (25%, 50%, 75%, 100%) y detecta automáticamente tareas atrasadas.',
+    ],
+  },
+  {
+    id: 'manager_intelligence',
+    title: 'Inteligencia Empresarial, Diagnósticos y Alertas',
+    icon: Sparkles,
+    roles: GERENTE_ROLES,
+    page: 'manager_intelligence',
+    mock: 'reports',
+    summary: 'Alertas estratégicas estructuradas en 4 partes obligatorias: Qué está ocurriendo, Respaldo numérico, Riesgo representado y Acción gerencial recomendada.',
+    steps: [
+      'Entra a «8. Inteligencia & Riesgos» para auditar quiebres de inventario, morosidad de cartera y caídas de facturación.',
+      'Analiza cada diagnóstico con su sustento de datos verificables sin depender de servicios externos de pago.',
+      'Haz clic en «Convertir en plan de acción» para transformar cualquier riesgo detectado en una tarea asignada con fecha límite.',
+    ],
+  },
+  {
+    id: 'manager_reports',
+    title: 'Informes Gerenciales Ejecutivos y Exportación',
+    icon: FileText,
+    roles: GERENTE_ROLES,
+    page: 'manager_reports',
+    mock: 'reports',
+    summary: 'Generador de informes diario, semanal, mensual, comercial, financiero y operativo listos para imprimir o exportar a PDF.',
+    steps: [
+      'Selecciona el tipo de informe deseado (Diario, Semanal, Mensual, Comercial, Financiero u Operativo).',
+      'Revisa la síntesis ejecutiva, KPIs calculados, conclusiones operativas y tablas de desglose por sucursal.',
+      'Haz clic en «Imprimir / PDF» para emitir el documento con membrete corporativo oficial de la empresa.',
+    ],
+  },
   {
     id: 'companies',
     title: 'Gestión de Empresas Clientes y Aislamiento Multi-inquilino',

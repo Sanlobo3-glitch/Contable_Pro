@@ -94,6 +94,7 @@ import ExchangesWarranties from './pages/ExchangesWarranties'
 import BankReconciliation from './pages/BankReconciliation'
 import PriceShield from './pages/PriceShield'
 import DispatchHistory from './pages/DispatchHistory'
+import ManagerCenter from './pages/ManagerCenter'
 import {
   registerDevice,
   touchDevice,
@@ -165,6 +166,18 @@ function isPageAllowedForRole(
     case 'kardex':
     case 'manual':
       return true
+    case 'manager_center':
+    case 'manager_summary':
+    case 'manager_commercial':
+    case 'manager_operations':
+    case 'manager_financial':
+    case 'manager_hr':
+    case 'manager_authorizations':
+    case 'manager_action_plans':
+    case 'manager_intelligence':
+    case 'manager_reports':
+    case 'manager_notifications':
+      return isCompanyManager(role)
     case 'command':
     case 'treasury':
     case 'bankrecon':
@@ -257,15 +270,17 @@ function AppContent() {
 
   const scopeKey = isDemo ? 'demo' : (user?.id ?? null)
   const defaultPageForRole =
-    user?.role === 'tecnico'
-      ? 'support'
-      : user?.role === 'contador'
-        ? 'accounting'
-        : user?.role === 'vendedor'
-          ? 'pos'
-          : user?.role === 'transportador'
-            ? 'warehouses'
-            : 'dashboard'
+    user?.role === 'gerente'
+      ? 'manager_center'
+      : user?.role === 'tecnico'
+        ? 'support'
+        : user?.role === 'contador'
+          ? 'accounting'
+          : user?.role === 'vendedor'
+            ? 'pos'
+            : user?.role === 'transportador'
+              ? 'warehouses'
+              : 'dashboard'
 
   const {
     current,
@@ -630,6 +645,17 @@ function AppContent() {
     : defaultPageForRole
 
   const pages: Record<string, React.ReactNode> = {
+    manager_center: <ManagerCenter onNavigate={navigateToPage} initialTab="resumen" />,
+    manager_summary: <ManagerCenter onNavigate={navigateToPage} initialTab="resumen" />,
+    manager_commercial: <ManagerCenter onNavigate={navigateToPage} initialTab="comercial" />,
+    manager_operations: <ManagerCenter onNavigate={navigateToPage} initialTab="operaciones" />,
+    manager_financial: <ManagerCenter onNavigate={navigateToPage} initialTab="financiera" />,
+    manager_hr: <ManagerCenter onNavigate={navigateToPage} initialTab="talento" />,
+    manager_authorizations: <ManagerCenter onNavigate={navigateToPage} initialTab="autorizaciones" />,
+    manager_action_plans: <ManagerCenter onNavigate={navigateToPage} initialTab="planes" />,
+    manager_intelligence: <ManagerCenter onNavigate={navigateToPage} initialTab="inteligencia" />,
+    manager_reports: <ManagerCenter onNavigate={navigateToPage} initialTab="informes" />,
+    manager_notifications: <ManagerCenter onNavigate={navigateToPage} initialTab="notificaciones" />,
     dashboard: <Dashboard onNavigate={navigateToPage} />,
     products: <Products onPreviewCatalog={openCatalogPreview} onNavigate={navigateToPage} />,
     catalog: <ProductCatalog onNavigate={navigateToPage} onPreviewCatalog={openCatalogPreview} />,

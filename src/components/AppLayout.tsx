@@ -104,6 +104,10 @@ import {
   ShieldAlert,
   Code,
   UserCheck,
+  Briefcase,
+  Activity,
+  DollarSign,
+  CheckCircle2,
 } from 'lucide-react'
 import { getActiveSupportPass, revokeSupportPass } from '../lib/innovationsRepo'
 
@@ -400,6 +404,205 @@ export default function AppLayout({
           section: 'Operaciones de Venta',
           keywords: 'cierre de caja arqueo efectivo corte turno saldo billetes monedas',
           icon: <Wallet className="w-4 h-4 shrink-0" />,
+          allowed: true,
+        },
+      ]
+    }
+
+    // ------------------------------------------------------------------------
+    // REGLA 4: Si el usuario es 'Gerente' ('gerente')
+    // Menú exclusivo del CENTRO DE DIRECCIÓN GERENCIAL: Dirección Estratégica,
+    // Gobernanza y Supervisión Operativa ERP.
+    // ------------------------------------------------------------------------
+    if (role === 'gerente') {
+      return [
+        // Sección 1: Dirección Estratégica
+        {
+          id: 'manager_center',
+          label: 'Centro de Dirección Gerencial',
+          section: 'Dirección Estratégica',
+          keywords: 'gerente direccion gerencial centro mando ejecutivo kpis tablero general',
+          icon: <Briefcase className="w-4 h-4 shrink-0" />,
+          allowed: true,
+        },
+        {
+          id: 'manager_summary',
+          label: '1. Resumen Ejecutivo — Mi Empresa',
+          section: 'Dirección Estratégica',
+          keywords: 'resumen ejecutivo hoy mes utilidad flujo caja salud operativa',
+          icon: <Activity className="w-4 h-4 shrink-0" />,
+          allowed: true,
+        },
+        {
+          id: 'manager_commercial',
+          label: '2. Dirección Comercial',
+          section: 'Dirección Estratégica',
+          keywords: 'ventas vendedores ranking clientes inactivos ticket metas cuotas',
+          icon: <TrendingUp className="w-4 h-4 shrink-0" />,
+          allowed: true,
+        },
+        {
+          id: 'manager_operations',
+          label: '3. Dirección de Operaciones',
+          section: 'Dirección Estratégica',
+          keywords: 'operaciones stock agotados quiebres rotacion recepcion traslados',
+          icon: <Package className="w-4 h-4 shrink-0" />,
+          allowed: true,
+        },
+        {
+          id: 'manager_financial',
+          label: '4. Dirección Financiera',
+          section: 'Dirección Estratégica',
+          keywords: 'finanzas pyg margen cartera vencida cobranza flujo caja gastos',
+          icon: <DollarSign className="w-4 h-4 shrink-0" />,
+          allowed: true,
+        },
+        {
+          id: 'manager_hr',
+          label: '5. Dirección del Talento Humano',
+          section: 'Dirección Estratégica',
+          keywords: 'talento humano empleados evaluaciones desempeno productividad personal novedades',
+          icon: <Users className="w-4 h-4 shrink-0" />,
+          allowed: true,
+        },
+
+        // Sección 2: Gobernanza y Control Gerencial
+        {
+          id: 'manager_authorizations',
+          label: '6. Centro de Autorizaciones',
+          section: 'Gobernanza y Control',
+          keywords: 'autorizaciones aprobaciones compras gastos descuentos ajustes inventario',
+          icon: <CheckCircle2 className="w-4 h-4 shrink-0" />,
+          allowed: true,
+        },
+        {
+          id: 'manager_action_plans',
+          label: '7. Planes de Acción Gerencial',
+          section: 'Gobernanza y Control',
+          keywords: 'planes de accion objetivos tareas responsables seguimiento cumplimiento',
+          icon: <Layers className="w-4 h-4 shrink-0" />,
+          allowed: true,
+        },
+        {
+          id: 'manager_intelligence',
+          label: '8. Inteligencia Empresarial',
+          section: 'Gobernanza y Control',
+          keywords: 'inteligencia empresarial alertas riesgos anomalias recomendaciones tendencias',
+          icon: <Sparkles className="w-4 h-4 shrink-0" />,
+          allowed: true,
+        },
+        {
+          id: 'manager_reports',
+          label: '9. Informes Gerenciales',
+          section: 'Gobernanza y Control',
+          keywords: 'informes gerenciales diario semanal mensual exportar pdf imprimir',
+          icon: <FileText className="w-4 h-4 shrink-0" />,
+          allowed: true,
+        },
+        {
+          id: 'manager_notifications',
+          label: '10. Notificaciones Gerenciales',
+          section: 'Gobernanza y Control',
+          keywords: 'notificaciones alertas criticas vencimientos avisos pendientes',
+          icon: <Bell className="w-4 h-4 shrink-0" />,
+          allowed: true,
+        },
+
+        // Sección 3: Supervisión Operativa ERP
+        {
+          id: 'pos',
+          label: 'Mostrador (POS)',
+          section: 'Supervisión Operativa ERP',
+          keywords: 'mostrador pos ventas caja cobrar',
+          icon: <Store className="w-4 h-4 shrink-0" />,
+          allowed: true,
+        },
+        {
+          id: 'omnichannel',
+          label: 'Pedidos Omnicanal',
+          section: 'Supervisión Operativa ERP',
+          keywords: 'pedidos whatsapp catalogo web omnicanal alistamiento',
+          icon: <Boxes className="w-4 h-4 shrink-0" />,
+          allowed: true,
+        },
+        {
+          id: 'sales',
+          label: 'Ventas y Facturación',
+          section: 'Supervisión Operativa ERP',
+          keywords: 'facturas ventas historial transacciones',
+          icon: <ShoppingCart className="w-4 h-4 shrink-0" />,
+          allowed: true,
+        },
+        {
+          id: 'cartera',
+          label: 'Cartera y Cobranza',
+          section: 'Supervisión Operativa ERP',
+          keywords: 'cxc cartera credito fiado abonos',
+          icon: <Banknote className="w-4 h-4 shrink-0" />,
+          allowed: true,
+        },
+        {
+          id: 'customers',
+          label: 'Clientes',
+          section: 'Supervisión Operativa ERP',
+          keywords: 'directorio clientes compradores',
+          icon: <Users className="w-4 h-4 shrink-0" />,
+          allowed: true,
+        },
+        {
+          id: 'purchases',
+          label: 'Compras y Proveedores',
+          section: 'Supervisión Operativa ERP',
+          keywords: 'compras proveedores ordenes compra mercancia',
+          icon: <Truck className="w-4 h-4 shrink-0" />,
+          allowed: true,
+        },
+        {
+          id: 'products',
+          label: 'Catálogo de Productos',
+          section: 'Supervisión Operativa ERP',
+          keywords: 'catalogo productos stock sku precios costos',
+          icon: <Package className="w-4 h-4 shrink-0" />,
+          allowed: true,
+        },
+        {
+          id: 'warehouses',
+          label: 'Sedes y Multibodega',
+          section: 'Supervisión Operativa ERP',
+          keywords: 'sucursales sedes bodegas almacenes stock',
+          icon: <Building2 className="w-4 h-4 shrink-0" />,
+          allowed: true,
+        },
+        {
+          id: 'treasury',
+          label: 'Tesorería y Presupuesto',
+          section: 'Supervisión Operativa ERP',
+          keywords: 'flujo caja bancos liquidez presupuesto',
+          icon: <Landmark className="w-4 h-4 shrink-0" />,
+          allowed: true,
+        },
+        {
+          id: 'accstate',
+          label: 'Estados Financieros',
+          section: 'Supervisión Operativa ERP',
+          keywords: 'balance general estado resultados pyg financiero',
+          icon: <FileBarChart className="w-4 h-4 shrink-0" />,
+          allowed: true,
+        },
+        {
+          id: 'compliance',
+          label: 'Vencimientos Legales',
+          section: 'Supervisión Operativa ERP',
+          keywords: 'calendario legal soat bomberos impuestos licencias',
+          icon: <Scale className="w-4 h-4 shrink-0" />,
+          allowed: true,
+        },
+        {
+          id: 'manual',
+          label: 'Manual de Usuario',
+          section: 'Supervisión Operativa ERP',
+          keywords: 'guia manual documentacion ayuda',
+          icon: <HelpCircle className="w-4 h-4 shrink-0" />,
           allowed: true,
         },
       ]

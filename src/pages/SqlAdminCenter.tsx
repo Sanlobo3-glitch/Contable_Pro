@@ -63,6 +63,10 @@ const PROBE_TABLES: { name: string; label: string }[] = [
   { name: 'product_exchanges', label: 'Cambios mano a mano y garantías' },
   { name: 'bank_reconciliations', label: 'Actas de conciliación bancaria' },
   { name: 'price_shield_batches', label: 'Escudo de precios y márgenes' },
+  { name: 'manager_approval_requests', label: 'Gerencia: Bandeja de autorizaciones' },
+  { name: 'manager_action_plans', label: 'Gerencia: Planes de acción y objetivos' },
+  { name: 'manager_employee_evaluations', label: 'Gerencia: Evaluaciones de talento' },
+  { name: 'manager_alert_statuses', label: 'Gerencia: Estado de alertas críticas' },
   { name: 'sql_migration_log', label: 'Bitácora y motor SQL en 1 clic' },
 ]
 

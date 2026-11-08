@@ -1331,5 +1331,146 @@ export interface IncomeStatementReport {
   net_income: number
 }
 
+// ============================================================================
+// CENTRO DE DIRECCIÓN GERENCIAL: TIPOS MAESTROS
+// ============================================================================
+
+export type ApprovalRequestType =
+  | 'compra'
+  | 'gasto'
+  | 'descuento_comercial'
+  | 'ajuste_inventario'
+  | 'traslado'
+  | 'devolucion'
+  | 'credito'
+  | 'excepcion'
+
+export type ApprovalRequestStatus =
+  | 'pendiente'
+  | 'aprobada'
+  | 'rechazada'
+  | 'en_correccion'
+  | 'en_revision'
+
+export interface ApprovalAuditEntry {
+  timestamp: string
+  user_name: string
+  action: 'creada' | 'aprobada' | 'rechazada' | 'solicito_correccion' | 'devolvio_revision'
+  notes?: string
+}
+
+export interface ManagerApprovalRequest {
+  id: string
+  company_id: string
+  branch_id?: string | null
+  request_type: ApprovalRequestType
+  title: string
+  description: string
+  requester_id?: string | null
+  requester_name: string
+  requester_role: string
+  amount: number
+  currency: string
+  quantity?: number | null
+  document_reference?: string | null
+  justification: string
+  status: ApprovalRequestStatus
+  manager_decision_by?: string | null
+  manager_decision_name?: string | null
+  manager_decision_notes?: string | null
+  decided_at?: string | null
+  audit_trail: ApprovalAuditEntry[]
+  created_at: string
+  updated_at: string
+}
+
+export type ActionPlanArea =
+  | 'comercial'
+  | 'operaciones'
+  | 'financiera'
+  | 'inventario'
+  | 'talento_humano'
+  | 'calidad'
+  | 'estrategica'
+
+export type ActionPlanPriority = 'baja' | 'media' | 'alta' | 'critica'
+
+export type ActionPlanStatus =
+  | 'pendiente'
+  | 'en_ejecucion'
+  | 'en_revision'
+  | 'atrasado'
+  | 'completado'
+  | 'cancelado'
+
+export interface ManagerActionPlan {
+  id: string
+  company_id: string
+  title: string
+  objective: string
+  area: ActionPlanArea
+  assigned_to_id?: string | null
+  assigned_to_name: string
+  assigned_to_role?: string | null
+  priority: ActionPlanPriority
+  kpi_target?: string | null
+  due_date: string
+  progress_percent: number
+  status: ActionPlanStatus
+  evidence_notes?: string | null
+  created_by_name?: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type EmployeeIncidentType =
+  | 'evaluacion_periodica'
+  | 'felicitacion'
+  | 'compromiso_mejora'
+  | 'llamado_atencion'
+
+export interface ManagerEmployeeEvaluation {
+  id: string
+  company_id: string
+  employee_id: string
+  employee_name: string
+  evaluator_name: string
+  evaluation_period: string
+  score: number
+  strengths?: string | null
+  areas_for_improvement?: string | null
+  commitments?: string | null
+  incident_type: EmployeeIncidentType
+  created_at: string
+}
+
+export interface ManagerAlertRecommendation {
+  id: string
+  key: string
+  severity: 'alta' | 'media' | 'baja'
+  title: string
+  area: 'comercial' | 'financiera' | 'operaciones' | 'inventario' | 'legal'
+  what_is_happening: string
+  supporting_evidence: string
+  risk_represented: string
+  recommended_action: string
+  target_module_id?: string
+  status: 'activa' | 'leida' | 'en_gestion' | 'resuelta'
+  date: string
+}
+
+export interface ExecutiveReportData {
+  reportType: 'diario' | 'semanal' | 'mensual' | 'comercial' | 'financiero' | 'operativo' | 'productividad'
+  periodLabel: string
+  generatedAt: string
+  companyName: string
+  kpis: { label: string; value: string; trend?: string; status?: 'bueno' | 'alerta' | 'neutro' }[]
+  highlights: string[]
+  risks: string[]
+  recommendedActions: string[]
+  tableData?: { headers: string[]; rows: (string | number)[][] }
+}
+
+
 
 

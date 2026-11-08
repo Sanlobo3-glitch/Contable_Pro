@@ -2,19 +2,31 @@
 
 > Fuente única de verdad: `src/lib/pagePermissions.ts`. El menú (`AppLayout.tsx`), el guardián (`App.tsx`), los atajos del Panel y el simulador «Paso Maestro» usan **esta misma tabla**.
 > Para cambiar lo que ve un rol edita ese archivo y vuelve a generar este documento. La página y la RPC de la base deben exigir lo mismo o menos que lo que aquí se permite.
-> Roles de alcance estricto (`contador`, `vendedor`, `gerente`, `transportador`): solo ven las páginas de `STRICT_ROLE_PAGES`; sus menús están definidos aparte en `AppLayout.tsx`.
-> Pantalla de inicio por rol: `getDefaultPageForRole` en `src/lib/auth.tsx` (cajero y vendedor → Mostrador POS; no ven el Panel ejecutivo).
+> Roles con menús especializados (`contador`, `vendedor`, `gerente`, `transportador`): sus menús están definidos en `AppLayout.tsx`.
+> Pantalla de inicio por rol: `defaultPageForRole` en `App.tsx` (Gerente → `manager_center` Centro de Dirección Gerencial; Cajero y vendedor → Mostrador POS; Contador → Catálogo PUC NIIF; Transporte → Sedes y traslados).
 
 ## Área de cada rol (criterio aplicado)
+- **Gerente («Dirección estratégica, supervisión empresarial y control integral de operaciones»):** Centro de Dirección Gerencial (`manager_center`), Resumen ejecutivo, Dirección comercial, Dirección de operaciones, Dirección financiera, Talento humano, Centro de autorizaciones gerenciales, Planes de acción, Inteligencia empresarial, Informes gerenciales y Notificaciones. Además tiene supervisión operativa de mostrador, ventas, compras, productos, bodegas, tesorería, cartera y estados financieros de su empresa. Sin acceso a SaaS global (empresas clientes, activar planes, sqlcenter) ni pago de suscripción (exclusivo dueño).
 - **Almacén («Jefe de almacén y bodegas»):** inventario, bodegas, traslados, lotes, etiquetas, kardex, toma física, logística (despachos, rutas, mapa, activos) y recepción de órdenes de compra. **Sin** ventas, clientes, catálogo comercial, cartera, compras/pagos a proveedores ni aprobaciones de IA.
 - **Compras:** órdenes de compra, compras, sugerencia de compras, proveedores y su evaluación; consulta de productos y kardex. Sin ventas ni logística.
 - **Vendedor (tienda o ruta):** mostrador/POS, sus ventas (historial propio; la base solo le deja ver las suyas), Mi ruta de hoy y el mapa de la ruta que le asignaron, cotizaciones, clientes, catálogo, metas, su portal e inventario en consulta. **No maneja caja** (sin Cierre de Caja). La base solo permite anular ventas a admin y dueño.
 - **Cajero POS:** mostrador, ventas, caja y arqueos, clientes, devoluciones/cambios y consulta de productos. Sin panel ejecutivo ni kardex.
 - **Dueño / Admin empresa / Admin:** todo lo de su empresa (Admin además la plataforma).
-- **Acciones de IA (Aprobaciones):** solo gerencia (admin, dueño, admin empresa). Cada propuesta indica su «rol requerido»; admin y dueño ven todas, admin empresa todas menos las de dueño. **Hoy son propuestas de demostración** (guardadas en el navegador, vienen de `src/lib/innovationsRepo.ts`) y aprobar NO ejecuta nada real.
+- **Acciones de IA (Aprobaciones):** gerencia (admin, dueño, admin empresa, gerente). Cada propuesta indica su «rol requerido».
 
 | Sección | Página | id | Admin | Dueño | Adm. empresa | Gerente | Contador | Vendedor | Cajero POS | Almacén | Compras | Transporte | Soporte |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Gerencia | Centro de Dirección Gerencial | `manager_center` | ✓ | ✓ | ✓ | ✓ | · | · | · | · | · | · | · |
+| Gerencia | 1. Resumen Ejecutivo | `manager_summary` | ✓ | ✓ | ✓ | ✓ | · | · | · | · | · | · | · |
+| Gerencia | 2. Dirección Comercial | `manager_commercial` | ✓ | ✓ | ✓ | ✓ | · | · | · | · | · | · | · |
+| Gerencia | 3. Dirección de Operaciones | `manager_operations` | ✓ | ✓ | ✓ | ✓ | · | · | · | · | · | · | · |
+| Gerencia | 4. Dirección Financiera | `manager_financial` | ✓ | ✓ | ✓ | ✓ | · | · | · | · | · | · | · |
+| Gerencia | 5. Dirección del Talento Humano | `manager_hr` | ✓ | ✓ | ✓ | ✓ | · | · | · | · | · | · | · |
+| Gerencia | 6. Centro de Autorizaciones | `manager_authorizations` | ✓ | ✓ | ✓ | ✓ | · | · | · | · | · | · | · |
+| Gerencia | 7. Planes de Acción Gerencial | `manager_action_plans` | ✓ | ✓ | ✓ | ✓ | · | · | · | · | · | · | · |
+| Gerencia | 8. Inteligencia Empresarial | `manager_intelligence` | ✓ | ✓ | ✓ | ✓ | · | · | · | · | · | · | · |
+| Gerencia | 9. Informes Gerenciales | `manager_reports` | ✓ | ✓ | ✓ | ✓ | · | · | · | · | · | · | · |
+| Gerencia | 10. Notificaciones Gerenciales | `manager_notifications` | ✓ | ✓ | ✓ | ✓ | · | · | · | · | · | · | · |
 | Principal | Panel ejecutivo | `dashboard` | ✓ | ✓ | ✓ | · | · | · | · | ✓ | ✓ | · | ✓ |
 | Principal | Centro de mando | `command` | ✓ | ✓ | ✓ | · | · | · | · | · | · | · | · |
 | Principal | Resumen del día | `summary` | ✓ | ✓ | · | · | · | · | · | · | · | · | · |

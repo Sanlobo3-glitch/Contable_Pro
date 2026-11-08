@@ -12,8 +12,10 @@ import sqlWhatsappStoreLink from '../../supabase/migrations/20261103000019_enlac
 import sqlAutoBrandSync from '../../supabase/migrations/20261103000020_sincronizacion_automatica_marca_y_cache_whatsapp.sql?raw'
 import sqlCommercialSuite21 from '../../supabase/migrations/20261104000021_cinco_soluciones_comerciales_avanzadas.sql?raw'
 import sqlContableProPartidaDoble from '../../supabase/migrations/20261106000022_contable_pro_partida_doble_puc_niif.sql?raw'
+import sqlManagerCenter from '../../supabase/migrations/20261108000051_centro_direccion_gerencial_tablas_y_autorizaciones.sql?raw'
 
 export type SqlBundleId =
+  | 'manager_center'
   | 'contable_pro'
   | 'consolidated'
   | 'commercial_suite_21'
@@ -39,6 +41,21 @@ export interface SqlScriptBundle {
 }
 
 export const SQL_SCRIPT_BUNDLES: SqlScriptBundle[] = [
+  {
+    id: 'manager_center',
+    title: 'Centro de Dirección Gerencial: Aprobaciones, Planes de Acción y Desempeño',
+    filename: '20261108000051_centro_direccion_gerencial_tablas_y_autorizaciones.sql',
+    category: 'Recomendado',
+    summary:
+      'Crea las tablas multiempresa con RLS para Solicitudes de Autorización Gerencial (manager_approval_requests), Planes de Acción (manager_action_plans), Evaluaciones de Talento (manager_employee_evaluations) y Alertas Críticas (manager_alert_statuses).',
+    targetTables: [
+      'manager_approval_requests',
+      'manager_action_plans',
+      'manager_employee_evaluations',
+      'manager_alert_statuses',
+    ],
+    sql: sqlManagerCenter,
+  },
   {
     id: 'contable_pro',
     title: 'Contable_Pro: PUC NIIF, Partida Doble e Inmutabilidad',

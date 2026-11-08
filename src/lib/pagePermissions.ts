@@ -43,6 +43,17 @@ const STRICT_ROLE_PAGES: Partial<Record<Role, string[]>> = {
 
 /** Reglas del resto de roles (dueño, admin empresa, almacén, compras, cajero, soporte...). */
 const GENERIC_RULES: Record<string, Rule> = {
+  manager_center: role => isCompanyManager(role),
+  manager_summary: role => isCompanyManager(role),
+  manager_commercial: role => isCompanyManager(role),
+  manager_operations: role => isCompanyManager(role),
+  manager_financial: role => isCompanyManager(role),
+  manager_hr: role => isCompanyManager(role),
+  manager_authorizations: role => isCompanyManager(role),
+  manager_action_plans: role => isCompanyManager(role),
+  manager_intelligence: role => isCompanyManager(role),
+  manager_reports: role => isCompanyManager(role),
+  manager_notifications: role => isCompanyManager(role),
   myroute: role => role === 'vendedor',
   dashboard: role => canViewDashboard(role),
   command: role => isCompanyManager(role) || canViewAccounting(role),

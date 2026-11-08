@@ -125,6 +125,7 @@ Resultado de la verificación contra la base (2026-11-07): **todas las migracion
 | 76 | `20261107000048_consolidar_contabilidad_acc_y_rendimiento.sql` | ✅ Aplicada | Consolida el modelo contable y agrega índices de rendimiento (ver sección 3). |
 | 77 | `20261107000049_registro_unico_migraciones.sql` | ✅ Aplicada | Registro único + motor SQL corregido (ver sección 2). |
 | 78 | `20261107000050_quitar_sobrecarga_admin_ejecutar_migracion_sql.sql` | ✅ Aplicada | Quita la sobrecarga antigua `(text,text,text)` del motor SQL, que no tenía el arreglo de transacciones. |
+| 79 | `20261108000051_centro_direccion_gerencial_tablas_y_autorizaciones.sql` | ⏳ Lista para aplicar / Centro SQL | Tablas multiempresa para Solicitudes de Autorización Gerencial (`manager_approval_requests`), Planes de Acción (`manager_action_plans`), Evaluaciones de Desempeño (`manager_employee_evaluations`) y Alertas Gerenciales (`manager_alert_statuses`). |
 
 **Reemplazadas, NO ejecutar** (`supabase/migrations_superseded/`): `20261106000022_contable_pro_partida_doble_puc_niif.sql`, `20261106000046_sistema_contable_partida_doble.sql`, `20261106000047_reportes_financieros_contables.sql`.
 Crean un libro contable paralelo (`accounts`, `journal_entries`, `journal_lines`, `fn_*`) que nunca se aplicó.

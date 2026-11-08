@@ -37,7 +37,7 @@ const GENERIC_RULES: Record<string, Rule> = {
   summary: role => role === 'admin' || role === 'dueno',
   copilot: role => true,
   ask: role => true,
-  ai_actions: role => canManagePurchases(role),
+  ai_actions: role => isCompanyManager(role),
   pos: role => canRegisterSales(role),
   omnichannel: role => canRegisterSales(role) || isCompanyManager(role),
   catalog: role => canRegisterSales(role),

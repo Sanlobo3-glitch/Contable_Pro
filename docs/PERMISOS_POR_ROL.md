@@ -6,10 +6,11 @@
 > Pantalla de inicio por rol: `getDefaultPageForRole` en `src/lib/auth.tsx` (cajero y vendedor → Mostrador POS; no ven el Panel ejecutivo).
 
 ## Área de cada rol (criterio aplicado)
-- **Almacén («Jefe de almacén y bodegas»):** inventario, bodegas, traslados, lotes, etiquetas, kardex, toma física, logística (despachos, rutas, mapa, activos) y recepción de órdenes de compra. **Sin** ventas, clientes, catálogo comercial, cartera ni compras/pagos a proveedores.
+- **Almacén («Jefe de almacén y bodegas»):** inventario, bodegas, traslados, lotes, etiquetas, kardex, toma física, logística (despachos, rutas, mapa, activos) y recepción de órdenes de compra. **Sin** ventas, clientes, catálogo comercial, cartera, compras/pagos a proveedores ni aprobaciones de IA.
 - **Compras:** órdenes de compra, compras, sugerencia de compras, proveedores y su evaluación; consulta de productos y kardex. Sin ventas ni logística.
 - **Cajero POS:** mostrador, ventas, caja y arqueos, clientes, devoluciones/cambios y consulta de productos. Sin panel ejecutivo ni kardex.
 - **Dueño / Admin empresa / Admin:** todo lo de su empresa (Admin además la plataforma).
+- **Acciones de IA (Aprobaciones):** solo gerencia (admin, dueño, admin empresa). Cada propuesta indica su «rol requerido»; admin y dueño ven todas, admin empresa todas menos las de dueño. **Hoy son propuestas de demostración** (guardadas en el navegador, vienen de `src/lib/innovationsRepo.ts`) y aprobar NO ejecuta nada real.
 
 | Sección | Página | id | Admin | Dueño | Adm. empresa | Gerente | Contador | Vendedor | Cajero POS | Almacén | Compras | Transporte | Soporte |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -18,7 +19,7 @@
 | Principal | Resumen del día | `summary` | ✓ | ✓ | · | · | · | · | · | · | · | · | · |
 | Principal | Copiloto | `copilot` | ✓ | ✓ | ✓ | · | · | · | ✓ | ✓ | ✓ | · | ✓ |
 | Principal | Pregúntale al Copiloto | `ask` | ✓ | ✓ | ✓ | · | · | · | ✓ | ✓ | ✓ | · | ✓ |
-| Principal | Acciones de IA (Aprobaciones) | `ai_actions` | ✓ | ✓ | ✓ | · | · | · | · | ✓ | ✓ | · | · |
+| Principal | Acciones de IA (Aprobaciones) | `ai_actions` | ✓ | ✓ | ✓ | · | · | · | · | · | · | · | · |
 | Ventas y cobros | Mostrador (POS) | `pos` | ✓ | ✓ | ✓ | · | · | ✓ | ✓ | · | · | · | · |
 | Ventas y cobros | Pedidos omnicanal | `omnichannel` | ✓ | ✓ | ✓ | · | · | · | ✓ | · | · | · | · |
 | Ventas y cobros | Catálogo comercial | `catalog` | ✓ | ✓ | ✓ | · | · | · | ✓ | · | · | · | · |
@@ -86,3 +87,6 @@
 - `cuentas_por_pagar()` (RPC): solo `admin` y `dueno`.
 - `resumen_diario` / «Resumen del día»: solo `admin` y `dueno`.
 - `can_manage_inventory()`: admin, dueno, admin_empresa, gerente, almacen.
+
+## Datos de demostración (no reales) en la app
+`src/lib/innovationsRepo.ts` guarda en `localStorage` datos de ejemplo para: pedidos omnicanal, propuestas de IA, sugerencias de balanceo de sedes, evaluación de proveedores, anomalías, comprobantes de entrega, activos y maquinaria, cumplimiento y llaves de API. Los contadores de la tarjeta «Plataforma Inteligente de Operaciones» del Panel salen de ahí.

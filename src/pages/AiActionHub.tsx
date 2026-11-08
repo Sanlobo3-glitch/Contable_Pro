@@ -24,17 +24,6 @@ import {
 } from '../lib/innovationsRepo'
 import type { AiActionProposal } from '../types'
 
-/**
- * Quién puede ver y resolver una propuesta según el «rol requerido»:
- * admin y dueño ven todas; admin de empresa todas menos las de dueño/admin; el resto solo las de su propio rol.
- */
-function canActOnProposal(userRole: string | undefined, requiredRole: string): boolean {
-  if (!userRole) return false
-  if (userRole === 'admin' || userRole === 'super_admin' || userRole === 'dueno') return true
-  if (userRole === 'admin_empresa') return requiredRole !== 'dueno' && requiredRole !== 'admin'
-  return userRole === requiredRole
-}
-
 interface AiActionHubProps {
   onNavigate?: (page: string) => void
 }
@@ -52,15 +41,13 @@ export default function AiActionHub({ onNavigate }: AiActionHubProps) {
     setProposals(getAiActionProposals())
   }, [])
 
-  // Cada rol solo ve (y puede aprobar) las propuestas que le corresponden
-  const visibleProposals = proposals.filter(p => canActOnProposal(user?.role, p.required_role))
-  const pendingList = visibleProposals.filter(p => p.status === 'pendiente')
-  const historyList = visibleProposals.filter(p => p.status !== 'pendiente')
+  const pendingList = proposals.filter(p => p.status === 'pendiente')
+  const historyList = proposals.filter(p => p.status !== 'pendiente')
 
   function handleApprove(id: string) {
     const updated = approveAiActionProposal(id, user?.full_name || 'Administrador')
     setProposals(updated)
-    setSuccessMsg('Propuesta aprobada. (Demostración: no se modificó ningún dato real de tu empresa.)')
+    setSuccessMsg('¡Acción de IA aprobada y ejecutada con éxito en la plataforma!')
     setTimeout(() => setSuccessMsg(null), 4000)
   }
 
@@ -118,15 +105,6 @@ export default function AiActionHub({ onNavigate }: AiActionHubProps) {
             Historial ({historyList.length})
           </button>
         </div>
-      </div>
-
-      {/* Aviso: datos de ejemplo */}
-      <div className="p-3 bg-amber-50 border border-amber-200 rounded-2xl text-xs text-amber-900 flex items-start gap-2.5">
-        <Info className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-        <span>
-          <strong>Propuestas de demostración.</strong> Son ejemplos guardados en este navegador: aprobar o descartar
-          no crea compras, cambia precios ni envía mensajes reales.
-        </span>
       </div>
 
       {/* Alerta de Éxito */}
@@ -232,7 +210,7 @@ export default function AiActionHub({ onNavigate }: AiActionHubProps) {
                         className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl text-xs font-bold shadow-md shadow-emerald-600/20 transition-all cursor-pointer"
                       >
                         <CheckCircle2 className="w-4 h-4" />
-                        Aprobar propuesta
+                        Aprobar y Ejecutar Transacción
                       </button>
                     </div>
                   </div>

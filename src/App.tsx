@@ -13,8 +13,6 @@ import {
   canAccessCashAndAudit,
   canViewAccounting,
   canManageTransport,
-  canViewDashboard,
-  getDefaultPageForRole,
 } from './lib/auth'
 import { useAppNavigation } from './lib/navigation'
 import { getPublicStoreIdentifierFromLocation } from './lib/whatsappStudio'
@@ -82,7 +80,6 @@ import SupplierIntelligence from './pages/SupplierIntelligence'
 import AnomalyDetector from './pages/AnomalyDetector'
 import EquipmentAssets from './pages/EquipmentAssets'
 import EmployeePortal from './pages/EmployeePortal'
-import MyRoute from './pages/MyRoute'
 import ComplianceMonitor from './pages/ComplianceMonitor'
 import ApiEcosystem from './pages/ApiEcosystem'
 import CatalogOrders from './pages/CatalogOrders'
@@ -105,7 +102,6 @@ import {
 import { useCurrency } from './lib/currency'
 import CurrencySetup from './components/CurrencySetup'
 import type { Role } from './types'
-import { isPageAllowedForRole as canAccessPage } from './lib/pagePermissions'
 
 function getPublicCatalogStoreKey(): string | null {
   return getPublicStoreIdentifierFromLocation()
@@ -114,17 +110,162 @@ function getPublicCatalogStoreKey(): string | null {
 function isPageAllowedForRole(
   page: string,
   role?: Role,
-  opts?: { isMasterAccount?: boolean; isDemo?: boolean; masterRoleOverride?: Role | null }
+  opts?: { isMasterAccount?: boolean; isDemo?: boolean }
 ): boolean {
-  return canAccessPage(page, role, opts)
+  // REGLA 1: Centro de Scripts SQL y Supabase
+  // SOLO el rol de Administrador Central ('super_admin' o 'admin') puede visualizarlo o ver sus rutas.
+  // Queda ROTUNDAMENTE PROHIBIDO mostrar este panel o el acceso a Supabase a los roles de Contador, Gerente, Vendedor o Transporte.
+  if (page === 'sqlcenter') {
+    if (role === 'contador' || role === 'gerente' || role === 'vendedor' || role === 'transportador') {
+      return false
+    }
+    return role === 'admin' || (role as string) === 'super_admin'
+  }
+
+  // REGLA 2: Rol 'Contador Público' ('contador')
+  // Su acceso está estrictamente limitado a: Catálogo PUC NIIF, Registrar Asiento Diario y Centro de Estados Financieros (Balances).
+  if (role === 'contador') {
+    return (
+      page === 'accounting' ||
+      page === 'accounting_puc' ||
+      page === 'journal_entry' ||
+      page === 'accstate'
+    )
+  }
+
+  // REGLA 3: Rol 'Vendedor' ('vendedor')
+  // Su acceso está estrictamente limitado a: Mostrador/POS, Inventario de Bodega y Cierre de Caja.
+  if (role === 'vendedor') {
+    return page === 'pos' || page === 'products' || page === 'cash'
+  }
+
+
+  // REGLA 5: Rol 'Transporte y Despacho' ('transportador')
+  // Su acceso está estrictamente limitado a operaciones logísticas:
+  // Traslados multisede (bodegas, escáner, recepción), mapa satelital GPS en vivo, despacho de ruta, planificar rutas, trazabilidad y mantenimiento de flota.
+  if (role === 'transportador') {
+    return (
+      page === 'warehouses' ||
+      page === 'map' ||
+      page === 'dispatch' ||
+      page === 'routeplan' ||
+      page === 'dispatch_history' ||
+      page === 'equipment_assets'
+    )
+  }
+
+  // REGLAS GENERALES PARA OTROS ROLES (Dueño, Admin Empresa, Jefe de Almacén, Soporte Técnico, etc.)
+  switch (page) {
+    case 'dashboard':
+    case 'copilot':
+    case 'ask':
+    case 'customers':
+    case 'products':
+    case 'catalog':
+    case 'kardex':
+    case 'manual':
+      return true
+    case 'command':
+    case 'treasury':
+    case 'bankrecon':
+    case 'costcenters':
+    case 'expenses':
+    case 'profit':
+      return isCompanyManager(role) || canViewAccounting(role)
+    case 'summary':
+      return isCompanyManager(role) || canManageInventory(role) || canViewAccounting(role)
+    case 'pos':
+    case 'quotations':
+    case 'layaways':
+      return canRegisterSales(role)
+    case 'sales':
+    case 'cartera':
+      return canRegisterSales(role) || canViewAccounting(role)
+    case 'catorders':
+      return canRegisterSales(role) || isCompanyManager(role) || canViewAccounting(role)
+    case 'devolutions':
+    case 'exchanges':
+      return canRegisterSales(role) || canManageInventory(role)
+    case 'sellers':
+      return canManageTeam(role) || canViewAccounting(role)
+    case 'routeplan':
+      return canRegisterSales(role) || canManageTransport(role)
+    case 'dispatch':
+      return canRegisterSales(role) || canManageTransport(role) || canManageInventory(role)
+    case 'goals':
+      return canRegisterSales(role) || isCompanyManager(role)
+    case 'purchaseorders':
+      return canManagePurchases(role) || canManageInventory(role) || canViewAccounting(role)
+    case 'purchases':
+    case 'payables':
+      return canManagePurchases(role) || canViewAccounting(role)
+    case 'buyplan':
+    case 'suppliers':
+    case 'predict':
+      return canManagePurchases(role) || canManageInventory(role)
+    case 'warehouses':
+    case 'categories':
+    case 'lots':
+    case 'labels':
+    case 'priceshield':
+      return canManageInventory(role)
+    case 'blindcount':
+      return canManageInventory(role) || canViewAccounting(role) || isCompanyManager(role)
+    case 'cash':
+    case 'history':
+      return canAccessCashAndAudit(role)
+    case 'reports':
+    case 'stats':
+      return canViewStats(role)
+    case 'map':
+      return isCompanyManager(role) || canManageTransport(role)
+    case 'accounting':
+    case 'accounting_puc':
+    case 'journal_entry':
+    case 'accstate':
+    case 'accsetup':
+    case 'accclose':
+    case 'taxes':
+    case 'cpa':
+      return canViewAccounting(role)
+    case 'erpbridge':
+      return canViewAccounting(role) || isCompanyManager(role)
+    case 'dispatch_history':
+    case 'despachos':
+    case 'trazabilidad':
+    case 'support':
+      return true
+    case 'team':
+      return canManageTeam(role)
+    case 'users':
+      return canManageUsers(role)
+    case 'companies':
+    case 'adminplans':
+      return role === 'admin' || (role as string) === 'super_admin'
+    case 'subscription':
+      return role === 'dueno' || role === 'admin' || (role as string) === 'super_admin'
+    case 'settings':
+      return canManageSettings(role)
+    default:
+      return true
+  }
 }
 
 function AppContent() {
-  const { user, loading, signOut, isDemo, isMasterAccount, enterDemo, exitDemo, masterRoleOverride } = useAuth()
+  const { user, loading, signOut, isDemo, isMasterAccount, enterDemo, exitDemo } = useAuth()
   const cur = useCurrency()
 
   const scopeKey = isDemo ? 'demo' : (user?.id ?? null)
-  const defaultPageForRole = getDefaultPageForRole(masterRoleOverride || user?.role)
+  const defaultPageForRole =
+    user?.role === 'tecnico'
+      ? 'support'
+      : user?.role === 'contador'
+        ? 'accounting'
+        : user?.role === 'vendedor'
+          ? 'pos'
+          : user?.role === 'transportador'
+            ? 'warehouses'
+            : 'dashboard'
 
   const {
     current,
@@ -145,7 +286,7 @@ function AppContent() {
     scopeKey,
     defaultPage: defaultPageForRole,
     isAllowedPage: page =>
-      isPageAllowedForRole(page, user?.role, { isMasterAccount, isDemo, masterRoleOverride }),
+      isPageAllowedForRole(page, user?.role, { isMasterAccount, isDemo }),
   })
 
   // Nunca iniciar una sesión como autorizada por defecto.
@@ -484,7 +625,6 @@ function AppContent() {
   const safeCurrent = isPageAllowedForRole(current, user.role, {
     isMasterAccount,
     isDemo,
-    masterRoleOverride,
   })
     ? current
     : defaultPageForRole
@@ -564,7 +704,6 @@ function AppContent() {
     anomaly_detector: <AnomalyDetector onNavigate={navigateToPage} />,
     equipment_assets: <EquipmentAssets onNavigate={navigateToPage} />,
     employee_portal: <EmployeePortal onNavigate={navigateToPage} />,
-    myroute: <MyRoute onNavigate={navigateToPage} />,
     compliance: <ComplianceMonitor onNavigate={navigateToPage} />,
     compliance_monitor: <ComplianceMonitor onNavigate={navigateToPage} />,
     api_ecosystem: <ApiEcosystem onNavigate={navigateToPage} />,

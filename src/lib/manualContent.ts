@@ -33,11 +33,11 @@ export interface Chapter {
 
 const ALL_ROLES: RoleKey[] = ['admin', 'dueno', 'gerente', 'contador', 'vendedor', 'transportador', 'almacen', 'tecnico']
 const ADMIN_ONLY: RoleKey[] = ['admin']
-const OWNER: RoleKey[] = ['dueno', 'admin']
-const OWNER_CPA: RoleKey[] = ['dueno', 'contador', 'admin']
-const BOTH: RoleKey[] = ['dueno', 'vendedor', 'admin']
-const CPA_ROLES: RoleKey[] = ['contador', 'dueno', 'admin']
-const LOGISTICS_ROLES: RoleKey[] = ['transportador', 'dueno', 'admin']
+const OWNER: RoleKey[] = ['dueno', 'gerente', 'admin']
+const OWNER_CPA: RoleKey[] = ['dueno', 'gerente', 'contador', 'admin']
+const BOTH: RoleKey[] = ['dueno', 'gerente', 'vendedor', 'admin']
+const CPA_ROLES: RoleKey[] = ['contador', 'dueno', 'gerente', 'admin']
+const LOGISTICS_ROLES: RoleKey[] = ['transportador', 'dueno', 'gerente', 'admin']
 const GERENTE_ROLES: RoleKey[] = ['gerente', 'dueno', 'admin']
 
 export const CHAPTERS: Chapter[] = [

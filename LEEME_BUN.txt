@@ -1,0 +1,20 @@
+SERVIDOR BUN (server.ts)
+
+SUBIR / REEMPLAZAR en GitHub (raíz del repo):
+  server.ts         (reescrito: usa Bun y las funciones acc_* de Supabase)
+  bun-env.d.ts      (nuevo: tipos mínimos de "bun")
+  package.json      (solo cambian dos scripts: dev -> "bun --watch server.ts", start -> "bun server.ts")
+
+Variables de entorno del servidor: SUPABASE_URL y SUPABASE_ANON_KEY (o las VITE_ equivalentes).
+Cada petición a /api/accounting/* debe traer  Authorization: Bearer <token de sesión>.
+
+Endpoints:
+  GET  /api/health
+  GET  /api/accounting/accounts
+  GET  /api/accounting/trial-balance?startDate=AAAA-MM-DD&endDate=AAAA-MM-DD
+  GET  /api/accounting/balance-sheet?endDate=AAAA-MM-DD
+  GET  /api/accounting/income-statement?startDate=...&endDate=...
+  POST /api/accounting/journal-entry   {entry_date, concept, lines:[{account_id, debit, credit, memo}], post?}
+
+No cambia el despliegue en Vercel: sigue usando "vite build".
+

@@ -333,7 +333,7 @@ export default function CommandCenter({ onNavigate }: { onNavigate?: (page: stri
         supabase.from('warehouse_stock').select('company_id,warehouse_id,product_id,quantity,reserved_quantity,updated_at'),
         supabase.from('inventory_transfers').select('*').order('created_at', { ascending: false }).limit(30),
         supabase.from('route_dispatches').select('id,dispatch_date,seller_name,vehicle_label,status,sales_cash,sales_bank,sales_credit').eq('status', 'abierto').order('created_at', { ascending: false }).limit(20),
-        supabase.from('product_lots').select('id,lot_code,expiry_date,qty_remaining,products(name)').gt('qty_remaining', 0).not('expiry_date', 'is', null).order('expiry_date', { ascending: true }).limit(40),
+        supabase.from('product_lots').select('id,lot_number,expiry_date,quantity,products(name)').gt('quantity', 0).not('expiry_date', 'is', null).order('expiry_date', { ascending: true }).limit(40),
       ])
 
       setSales(s)
@@ -445,9 +445,9 @@ export default function CommandCenter({ onNavigate }: { onNavigate?: (page: stri
           if (daysLeft <= 45) {
             soon.push({
               id: String(l.id),
-              lot_number: String(l.lot_code || 'S/L'),
+              lot_number: String(l.lot_number || 'S/L'),
               expiry_date: String(l.expiry_date).slice(0, 10),
-              quantity: Number(l.qty_remaining) || 0,
+              quantity: Number(l.quantity) || 0,
               product_name: String(l.products?.name || 'Producto'),
               daysLeft,
             })

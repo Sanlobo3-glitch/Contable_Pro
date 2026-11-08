@@ -55,10 +55,14 @@ const PROBE_TABLES: { name: string; label: string }[] = [
   { name: 'cpa_working_papers', label: 'Papeles de trabajo y firma CPC' },
   { name: 'acc_accounts', label: 'Plan de cuentas contables' },
   { name: 'acc_entries', label: 'Libro diario y comprobantes' },
+  { name: 'accounts', label: 'Contable_Pro: Catálogo PUC NIIF' },
+  { name: 'journal_entries', label: 'Contable_Pro: Asientos contables' },
+  { name: 'journal_lines', label: 'Contable_Pro: Líneas de partida doble' },
   { name: 'blind_inventory_sessions', label: 'Auditorías de toma física ciega' },
   { name: 'layaway_contracts', label: 'Contratos de Plan Separe y apartados' },
   { name: 'product_exchanges', label: 'Cambios mano a mano y garantías' },
   { name: 'bank_reconciliations', label: 'Actas de conciliación bancaria' },
+  { name: 'price_shield_batches', label: 'Escudo de precios y márgenes' },
   { name: 'sql_migration_log', label: 'Bitácora y motor SQL en 1 clic' },
 ]
 
@@ -70,6 +74,18 @@ export default function SqlAdminCenter() {
     !['contador', 'gerente', 'vendedor'].includes(role || '')
   const allowed = isSuperAdmin
 
+  if (!isSuperAdmin) {
+    return (
+      <div className="bg-red-50 border border-red-200 rounded-2xl p-8 text-center max-w-xl mx-auto my-12 shadow-sm">
+        <ShieldCheck className="w-12 h-12 text-red-600 mx-auto mb-4" />
+        <h2 className="text-lg font-bold text-red-950">Acceso Restringido: Administrador Central Requerido</h2>
+        <p className="text-sm text-red-700 mt-2">
+          El Centro de Scripts SQL y Supabase es exclusivo del Administrador Central ('super_admin').
+          Los roles de Contador, Gerente y Vendedor tienen prohibido el acceso o ejecución de este panel por políticas estrictas de seguridad.
+        </p>
+      </div>
+    )
+  }
 
   const realConfigured = hasRealSupabaseConfig()
   const supabaseHost = getConfiguredSupabaseHost()
@@ -89,8 +105,6 @@ export default function SqlAdminCenter() {
   const [tableStatuses, setTableStatuses] = useState<SchemaItemStatus[]>([])
   const [rpcStatuses, setRpcStatuses] = useState<SchemaItemStatus[]>([])
   const [logs, setLogs] = useState<MigrationLogRow[]>([])
-  // script_id y archivos que constan como «aplicado» en public.sql_migration_log (registro único)
-  const [registeredIds, setRegisteredIds] = useState<Set<string>>(new Set())
 
   // Ejecución y mensajes
   const [executing, setExecuting] = useState(false)
@@ -152,8 +166,32 @@ export default function SqlAdminCenter() {
             tables?: SchemaItemStatus[]
             rpcs?: SchemaItemStatus[]
           }
-          const tbls = Array.isArray(parsed.tables) ? parsed.tables : []
-          const rpcs = Array.isArray(parsed.rpcs) ? parsed.rpcs : []
+          const tbls = Array.isArray(parsed.tables) ? [...parsed.tables] : []
+          const rpcs = Array.isArray(parsed.rpcs) ? [...parsed.rpcs] : []
+
+          // Complementar con sondeo directo para tablas de migraciones recientes no incluidas en el RPC original
+          const existingNames = new Set(tbls.map(t => t.name))
+          const unprobed = PROBE_TABLES.filter(t => !existingNames.has(t.name))
+          if (unprobed.length > 0) {
+            const extraProbed = await Promise.all(
+              unprobed.map(async t => {
+                const { error } = await supabase
+                  .from(t.name)
+                  .select('*', { count: 'exact', head: true })
+                  .limit(1)
+                const missing =
+                  error &&
+                  /relation|does not exist|schema cache|PGRST205|42P01/i.test(error.message || '')
+                return {
+                  name: t.name,
+                  label: t.label,
+                  installed: !missing,
+                }
+              })
+            )
+            tbls.push(...extraProbed)
+          }
+
           setPgVersion(parsed.pg_version || null)
           setTableStatuses(tbls)
           setRpcStatuses(rpcs)
@@ -185,33 +223,6 @@ export default function SqlAdminCenter() {
           )
           setTableStatuses(results)
         }
-      }
-
-      // 2b. Estado real de TODAS las tablas objetivo de los paquetes + lo que consta en la bitácora.
-      // (El diagnóstico base solo cubre unas pocas tablas; por eso paquetes ya instalados aparecían como «Listo para aplicar».)
-      try {
-        const targets = Array.from(new Set(SQL_SCRIPT_BUNDLES.flatMap(b => b.targetTables)))
-        const { data: objData, error: objErr } = await supabase.rpc('admin_estado_objetos', {
-          p_tables: targets,
-          p_functions: [],
-        })
-        if (!objErr && objData && typeof objData === 'object') {
-          const parsed = objData as {
-            tables?: SchemaItemStatus[]
-            registered?: { script_ids?: string[]; files?: string[] }
-          }
-          const extra = Array.isArray(parsed.tables) ? parsed.tables : []
-          setTableStatuses(prev => {
-            const known = new Map(prev.map(t => [t.name, t]))
-            extra.forEach(t => known.set(t.name, known.get(t.name) ?? t))
-            return Array.from(known.values())
-          })
-          setRegisteredIds(
-            new Set([...(parsed.registered?.script_ids ?? []), ...(parsed.registered?.files ?? [])])
-          )
-        }
-      } catch {
-        // admin_estado_objetos aún no instalada: se conserva el diagnóstico base
       }
 
       // 3. Cargar bitácora de migraciones si ya existe la tabla
@@ -396,38 +407,23 @@ export default function SqlAdminCenter() {
   }
 
   function isBundleInstalled(bundle: SqlScriptBundle): boolean {
-    if (bundle.targetTables.length === 0) return false
-    const allKnown =
-      tableStatuses.length > 0 &&
-      bundle.targetTables.every(tbl => tableStatuses.some(s => s.name === tbl))
-    if (allKnown) {
-      return bundle.targetTables.every(tbl =>
-        tableStatuses.some(s => s.name === tbl && s.installed)
-      )
-    }
-    // Sin diagnóstico de alguna tabla: se usa lo que consta en la bitácora (registro único)
-    const stem = bundle.filename.replace(/\.sql$/i, '')
-    return registeredIds.has(stem) || registeredIds.has(bundle.id)
-  }
+    // 1. Bitácora de migraciones ejecutadas con éxito en Supabase
+    const inLogs = logs.some(
+      l =>
+        l.status === 'aplicado' &&
+        (l.script_id === bundle.id ||
+          l.script_id === bundle.filename ||
+          l.script_title.toLowerCase().includes(bundle.title.toLowerCase()) ||
+          bundle.title.toLowerCase().includes(l.script_title.toLowerCase()) ||
+          l.script_title.toLowerCase().includes(bundle.filename.toLowerCase()))
+    )
+    if (inLogs) return true
 
-  // Para SQL ejecutado a mano (SQL Editor de Supabase) sin pie de registro: lo deja constar en la bitácora
-  async function handleMarkApplied(bundle: SqlScriptBundle) {
-    if (!connectedToReal) {
-      setFeedback({ ok: false, text: 'Solo disponible conectado a tu Supabase real.' })
-      return
-    }
-    const stem = bundle.filename.replace(/\.sql$/i, '')
-    const { error } = await supabase.rpc('admin_registrar_migracion_manual', {
-      p_script_id: stem,
-      p_title: bundle.title,
-      p_file: bundle.filename,
-    })
-    if (error) {
-      setFeedback({ ok: false, text: error.message })
-      return
-    }
-    setFeedback({ ok: true, text: `Registrada como aplicada en la bitácora: ${bundle.filename}` })
-    await checkDiagnostics()
+    // 2. Si todas las tablas destino del bundle existen en la BD, está activo
+    if (tableStatuses.length === 0 || bundle.targetTables.length === 0) return false
+    return bundle.targetTables.every(tbl =>
+      tableStatuses.some(s => s.name === tbl && s.installed)
+    )
   }
 
   return (
@@ -757,16 +753,6 @@ export default function SqlAdminCenter() {
                 >
                   <Download className="w-3.5 h-3.5" />
                   Descargar .sql
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => void handleMarkApplied(activeBundle)}
-                  title="Úsalo si ejecutaste este SQL directamente en el SQL Editor de Supabase"
-                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-medium text-slate-700 whitespace-nowrap shrink-0"
-                >
-                  <Check className="w-3.5 h-3.5" />
-                  Ya la ejecuté a mano · registrar
                 </button>
               </div>
 

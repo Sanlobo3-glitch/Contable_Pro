@@ -1,0 +1,5038 @@
+InventarioPro
+
+Centro de Scripts SQL y Supabase
+
+
+1
+
+Paso Maestro
+·
+sanlobo3@hotmail.com
+Admin. Plataforma
+Soporte Técnico
+Dueño
+Admin. Empresa
+Gerente
+Contador Público
+Vendedor
+Cajero POS
+Almacén
+Compras
+Transporte
+
+Empresa base (Administrador de plataforma)
+Scripts SQL
+Centro de Scripts SQL y Supabase
+Administra, audita, descarga y ejecuta todas las migraciones SQL de InventarioPro desde un único panel maestro.
+
+Verificar conexión y tablas
+Abrir Supabase SQL Editor
+Estado de conexión
+
+Supabase Real conectado
+
+bcwtopujsjefaskoqlhr.supabase.co
+
+Tablas verificadas en esquema
+
+13 / 13
+
+Todas las tablas operativas están creadas
+
+Ejecución directa en 1 clic
+
+Habilitada desde la web
+
+PostgreSQL 17.6
+
+Scripts en biblioteca
+
+12
+
+40 ejecuciones registradas en bitácora
+
+Biblioteca de Scripts SQL
+Consola SQL Personalizada
+Estado de Tablas y Bitácora
+Filtrar script, tabla o función...
+
+Recomendado
+Listo para aplicar
+Paquete Consolidado Maestro (Todo en 1 · Recomendado)
+
+inventariopro_consolidado_maestro_completo.sql · 4886 líneas
+
+
+Recomendado
+Listo para aplicar
+Suite Comercial y Financiera: Toma Ciega, Plan Separe, Cambios, Conciliación y Precios
+
+20261104000021_cinco_soluciones_comerciales_avanzadas.sql · 178 líneas
+
+
+Recomendado
+Activo en BD
+Enlace Propio de Tienda (/tienda/empresa) + Sincronización Automática y WhatsApp
+
+20261103000020_sincronizacion_automatica_marca_y_cache_whatsapp.sql · 1202 líneas
+
+
+Recomendado
+Activo en BD
+Ventas por Catálogo, Cualidades (Tallas/ml/kg), Capture de Pago e Identidad
+
+20261103000018_ventas_catalogo_variantes_pagos_identidad.sql · 1078 líneas
+
+
+Recomendado
+Activo en BD
+Motor de Administración SQL en 1 Clic + Diagnóstico Supabase
+
+20261103000017_centro_administracion_sql_supabase.sql · 232 líneas
+
+
+Nuevos módulos
+Activo en BD
+Rol Técnico, Autorización de Sesiones y Despacho Contable (CPC)
+
+20261103000016_rol_tecnico_soporte_sesiones_y_contador.sql · 529 líneas
+
+
+Nuevos módulos
+Activo en BD
+Tabla de Imágenes de Productos + Conexión POS y PDF
+
+20261103000015_tabla_imagenes_productos_y_sincronizacion_pos.sql · 471 líneas
+
+
+Nuevos módulos
+Activo en BD
+Fase 3: Presupuesto Maestro Avanzado + Catálogo Comercial
+
+20261103000014_presupuesto_maestro_storage_imagenes_catalogo_vendedor.sql · 653 líneas
+
+
+Nuevos módulos
+Activo en BD
+Fase 2: Centros de Costo + Presupuesto Base + Órdenes de Compra
+
+20261103000013_tesoreria_centros_costo_ordenes_compra.sql · 530 líneas
+
+
+Infraestructura base
+Activo en BD
+Sucursales y Bodegas Multibodega
+
+20261101000005_000006_sucursales_multibodega.sql · 446 líneas
+
+
+Infraestructura base
+Activo en BD
+Expedientes de Personal, Nómina e Invitaciones
+
+20261101_vendedores_nomina_invitaciones_usuarios.sql · 1008 líneas
+
+
+Infraestructura base
+Activo en BD
+Políticas RLS de Seguridad Empresarial
+
+20261102_seguridad_roles_empresa.sql · 699 líneas
+
+Recomendado
+·
+inventariopro_consolidado_maestro_completo.sql
+Paquete Consolidado Maestro (Todo en 1 · Recomendado)
+Activa en una sola ejecución Toma Física Ciega, Plan Separe, Cambios Mano a Mano y Garantías, Conciliación Bancaria, Escudo de Precios, Enlace Propio de Tienda (/tienda/empresa), Ventas por Catálogo con Captures de Pago, Motor SQL en 1 clic, Rol Técnico y Despacho Contable (CPC).
+
+Ejecutar en Supabase
+Copiar SQL
+Descargar .sql
+4886 líneas · 168.0 KB
+inventariopro_consolidado_maestro_completo.sql
+PostgreSQL / Supabase RLS
+-- ============================================================================
+-- INVENTARIOPRO · PAQUETE CONSOLIDADO MAESTRO PARA SUPABASE
+-- Incluye Migraciones 000013 a 000021 (100% idempotente)
+-- Al ejecutarlo una vez, habilita también la ejecución en 1 clic desde la web.
+-- ============================================================================
+
+-- =============================================================================
+-- InventarioPro · Tesorería/Presupuesto, Centros de Costo y Órdenes de Compra
+-- =============================================================================
+-- Qué habilita esta migración:
+--   1. CENTROS DE COSTO POR SUCURSAL:
+--      - Añade branch_id opcional a sales, purchases, expenses y acc_entries.
+--      - Función segura asignar_centro_costo_operacion(...) para imputar
+--        ingresos, compras y gastos por unidad de negocio / sede.
+--   2. PRESUPUESTO MAESTRO MENSUAL (financial_budgets):
+--      - Metas de ingresos y techos presupuestarios de compras, gastos y nómina
+--        por mes y sucursal (o consolidado corporativo).
+--   3. ÓRDENES DE COMPRA Y RECEPCIÓN AUDITADA (purchase_orders, purchase_order_items):
+--      - Ciclo formal: draft -> approved -> sent -> partial / received / cancelled.
+--      - Recepción auditada en bodega conectada transaccionalmente con
+--        registrar_compra (Kardex, costo promedio, lotes, Caja/CxP y Contabilidad)
+--        y con warehouse_stock / warehouse_movements.
+--
+-- Idempotente: seguro de ejecutar múltiples veces en Supabase SQL Editor.
+-- =============================================================================
+
+BEGIN;
+
+-- =============================================================================
+-- 1. CENTROS DE COSTO POR SUCURSAL EN OPERACIONES EXISTENTES
+-- =============================================================================
+
+ALTER TABLE public.sales ADD COLUMN IF NOT EXISTS branch_id uuid REFERENCES public.branches(id) ON DELETE SET NULL;
+ALTER TABLE public.purchases ADD COLUMN IF NOT EXISTS branch_id uuid REFERENCES public.branches(id) ON DELETE SET NULL;
+ALTER TABLE public.purchases ADD COLUMN IF NOT EXISTS warehouse_id uuid REFERENCES public.warehouses(id) ON DELETE SET NULL;
+ALTER TABLE public.expenses ADD COLUMN IF NOT EXISTS branch_id uuid REFERENCES public.branches(id) ON DELETE SET NULL;
+ALTER TABLE public.acc_entries ADD COLUMN IF NOT EXISTS branch_id uuid REFERENCES public.branches(id) ON DELETE SET NULL;
+
+CREATE INDEX IF NOT EXISTS idx_sales_company_branch ON public.sales (company_id, branch_id);
+CREATE INDEX IF NOT EXISTS idx_purchases_company_branch ON public.purchases (company_id, branch_id);
+CREATE INDEX IF NOT EXISTS idx_expenses_company_branch ON public.expenses (company_id, branch_id);
+
+CREATE OR REPLACE FUNCTION public.asignar_centro_costo_operacion(
+  p_table text,
+  p_id uuid,
+  p_branch_id uuid DEFAULT NULL
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'pg_catalog', 'public', 'pg_temp'
+AS $function$
+DECLARE
+  v_co uuid := public._ctx(NULL);
+BEGIN
+  IF p_branch_id IS NOT NULL THEN
+    PERFORM 1 FROM public.branches WHERE id = p_branch_id AND company_id = v_co;
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'La sucursal indicada no pertenece a tu empresa';
+    END IF;
+  END IF;
+
+  IF p_table = 'expenses' THEN
+    UPDATE public.expenses SET branch_id = p_branch_id WHERE id = p_id AND company_id = v_co;
+  ELSIF p_table = 'purchases' THEN
+    UPDATE public.purchases SET branch_id = p_branch_id WHERE id = p_id AND company_id = v_co;
+  ELSIF p_table = 'sales' THEN
+    UPDATE public.sales SET branch_id = p_branch_id WHERE id = p_id AND company_id = v_co;
+  ELSIF p_table = 'acc_entries' THEN
+    UPDATE public.acc_entries SET branch_id = p_branch_id WHERE id = p_id AND company_id = v_co;
+  ELSE
+    RAISE EXCEPTION 'Tabla no soportada para imputación de centro de costo: %', p_table;
+  END IF;
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION public.asignar_centro_costo_operacion(text, uuid, uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.asignar_centro_costo_operacion(text, uuid, uuid) TO authenticated, service_role;
+
+
+-- =============================================================================
+-- 2. PRESUPUESTO MAESTRO MENSUAL (financial_budgets)
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS public.financial_budgets (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id uuid NOT NULL DEFAULT public.current_company_id(),
+  period_month date NOT NULL,
+  branch_id uuid REFERENCES public.branches(id) ON DELETE SET NULL,
+  kind text NOT NULL CHECK (kind IN ('ingreso_ventas', 'costo_compras', 'gasto_operativo', 'nomina')),
+  category_name text NOT NULL,
+  budget_amount numeric(14,2) NOT NULL CHECK (budget_amount >= 0),
+  notes text,
+  created_by uuid,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_financial_budgets_company_month
+  ON public.financial_budgets (company_id, period_month, branch_id);
+
+ALTER TABLE public.financial_budgets ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS financial_budgets_select ON public.financial_budgets;
+CREATE POLICY financial_budgets_select ON public.financial_budgets
+  FOR SELECT USING (company_id = public.current_company_id());
+
+DROP TRIGGER IF EXISTS financial_budgets_check_subscription ON public.financial_budgets;
+CREATE TRIGGER financial_budgets_check_subscription
+  BEFORE INSERT OR DELETE OR UPDATE ON public.financial_budgets
+  FOR EACH ROW EXECUTE FUNCTION public.assert_can_write();
+
+CREATE OR REPLACE FUNCTION public.upsert_financial_budget(
+  p_id uuid DEFAULT NULL,
+  p_period_month date DEFAULT NULL,
+  p_branch_id uuid DEFAULT NULL,
+  p_kind text DEFAULT 'gasto_operativo',
+  p_category_name text DEFAULT NULL,
+  p_budget_amount numeric DEFAULT 0,
+  p_notes text DEFAULT NULL
+)
+RETURNS uuid
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'pg_catalog', 'public', 'pg_temp'
+AS $function$
+DECLARE
+  v_co uuid := public._ctx(NULL);
+  v_month date := date_trunc('month', COALESCE(p_period_month, current_date))::date;
+  v_id uuid;
+BEGIN
+  IF COALESCE(btrim(p_category_name), '') = '' THEN
+    RAISE EXCEPTION 'Indica el rubro o categoría del presupuesto';
+  END IF;
+  IF COALESCE(p_budget_amount, -1) < 0 THEN
+    RAISE EXCEPTION 'El monto presupuestado debe ser mayor o igual a cero';
+  END IF;
+
+  IF p_id IS NOT NULL THEN
+    UPDATE public.financial_budgets
+       SET period_month = v_month,
+           branch_id = p_branch_id,
+           kind = p_kind,
+           category_name = btrim(p_category_name),
+           budget_amount = round(p_budget_amount, 2),
+           notes = NULLIF(btrim(COALESCE(p_notes, '')), ''),
+           updated_at = now()
+     WHERE id = p_id AND company_id = v_co
+     RETURNING id INTO v_id;
+    RETURN v_id;
+  END IF;
+
+  INSERT INTO public.financial_budgets (
+    company_id, period_month, branch_id, kind, category_name, budget_amount, notes, created_by
+  ) VALUES (
+    v_co, v_month, p_branch_id, p_kind, btrim(p_category_name), round(p_budget_amount, 2),
+    NULLIF(btrim(COALESCE(p_notes, '')), ''), auth.uid()
+  )
+  RETURNING id INTO v_id;
+
+  RETURN v_id;
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.delete_financial_budget(p_id uuid)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'pg_catalog', 'public', 'pg_temp'
+AS $function$
+DECLARE
+  v_co uuid := public._ctx(NULL);
+BEGIN
+  DELETE FROM public.financial_budgets WHERE id = p_id AND company_id = v_co;
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION public.upsert_financial_budget(uuid, date, uuid, text, text, numeric, text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.upsert_financial_budget(uuid, date, uuid, text, text, numeric, text) TO authenticated, service_role;
+
+REVOKE ALL ON FUNCTION public.delete_financial_budget(uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.delete_financial_budget(uuid) TO authenticated, service_role;
+
+
+-- =============================================================================
+-- 3. ÓRDENES DE COMPRA Y RECEPCIÓN AUDITADA EN BODEGA
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS public.purchase_orders (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id uuid NOT NULL DEFAULT public.current_company_id(),
+  po_number text NOT NULL,
+  supplier_id uuid REFERENCES public.suppliers(id) ON DELETE SET NULL,
+  supplier_name text NOT NULL,
+  branch_id uuid REFERENCES public.branches(id) ON DELETE SET NULL,
+  target_warehouse_id uuid REFERENCES public.warehouses(id) ON DELETE SET NULL,
+  status text NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'approved', 'sent', 'partial', 'received', 'cancelled')),
+  payment_terms text NOT NULL DEFAULT 'credito' CHECK (payment_terms IN ('efectivo', 'transferencia', 'tarjeta', 'credito')),
+  credit_days integer NOT NULL DEFAULT 30 CHECK (credit_days >= 0 AND credit_days <= 365),
+  expected_date date,
+  subtotal numeric(14,2) NOT NULL DEFAULT 0,
+  total numeric(14,2) NOT NULL DEFAULT 0,
+  notes text,
+  linked_purchase_id uuid REFERENCES public.purchases(id) ON DELETE SET NULL,
+  created_by uuid,
+  created_by_name text,
+  approved_by_name text,
+  approved_at timestamptz,
+  received_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS public.purchase_order_items (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id uuid NOT NULL DEFAULT public.current_company_id(),
+  po_id uuid NOT NULL REFERENCES public.purchase_orders(id) ON DELETE CASCADE,
+  product_id uuid NOT NULL REFERENCES public.products(id) ON DELETE RESTRICT,
+  product_name text NOT NULL,
+  sku text,
+  ordered_qty numeric(14,2) NOT NULL CHECK (ordered_qty > 0),
+  received_qty numeric(14,2) NOT NULL DEFAULT 0 CHECK (received_qty >= 0),
+  rejected_qty numeric(14,2) NOT NULL DEFAULT 0 CHECK (rejected_qty >= 0),
+  unit_cost numeric(14,4) NOT NULL CHECK (unit_cost >= 0),
+  lot_code text,
+  expiry_date date,
+  notes text,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_purchase_orders_company_created
+  ON public.purchase_orders (company_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_purchase_order_items_po
+  ON public.purchase_order_items (company_id, po_id);
+
+ALTER TABLE public.purchase_orders ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.purchase_order_items ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS purchase_orders_select ON public.purchase_orders;
+CREATE POLICY purchase_orders_select ON public.purchase_orders
+  FOR SELECT USING (company_id = public.current_company_id());
+
+DROP POLICY IF EXISTS purchase_order_items_select ON public.purchase_order_items;
+CREATE POLICY purchase_order_items_select ON public.purchase_order_items
+  FOR SELECT USING (company_id = public.current_company_id());
+
+DROP TRIGGER IF EXISTS purchase_orders_check_subscription ON public.purchase_orders;
+CREATE TRIGGER purchase_orders_check_subscription
+  BEFORE INSERT OR DELETE OR UPDATE ON public.purchase_orders
+  FOR EACH ROW EXECUTE FUNCTION public.assert_can_write();
+
+CREATE OR REPLACE FUNCTION public.crear_orden_compra(
+  p_supplier_id uuid,
+  p_items jsonb,
+  p_branch_id uuid DEFAULT NULL,
+  p_target_warehouse_id uuid DEFAULT NULL,
+  p_payment_terms text DEFAULT 'credito',
+  p_credit_days integer DEFAULT 30,
+  p_expected_date date DEFAULT NULL,
+  p_notes text DEFAULT NULL,
+  p_auto_approve boolean DEFAULT FALSE
+)
+RETURNS uuid
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'pg_catalog', 'public', 'pg_temp'
+AS $function$
+DECLARE
+  v_co uuid := public._ctx(NULL);
+  v_po_id uuid;
+  v_seq integer;
+  v_po_number text;
+  v_sup_name text := 'Proveedor general';
+  v_actor_name text;
+  v_total numeric(14,2) := 0;
+  v_item jsonb;
+  v_prod record;
+  v_qty numeric;
+  v_cost numeric;
+BEGIN
+  IF jsonb_typeof(p_items) <> 'array' OR jsonb_array_length(p_items) = 0 THEN
+    RAISE EXCEPTION 'Agrega al menos un producto a la orden de compra';
+  END IF;
+
+  IF p_supplier_id IS NOT NULL THEN
+    SELECT name INTO v_sup_name FROM public.suppliers WHERE id = p_supplier_id AND company_id = v_co;
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'Proveedor no válido para esta empresa';
+    END IF;
+  END IF;
+
+  SELECT COALESCE(full_name, email, 'Usuario') INTO v_actor_name
+    FROM public.users WHERE id = auth.uid();
+
+  SELECT COUNT(*) + 1 INTO v_seq FROM public.purchase_orders WHERE company_id = v_co;
+  v_po_number := 'OC-' || lpad(v_seq::text, 4, '0');
+
+  FOR v_item IN SELECT * FROM jsonb_array_elements(p_items) LOOP
+    v_qty := COALESCE((v_item->>'ordered_qty')::numeric, (v_item->>'quantity')::numeric, 0);
+    v_cost := COALESCE((v_item->>'unit_cost')::numeric, (v_item->>'cost')::numeric, 0);
+    IF v_qty <= 0 OR v_cost < 0 THEN
+      RAISE EXCEPTION 'Cantidad y costo deben ser válidos en cada renglón';
+    END IF;
+    v_total := v_total + round(v_qty * v_cost, 2);
+  END LOOP;
+
+  INSERT INTO public.purchase_orders (
+    company_id, po_number, supplier_id, supplier_name, branch_id, target_warehouse_id,
+    status, payment_terms, credit_days, expected_date, subtotal, total, notes,
+    created_by, created_by_name,
+    approved_by_name, approved_at
+  ) VALUES (
+    v_co, v_po_number, p_supplier_id, v_sup_name, p_branch_id, p_target_warehouse_id,
+    CASE WHEN p_auto_approve THEN 'approved' ELSE 'draft' END,
+    COALESCE(p_payment_terms, 'credito'),
+    COALESCE(p_credit_days, 30),
+    p_expected_date, v_total, v_total,
+    NULLIF(btrim(COALESCE(p_notes, '')), ''),
+    auth.uid(), v_actor_name,
+    CASE WHEN p_auto_approve THEN v_actor_name ELSE NULL END,
+    CASE WHEN p_auto_approve THEN now() ELSE NULL END
+  )
+  RETURNING id INTO v_po_id;
+
+  FOR v_item IN SELECT * FROM jsonb_array_elements(p_items) LOOP
+    SELECT id, name, sku INTO v_prod
+      FROM public.products
+     WHERE id = (v_item->>'product_id')::uuid AND company_id = v_co;
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'Producto no encontrado en el catálogo de la empresa';
+    END IF;
+
+    v_qty := COALESCE((v_item->>'ordered_qty')::numeric, (v_item->>'quantity')::numeric, 0);
+    v_cost := COALESCE((v_item->>'unit_cost')::numeric, (v_item->>'cost')::numeric, 0);
+
+    INSERT INTO public.purchase_order_items (
+      company_id, po_id, product_id, product_name, sku, ordered_qty, unit_cost
+    ) VALUES (
+      v_co, v_po_id, v_prod.id, v_prod.name, v_prod.sku, v_qty, v_cost
+    );
+  END LOOP;
+
+  RETURN v_po_id;
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.cambiar_estado_orden_compra(
+  p_po_id uuid,
+  p_status text
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'pg_catalog', 'public', 'pg_temp'
+AS $function$
+DECLARE
+  v_co uuid := public._ctx(NULL);
+  v_cur text;
+  v_actor text;
+BEGIN
+  SELECT status INTO v_cur FROM public.purchase_orders WHERE id = p_po_id AND company_id = v_co FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Orden de compra no encontrada';
+  END IF;
+  IF v_cur IN ('received', 'cancelled') THEN
+    RAISE EXCEPTION 'No se puede modificar una orden ya cerrada o cancelada';
+  END IF;
+  IF p_status NOT IN ('approved', 'sent', 'cancelled') THEN
+    RAISE EXCEPTION 'Estado de transición inválido';
+  END IF;
+
+  SELECT COALESCE(full_name, email, 'Usuario') INTO v_actor FROM public.users WHERE id = auth.uid();
+
+  UPDATE public.purchase_orders
+     SET status = p_status,
+         approved_by_name = CASE WHEN p_status = 'approved' THEN v_actor ELSE approved_by_name END,
+         approved_at = CASE WHEN p_status = 'approved' THEN now() ELSE approved_at END,
+         updated_at = now()
+   WHERE id = p_po_id AND company_id = v_co;
+END;
+$function$;
+
+CREATE OR REPLACE FUNCTION public.recibir_orden_compra(
+  p_po_id uuid,
+  p_warehouse_id uuid DEFAULT NULL,
+  p_lines jsonb DEFAULT '[]'::jsonb,
+  p_payment_method text DEFAULT NULL,
+  p_credit_days integer DEFAULT NULL
+)
+RETURNS uuid
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'pg_catalog', 'public', 'pg_temp'
+AS $function$
+DECLARE
+  v_co uuid := public._ctx(NULL);
+  v_po record;
+  v_line jsonb;
+  v_item record;
+  v_rec_now numeric;
+  v_rej_now numeric;
+  v_unit_cost numeric;
+  v_purchase_items jsonb := '[]'::jsonb;
+  v_purchase_id uuid;
+  v_all_fulfilled boolean := true;
+  v_wh uuid;
+  v_before numeric;
+  v_after numeric;
+  v_method text;
+  v_days integer;
+BEGIN
+  SELECT * INTO v_po FROM public.purchase_orders WHERE id = p_po_id AND company_id = v_co FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Orden de compra no encontrada';
+  END IF;
+  IF v_po.status IN ('received', 'cancelled') THEN
+    RAISE EXCEPTION 'Esta orden de compra ya fue recibida o cancelada';
+  END IF;
+
+  v_wh := COALESCE(p_warehouse_id, v_po.target_warehouse_id);
+  v_method := COALESCE(p_payment_method, v_po.payment_terms, 'credito');
+  v_days := COALESCE(p_credit_days, v_po.credit_days, 30);
+
+  FOR v_line IN SELECT * FROM jsonb_array_elements(p_lines) LOOP
+    SELECT * INTO v_item
+      FROM public.purchase_order_items
+     WHERE id = (v_line->>'item_id')::uuid AND po_id = p_po_id AND company_id = v_co
+     FOR UPDATE;
+
+    IF NOT FOUND THEN CONTINUE; END IF;
+
+    v_rec_now := GREATEST(0, COALESCE((v_line->>'received_now')::numeric, 0));
+    v_rej_now := GREATEST(0, COALESCE((v_line->>'rejected_now')::numeric, 0));
+    v_unit_cost := GREATEST(0, COALESCE((v_line->>'unit_cost')::numeric, v_item.unit_cost));
+
+    IF v_rec_now > 0 THEN
+      v_purchase_items := v_purchase_items || jsonb_build_array(
+        jsonb_strip_nulls(jsonb_build_object(
+          'product_id', v_item.product_id,
+          'product_name', v_item.product_name,
+          'quantity', v_rec_now,
+          'cost', v_unit_cost,
+          'subtotal', round(v_rec_now * v_unit_cost, 2),
+          'lot_code', NULLIF(btrim(COALESCE(v_line->>'lot_code', '')), ''),
+          'expiry_date', NULLIF(btrim(COALESCE(v_line->>'expiry_date', '')), '')
+        ))
+      );
+    END IF;
+
+    UPDATE public.purchase_order_items
+       SET received_qty = received_qty + v_rec_now,
+           rejected_qty = rejected_qty + v_rej_now,
+           unit_cost = v_unit_cost,
+           lot_code = COALESCE(NULLIF(btrim(COALESCE(v_line->>'lot_code', '')), ''), lot_code),
+           expiry_date = COALESCE(NULLIF(btrim(COALESCE(v_line->>'expiry_date', '')), '')::date, expiry_date)
+     WHERE id = v_item.id;
+  END LOOP;
+
+  IF jsonb_array_length(v_purchase_items) = 0 THEN
+    RAISE EXCEPTION 'Indica al menos una unidad recibida conforme para ingresar al inventario';
+  END IF;
+
+  -- Registra la compra oficial (actualiza products.stock, costo promedio, Kardex, lotes, Caja/CxP y Contabilidad)
+  IF v_method = 'credito' THEN
+    v_purchase_id := public.registrar_compra(v_po.supplier_id, v_purchase_items, v_method, v_days);
+  ELSIF v_method <> 'efectivo' THEN
+    v_purchase_id := public.registrar_compra(v_po.supplier_id, v_purchase_items, v_method);
+  ELSE
+    v_purchase_id := public.registrar_compra(v_po.supplier_id, v_purchase_items);
+  END IF;
+
+  UPDATE public.purchases
+     SET branch_id = v_po.branch_id,
+         warehouse_id = v_wh
+   WHERE id = v_purchase_id AND company_id = v_co;
+
+  -- Si hay bodega destino, ingresa existencias también en warehouse_stock y kardex de bodega
+  IF v_wh IS NOT NULL THEN
+    FOR v_line IN SELECT * FROM jsonb_array_elements(v_purchase_items) LOOP
+      v_rec_now := (v_line->>'quantity')::numeric;
+      INSERT INTO public.warehouse_stock (company_id, warehouse_id, product_id, quantity, reserved_quantity)
+      VALUES (v_co, v_wh, (v_line->>'product_id')::uuid, 0, 0)
+      ON CONFLICT (warehouse_id, product_id) DO NOTHING;
+
+      SELECT quantity INTO v_before
+        FROM public.warehouse_stock
+       WHERE warehouse_id = v_wh AND product_id = (v_line->>'product_id')::uuid
+       FOR UPDATE;
+
+      v_after := COALESCE(v_before, 0) + v_rec_now;
+
+      UPDATE public.warehouse_stock
+         SET quantity = v_after, updated_at = now()
+       WHERE warehouse_id = v_wh AND product_id = (v_line->>'product_id')::uuid;
+
+      INSERT INTO public.warehouse_movements (
+        company_id, warehouse_id, product_id, movement_type,
+        quantity_delta, quantity_before, quantity_after,
+        reference_type, reference_id, notes, created_by
+      ) VALUES (
+        v_co, v_wh, (v_line->>'product_id')::uuid, 'entry',
+        v_rec_now, COALESCE(v_before, 0), v_after,
+        'purchase_order', v_po.id, 'Recepción ' || v_po.po_number, auth.uid()
+      );
+    END LOOP;
+  END IF;
+
+  SELECT bool_and((received_qty + rejected_qty) >= ordered_qty)
+    INTO v_all_fulfilled
+    FROM public.purchase_order_items
+   WHERE po_id = p_po_id AND company_id = v_co;
+
+  UPDATE public.purchase_orders
+     SET status = CASE WHEN COALESCE(v_all_fulfilled, true) THEN 'received' ELSE 'partial' END,
+         target_warehouse_id = COALESCE(v_wh, target_warehouse_id),
+         linked_purchase_id = v_purchase_id,
+         received_at = now(),
+         updated_at = now()
+   WHERE id = p_po_id AND company_id = v_co;
+
+  RETURN v_purchase_id;
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION public.crear_orden_compra(uuid, jsonb, uuid, uuid, text, integer, date, text, boolean) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.crear_orden_compra(uuid, jsonb, uuid, uuid, text, integer, date, text, boolean) TO authenticated, service_role;
+
+REVOKE ALL ON FUNCTION public.cambiar_estado_orden_compra(uuid, text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.cambiar_estado_orden_compra(uuid, text) TO authenticated, service_role;
+
+REVOKE ALL ON FUNCTION public.recibir_orden_compra(uuid, uuid, jsonb, text, integer) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.recibir_orden_compra(uuid, uuid, jsonb, text, integer) TO authenticated, service_role;
+
+COMMIT;
+
+
+-- =============================================================================
+-- FASE 3: PRESUPUESTO MAESTRO CONSOLIDADO, STORAGE DE IMÁGENES REALES DE
+-- PRODUCTO Y CATÁLOGO COMERCIAL PARA VENDEDORES / MOSTRADOR (POS)
+-- Fecha: 2026-11-03
+-- =============================================================================
+-- Este script es 100% IDEMPOTENTE (puede ejecutarse varias veces sin riesgo).
+-- Incluye:
+--   1.Tabla y políticas completas de Presupuesto Maestro (`financial_budgets`),
+--     clonación intermensual con factor de variación (`clonar_presupuesto_mes`)
+--     y resumen ejecutivo servidor (`resumen_presupuesto_ejecucion`).
+--   2. Columnas comerciales y de imagen real en `public.products`
+--     (`image_url`, `description`, `featured`, `catalog_visible`) + RPC segura
+--     `actualizar_imagen_producto`.
+--   3. Bucket oficial en Supabase Storage (`product-images`) con políticas RLS
+--     para carga autenticada por empresa y visualización rápida en POS/Catálogo.
+--   4. Actualización del catálogo digital (`obtener_catalogo_publico`) con
+--     descripciones comerciales, destacados y filtro de visibilidad.
+-- =============================================================================
+
+begin;
+
+do $$
+begin
+  if to_regprocedure('public.current_company_id()') is null then
+    execute $fn$
+      create function public.current_company_id()
+      returns uuid
+      language sql
+      stable
+      security definer
+      set search_path = pg_catalog, public, pg_temp
+      as $body$
+        select p.company_id
+          from public.profiles p
+         where p.id = auth.uid()
+           and coalesce(p.active, true) = true
+         limit 1;
+      $body$;
+    $fn$;
+    execute 'grant execute on function public.current_company_id() to authenticated, service_role';
+  end if;
+
+  if to_regprocedure('public.my_company()') is null then
+    execute $fn$
+      create function public.my_company()
+      returns uuid
+      language sql
+      stable
+      security definer
+      set search_path = pg_catalog, public, pg_temp
+      as $body$
+        select public.current_company_id();
+      $body$;
+    $fn$;
+    execute 'grant execute on function public.my_company() to authenticated, service_role';
+  end if;
+end;
+$$;
+
+-- -----------------------------------------------------------------------------
+-- 1. PRESUPUESTO MAESTRO MENSUAL Y POR SUCURSAL (`public.financial_budgets`)
+-- -----------------------------------------------------------------------------
+create table if not exists public.financial_budgets (
+  id uuid primary key default gen_random_uuid(),
+  company_id uuid not null default public.my_company() references public.companies(id) on delete cascade,
+  period_month date not null,
+  branch_id uuid null references public.branches(id) on delete set null,
+  kind text not null check (kind in ('ingreso_ventas', 'costo_compras', 'gasto_operativo', 'nomina')),
+  category_name text not null,
+  budget_amount numeric(14,2) not null default 0 check (budget_amount >= 0),
+  notes text null,
+  created_by uuid null default auth.uid() references public.profiles(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create index if not exists idx_financial_budgets_company_month
+  on public.financial_budgets(company_id, period_month);
+
+create index if not exists idx_financial_budgets_company_branch
+  on public.financial_budgets(company_id, branch_id);
+
+alter table public.financial_budgets enable row level security;
+
+drop policy if exists financial_budgets_select on public.financial_budgets;
+create policy financial_budgets_select on public.financial_budgets
+  for select to authenticated
+  using (company_id = public.my_company());
+
+drop policy if exists financial_budgets_insert on public.financial_budgets;
+create policy financial_budgets_insert on public.financial_budgets
+  for insert to authenticated
+  with check (
+    company_id = public.my_company()
+    and (
+      public.is_manager()
+      or exists (
+        select 1 from public.profiles p
+        where p.id = auth.uid()
+          and p.active = true
+          and p.role in ('dueno', 'admin_empresa', 'gerente', 'contador', 'admin')
+      )
+    )
+  );
+
+drop policy if exists financial_budgets_update on public.financial_budgets;
+create policy financial_budgets_update on public.financial_budgets
+  for update to authenticated
+  using (
+    company_id = public.my_company()
+    and (
+      public.is_manager()
+      or exists (
+        select 1 from public.profiles p
+        where p.id = auth.uid()
+          and p.active = true
+          and p.role in ('dueno', 'admin_empresa', 'gerente', 'contador', 'admin')
+      )
+    )
+  )
+  with check (company_id = public.my_company());
+
+drop policy if exists financial_budgets_delete on public.financial_budgets;
+create policy financial_budgets_delete on public.financial_budgets
+  for delete to authenticated
+  using (
+    company_id = public.my_company()
+    and (
+      public.is_manager()
+      or exists (
+        select 1 from public.profiles p
+        where p.id = auth.uid()
+          and p.active = true
+          and p.role in ('dueno', 'admin_empresa', 'gerente', 'contador', 'admin')
+      )
+    )
+  );
+
+create or replace function public.upsert_financial_budget(
+  p_id uuid default null,
+  p_period_month date default date_trunc('month', current_date)::date,
+  p_branch_id uuid default null,
+  p_kind text default 'gasto_operativo',
+  p_category_name text default '',
+  p_budget_amount numeric default 0,
+  p_notes text default null
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = pg_catalog, public, pg_temp
+as $$
+declare
+  v_co uuid := public.my_company();
+  v_month date := date_trunc('month', coalesce(p_period_month, current_date))::date;
+  v_id uuid;
+begin
+  if v_co is null then
+    raise exception 'Sesión sin empresa asociada';
+  end if;
+
+  if not (public.is_manager() or exists (
+    select 1 from public.profiles where id = auth.uid() and active = true and role in ('contador', 'gerente', 'admin_empresa', 'dueno', 'admin')
+  )) then
+    raise exception 'No tienes permisos para gestionar presupuestos financieros';
+  end if;
+
+  if coalesce(trim(p_category_name), '') = '' then
+    raise exception 'Indica la categoría o rubro presupuestario';
+  end if;
+
+  if p_kind not in ('ingreso_ventas', 'costo_compras', 'gasto_operativo', 'nomina') then
+    raise exception 'Tipo de partida presupuestaria inválido';
+  end if;
+
+  if p_branch_id is not null and not exists (
+    select 1 from public.branches b where b.id = p_branch_id and b.company_id = v_co
+  ) then
+    raise exception 'La sucursal indicada no pertenece a tu empresa';
+  end if;
+
+  if p_id is not null then
+    update public.financial_budgets
+       set period_month = v_month,
+           branch_id = p_branch_id,
+           kind = p_kind,
+           category_name = trim(p_category_name),
+           budget_amount = round(greatest(0, coalesce(p_budget_amount, 0)), 2),
+           notes = nullif(trim(coalesce(p_notes, '')), ''),
+           updated_at = now()
+     where id = p_id
+       and company_id = v_co
+    returning id into v_id;
+
+    if v_id is null then
+      raise exception 'Partida presupuestaria no encontrada';
+    end if;
+    return v_id;
+  else
+    insert into public.financial_budgets (
+      company_id, period_month, branch_id, kind, category_name, budget_amount, notes, created_by
+    ) values (
+      v_co,
+      v_month,
+      p_branch_id,
+      p_kind,
+      trim(p_category_name),
+      round(greatest(0, coalesce(p_budget_amount, 0)), 2),
+      nullif(trim(coalesce(p_notes, '')), ''),
+      auth.uid()
+    )
+    returning id into v_id;
+    return v_id;
+  end if;
+end;
+$$;
+
+grant execute on function public.upsert_financial_budget(uuid, date, uuid, text, text, numeric, text) to authenticated;
+
+create or replace function public.delete_financial_budget(p_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = pg_catalog, public, pg_temp
+as $$
+declare
+  v_co uuid := public.my_company();
+begin
+  if not (public.is_manager() or exists (
+    select 1 from public.profiles where id = auth.uid() and active = true and role in ('contador', 'gerente', 'admin_empresa', 'dueno', 'admin')
+  )) then
+    raise exception 'No tienes permisos para eliminar partidas presupuestarias';
+  end if;
+
+  delete from public.financial_budgets
+   where id = p_id
+     and company_id = v_co;
+end;
+$$;
+
+grant execute on function public.delete_financial_budget(uuid) to authenticated;
+
+-- Clonar partidas presupuestarias de un mes origen a un mes destino con ajuste %
+create or replace function public.clonar_presupuesto_mes(
+  p_source_month date,
+  p_target_month date,
+  p_variation_pct numeric default 0,
+  p_overwrite boolean default false
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = pg_catalog, public, pg_temp
+as $$
+declare
+  v_co uuid := public.my_company();
+  v_src date := date_trunc('month', coalesce(p_source_month, current_date - interval '1 month'))::date;
+  v_dst date := date_trunc('month', coalesce(p_target_month, current_date))::date;
+  v_factor numeric := greatest(0, 1 + (coalesce(p_variation_pct, 0) / 100.0));
+  v_copied int := 0;
+begin
+  if v_co is null then
+    raise exception 'Sesión sin empresa asociada';
+  end if;
+
+  if not (public.is_manager() or exists (
+    select 1 from public.profiles where id = auth.uid() and active = true and role in ('contador', 'gerente', 'admin_empresa', 'dueno', 'admin')
+  )) then
+    raise exception 'No tienes permisos para clonar presupuestos';
+  end if;
+
+  if v_src = v_dst then
+    raise exception 'El mes origen y el mes destino deben ser distintos';
+  end if;
+
+  if p_overwrite then
+    delete from public.financial_budgets
+     where company_id = v_co
+       and period_month = v_dst;
+  end if;
+
+  insert into public.financial_budgets (
+    company_id, period_month, branch_id, kind, category_name, budget_amount, notes, created_by
+  )
+  select
+    v_co,
+    v_dst,
+    src.branch_id,
+    src.kind,
+    src.category_name,
+    round(greatest(0, src.budget_amount * v_factor), 2),
+    case
+      when coalesce(p_variation_pct, 0) <> 0
+        then trim(coalesce(src.notes || ' · ', '') || 'Clonado ' || to_char(v_src, 'YYYY-MM') || ' (' || p_variation_pct || '%)')
+      else trim(coalesce(src.notes || ' · ', '') || 'Clonado ' || to_char(v_src, 'YYYY-MM'))
+    end,
+    auth.uid()
+  from public.financial_budgets src
+  where src.company_id = v_co
+    and src.period_month = v_src
+    and not exists (
+      select 1
+      from public.financial_budgets ex
+      where ex.company_id = v_co
+        and ex.period_month = v_dst
+        and coalesce(ex.branch_id, '00000000-0000-0000-0000-000000000000'::uuid) =
+            coalesce(src.branch_id, '00000000-0000-0000-0000-000000000000'::uuid)
+        and ex.kind = src.kind
+        and lower(trim(ex.category_name)) = lower(trim(src.category_name))
+    );
+
+  get diagnostics v_copied = row_count;
+  return jsonb_build_object(
+    'copied', v_copied,
+    'source_month', v_src,
+    'target_month', v_dst,
+    'variation_pct', coalesce(p_variation_pct, 0)
+  );
+end;
+$$;
+
+grant execute on function public.clonar_presupuesto_mes(date, date, numeric, boolean) to authenticated;
+
+-- Resumen consolidado de Presupuesto Maestro vs Ejecución Real
+create or replace function public.resumen_presupuesto_ejecucion(
+  p_period_month date default date_trunc('month', current_date)::date,
+  p_branch_id uuid default null
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = pg_catalog, public, pg_temp
+as $$
+declare
+  v_co uuid := public.my_company();
+  v_start date := date_trunc('month', coalesce(p_period_month, current_date))::date;
+  v_end date := (v_start + interval '1 month')::date;
+  v_sales numeric := 0;
+  v_purchases numeric := 0;
+  v_expenses numeric := 0;
+  v_payroll numeric := 0;
+  v_rev_target numeric := 0;
+  v_out_target numeric := 0;
+begin
+  if v_co is null then
+    raise exception 'Sesión sin empresa asociada';
+  end if;
+
+  select coalesce(sum(s.total), 0) into v_sales
+    from public.sales s
+   where s.company_id = v_co
+     and s.status <> 'anulada'
+     and s.created_at >= v_start::timestamptz
+     and s.created_at < v_end::timestamptz
+     and (p_branch_id is null or s.branch_id = p_branch_id);
+
+  select coalesce(sum(p.total), 0) into v_purchases
+    from public.purchases p
+   where p.company_id = v_co
+     and p.status <> 'anulada'
+     and p.created_at >= v_start::timestamptz
+     and p.created_at < v_end::timestamptz
+     and (p_branch_id is null or p.branch_id = p_branch_id);
+
+  select coalesce(sum(e.amount), 0) into v_expenses
+    from public.expenses e
+   where e.company_id = v_co
+     and e.status <> 'anulado'
+     and e.expense_date >= v_start
+     and e.expense_date < v_end
+     and (p_branch_id is null or e.branch_id = p_branch_id);
+
+  if p_branch_id is null and to_regclass('public.payroll_payments') is not null then
+    select coalesce(sum(pp.net_paid), 0) into v_payroll
+      from public.payroll_payments pp
+     where pp.company_id = v_co
+       and pp.status <> 'anulado'
+       and pp.payment_date >= v_start
+       and pp.payment_date < v_end;
+  end if;
+
+  select
+    coalesce(sum(case when fb.kind = 'ingreso_ventas' then fb.budget_amount else 0 end), 0),
+    coalesce(sum(case when fb.kind <> 'ingreso_ventas' then fb.budget_amount else 0 end), 0)
+    into v_rev_target, v_out_target
+    from public.financial_budgets fb
+   where fb.company_id = v_co
+     and fb.period_month = v_start
+     and (p_branch_id is null or fb.branch_id = p_branch_id);
+
+  return jsonb_build_object(
+    'period_month', v_start,
+    'branch_id', p_branch_id,
+    'revenue_target', round(v_rev_target, 2),
+    'revenue_actual', round(v_sales, 2),
+    'outflow_target', round(v_out_target, 2),
+    'outflow_actual', round(v_purchases + v_expenses + v_payroll, 2),
+    'purchases_actual', round(v_purchases, 2),
+    'expenses_actual', round(v_expenses, 2),
+    'payroll_actual', round(v_payroll, 2)
+  );
+end;
+$$;
+
+grant execute on function public.resumen_presupuesto_ejecucion(date, uuid) to authenticated;
+
+-- -----------------------------------------------------------------------------
+-- 2. METADATOS COMERCIALES E IMÁGENES REALES EN `public.products`
+-- -----------------------------------------------------------------------------
+alter table public.products
+  add column if not exists image_url text,
+  add column if not exists description text,
+  add column if not exists featured boolean not null default false,
+  add column if not exists catalog_visible boolean not null default true;
+
+create index if not exists idx_products_company_catalog_visible
+  on public.products(company_id, catalog_visible, featured);
+
+-- RPC para actualizar rápidamente la fotografía real desde Productos, POS o Catálogo
+drop function if exists public.actualizar_imagen_producto(uuid, text);
+
+create or replace function public.actualizar_imagen_producto(
+  p_product_id uuid,
+  p_image_url text default null
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = pg_catalog, public, pg_temp
+as $$
+declare
+  v_co uuid := public.my_company();
+  v_clean text := nullif(trim(coalesce(p_image_url, '')), '');
+begin
+  if v_co is null then
+    raise exception 'Sesión sin empresa asociada';
+  end if;
+
+  if not (public.is_manager() or exists (
+    select 1 from public.profiles
+     where id = auth.uid()
+       and coalesce(active, true) = true
+       and role in ('dueno', 'admin_empresa', 'gerente', 'almacen', 'comprador', 'cajero', 'vendedor', 'admin')
+  )) then
+    raise exception 'No tienes permisos para cambiar fotografías del catálogo';
+  end if;
+
+  update public.products
+     set image_url = v_clean
+   where id = p_product_id
+     and company_id = v_co;
+
+  if not found then
+    raise exception 'Producto no encontrado en tu empresa';
+  end if;
+
+  return jsonb_build_object('ok', true, 'product_id', p_product_id, 'image_url', v_clean);
+end;
+$$;
+
+grant execute on function public.actualizar_imagen_producto(uuid, text) to authenticated, service_role;
+
+-- -----------------------------------------------------------------------------
+-- 3. SUPABASE STORAGE: BUCKET PÚBLICO `product-images` CON RLS POR EMPRESA
+-- -----------------------------------------------------------------------------
+do $$
+begin
+  if to_regclass('storage.buckets') is not null then
+    insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+    values (
+      'product-images',
+      'product-images',
+      true,
+      5242880,
+      array['image/jpeg', 'image/png', 'image/webp']
+    )
+    on conflict (id) do update
+      set public = true,
+          file_size_limit = 5242880,
+          allowed_mime_types = array['image/jpeg', 'image/png', 'image/webp'];
+  end if;
+exception
+  when insufficient_privilege then
+    raise notice 'No se pudo configurar storage.buckets automáticamente; puedes crear el bucket público product-images desde el panel Storage.';
+end;
+$$;
+
+do $$
+begin
+  if to_regclass('storage.objects') is not null then
+    drop policy if exists product_images_public_read on storage.objects;
+    create policy product_images_public_read on storage.objects
+      for select
+      using (bucket_id = 'product-images');
+
+    drop policy if exists product_images_auth_insert on storage.objects;
+    create policy product_images_auth_insert on storage.objects
+      for insert to authenticated
+      with check (
+        bucket_id = 'product-images'
+        and (storage.foldername(name))[1] = public.my_company()::text
+      );
+
+    drop policy if exists product_images_auth_update on storage.objects;
+    create policy product_images_auth_update on storage.objects
+      for update to authenticated
+      using (
+        bucket_id = 'product-images'
+        and (storage.foldername(name))[1] = public.my_company()::text
+      );
+
+    drop policy if exists product_images_auth_delete on storage.objects;
+    create policy product_images_auth_delete on storage.objects
+      for delete to authenticated
+      using (
+        bucket_id = 'product-images'
+        and (storage.foldername(name))[1] = public.my_company()::text
+      );
+  end if;
+exception
+  when insufficient_privilege then
+    raise notice 'Políticas de storage.objects requieren rol propietario en este proyecto; el sistema usará respaldo automático.';
+end;
+$$;
+
+-- -----------------------------------------------------------------------------
+-- 4. CATÁLOGO DIGITAL PÚBLICO ENRIQUECIDO (`obtener_catalogo_publico`)
+-- -----------------------------------------------------------------------------
+create or replace function public.obtener_catalogo_publico(p_company_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = pg_catalog, public, pg_temp
+as $$
+declare
+  v_cfg record;
+  v_products jsonb;
+  v_categories jsonb;
+begin
+  if p_company_id is null then
+    return jsonb_build_object('available', false, 'reason', 'Catálogo no especificado.');
+  end if;
+
+  select
+    cc.company_id,
+    coalesce(nullif(trim(cc.name), ''), c.name, 'Catálogo Digital') as name,
+    cc.phone,
+    cc.address,
+    coalesce(nullif(trim(cc.currency), ''), 'USD') as currency,
+    coalesce(cc.tax_rate, 0) as tax_rate,
+    coalesce(cc.tax_mode, 'none') as tax_mode,
+    coalesce(cc.catalog_enabled, true) as catalog_enabled,
+    coalesce(cc.catalog_show_wholesale, true) as catalog_show_wholesale,
+    coalesce(cc.catalog_show_stock, true) as catalog_show_stock,
+    cc.catalog_welcome
+  into v_cfg
+  from public.companies c
+  left join public.company_config cc on cc.company_id = c.id
+  where c.id = p_company_id
+  limit 1;
+
+  if v_cfg.company_id is null then
+    select
+      cc.company_id,
+      coalesce(nullif(trim(cc.name), ''), 'Catálogo Digital') as name,
+      cc.phone,
+      cc.address,
+      coalesce(nullif(trim(cc.currency), ''), 'USD') as currency,
+      coalesce(cc.tax_rate, 0) as tax_rate,
+      coalesce(cc.tax_mode, 'none') as tax_mode,
+      coalesce(cc.catalog_enabled, true) as catalog_enabled,
+      coalesce(cc.catalog_show_wholesale, true) as catalog_show_wholesale,
+      coalesce(cc.catalog_show_stock, true) as catalog_show_stock,
+      cc.catalog_welcome
+    into v_cfg
+    from public.company_config cc
+    where cc.company_id = p_company_id
+    limit 1;
+  end if;
+
+  if v_cfg is null or v_cfg.company_id is null then
+    return jsonb_build_object('available', false, 'reason', 'Catálogo no encontrado.');
+  end if;
+
+  if not v_cfg.catalog_enabled then
+    return jsonb_build_object('available', false, 'reason', 'Este catálogo digital está desactivado temporalmente.');
+  end if;
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+    'id', cat.id,
+    'name', cat.name
+  ) order by cat.name), '[]'::jsonb)
+  into v_categories
+  from public.categories cat
+  where cat.company_id = p_company_id;
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+    'id', p.id,
+    'name', p.name,
+    'sku', coalesce(p.sku, ''),
+    'description', p.description,
+    'featured', coalesce(p.featured, false),
+    'category_id', p.category_id,
+    'category_name', cat.name,
+    'price', round(coalesce(p.price, 0)::numeric, 2),
+    'price_wholesale', case
+      when v_cfg.catalog_show_wholesale and coalesce(p.price_wholesale, 0) > 0
+        then round(p.price_wholesale::numeric, 2)
+      else null
+    end,
+    'wholesale_min_qty', case
+      when v_cfg.catalog_show_wholesale and coalesce(p.price_wholesale, 0) > 0 and coalesce(p.wholesale_min_qty, 0) > 0
+        then p.wholesale_min_qty
+      else null
+    end,
+    'unit', coalesce(nullif(trim(p.unit), ''), 'unidad'),
+    'stock', case
+      when v_cfg.catalog_show_stock then greatest(0, coalesce(p.stock, 0))
+      else case when coalesce(p.stock, 0) > 0 then 1 else 0 end
+    end,
+    'in_stock', coalesce(p.stock, 0) > 0,
+    'image_url', p.image_url
+  ) order by coalesce(p.featured, false) desc, p.name asc), '[]'::jsonb)
+  into v_products
+  from public.products p
+  left join public.categories cat on cat.id = p.category_id and cat.company_id = p.company_id
+  where p.company_id = p_company_id
+    and coalesce(p.catalog_visible, true) = true;
+
+  return jsonb_build_object(
+    'available', true,
+    'company', jsonb_build_object(
+      'company_id', p_company_id,
+      'name', v_cfg.name,
+      'phone', v_cfg.phone,
+      'address', v_cfg.address,
+      'currency', v_cfg.currency,
+      'tax_rate', v_cfg.tax_rate,
+      'tax_mode', v_cfg.tax_mode,
+      'show_wholesale', v_cfg.catalog_show_wholesale,
+      'show_stock', v_cfg.catalog_show_stock,
+      'welcome', v_cfg.catalog_welcome
+    ),
+    'categories', v_categories,
+    'products', v_products
+  );
+end;
+$$;
+
+grant execute on function public.obtener_catalogo_publico(uuid) to anon, authenticated;
+
+commit;
+
+
+-- =============================================================================
+-- INVENTARIOPRO · TABLA DEDICADA DE IMÁGENES DE PRODUCTOS (`product_images`)
+-- Y CONEXIÓN BIDIRECCIONAL CON POS (MOSTRADOR), PRODUCTOS Y CATÁLOGO PDF
+-- Fecha: 2026-11-03
+-- =============================================================================
+-- Script 100% IDEMPOTENTE (seguro de ejecutar varias veces en Supabase SQL Editor).
+-- Qué resuelve y garantiza:
+--   1. Compatibilidad total entre `public.current_company_id()` y `public.my_company()`.
+--   2. Tabla dedicada `public.product_images` con aislamiento multiempresa (RLS),
+--      historial de quién actualizó la imagen y respaldo automático en `public.products.image_url`.
+--   3. Permisos explícitos (`GRANT`) a nivel de tabla y columnas comerciales de `products`
+--      (`image_url`, `description`, `featured`, `catalog_visible`).
+--   4. Trigger automático `trg_sync_product_images_to_products` para mantener siempre
+--      sincronizada la tabla `product_images` con `products.image_url`.
+--   5. Función segura `public.actualizar_imagen_producto(uuid, text)` (SECURITY DEFINER)
+--      conectada con Mostrador (POS), Productos y Catálogo Comercial (retorna confirmación JSON).
+--   6. Bucket público `product-images` en Supabase Storage + `obtener_catalogo_publico`
+--      leyendo tanto `products.image_url` como `product_images.image_url`.
+-- =============================================================================
+
+begin;
+
+-- -----------------------------------------------------------------------------
+-- 0. FUNCIONES AUXILIARES DE EMPRESA (GARANTIZAR EXISTENCIA Y COMPATIBILIDAD)
+-- -----------------------------------------------------------------------------
+do $$
+begin
+  if to_regprocedure('public.current_company_id()') is null then
+    execute $fn$
+      create function public.current_company_id()
+      returns uuid
+      language sql
+      stable
+      security definer
+      set search_path = pg_catalog, public, pg_temp
+      as $body$
+        select p.company_id
+          from public.profiles p
+         where p.id = auth.uid()
+           and coalesce(p.active, true) = true
+         limit 1;
+      $body$;
+    $fn$;
+    execute 'grant execute on function public.current_company_id() to authenticated, service_role';
+  end if;
+
+  if to_regprocedure('public.my_company()') is null then
+    execute $fn$
+      create function public.my_company()
+      returns uuid
+      language sql
+      stable
+      security definer
+      set search_path = pg_catalog, public, pg_temp
+      as $body$
+        select public.current_company_id();
+      $body$;
+    $fn$;
+    execute 'grant execute on function public.my_company() to authenticated, service_role';
+  end if;
+end;
+$$;
+
+-- -----------------------------------------------------------------------------
+-- 1. COLUMNAS COMERCIALES Y DE FOTOGRAFÍA EN `public.products` + PERMISOS
+-- -----------------------------------------------------------------------------
+alter table public.products
+  add column if not exists image_url text,
+  add column if not exists description text,
+  add column if not exists featured boolean not null default false,
+  add column if not exists catalog_visible boolean not null default true;
+
+create index if not exists idx_products_company_catalog_visible
+  on public.products(company_id, catalog_visible, featured);
+
+-- Si la base usa privilegios de actualización por columna, habilitamos las columnas comerciales
+do $$
+begin
+  execute 'grant update (image_url, description, featured, catalog_visible) on public.products to authenticated';
+exception
+  when others then null;
+end;
+$$;
+
+-- -----------------------------------------------------------------------------
+-- 2. TABLA DEDICADA `public.product_images` CON RLS Y SINCRONIZACIÓN AUTOMÁTICA
+-- -----------------------------------------------------------------------------
+create table if not exists public.product_images (
+  id uuid primary key default gen_random_uuid(),
+  company_id uuid not null default public.current_company_id() references public.companies(id) on delete cascade,
+  product_id uuid not null references public.products(id) on delete cascade,
+  image_url text not null,
+  storage_path text null,
+  mime_type text not null default 'image/jpeg',
+  updated_by uuid null default auth.uid(),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint product_images_product_uidx unique (product_id)
+);
+
+create index if not exists idx_product_images_company
+  on public.product_images(company_id, product_id);
+
+alter table public.product_images enable row level security;
+
+revoke all on public.product_images from public, anon;
+grant select, insert, update, delete on public.product_images to authenticated, service_role;
+
+drop policy if exists product_images_select on public.product_images;
+create policy product_images_select on public.product_images
+  for select to authenticated
+  using (company_id = public.current_company_id());
+
+drop policy if exists product_images_insert on public.product_images;
+create policy product_images_insert on public.product_images
+  for insert to authenticated
+  with check (
+    company_id = public.current_company_id()
+    and exists (
+      select 1
+        from public.profiles p
+       where p.id = auth.uid()
+         and coalesce(p.active, true) = true
+         and p.role in ('admin', 'dueno', 'admin_empresa', 'gerente', 'almacen', 'comprador', 'cajero', 'vendedor')
+    )
+  );
+
+drop policy if exists product_images_update on public.product_images;
+create policy product_images_update on public.product_images
+  for update to authenticated
+  using (
+    company_id = public.current_company_id()
+    and exists (
+      select 1
+        from public.profiles p
+       where p.id = auth.uid()
+         and coalesce(p.active, true) = true
+         and p.role in ('admin', 'dueno', 'admin_empresa', 'gerente', 'almacen', 'comprador', 'cajero', 'vendedor')
+    )
+  )
+  with check (company_id = public.current_company_id());
+
+drop policy if exists product_images_delete on public.product_images;
+create policy product_images_delete on public.product_images
+  for delete to authenticated
+  using (
+    company_id = public.current_company_id()
+    and exists (
+      select 1
+        from public.profiles p
+       where p.id = auth.uid()
+         and coalesce(p.active, true) = true
+         and p.role in ('admin', 'dueno', 'admin_empresa', 'gerente', 'almacen', 'comprador', 'cajero', 'vendedor')
+    )
+  );
+
+-- Trigger bidireccional: al guardar o eliminar en `product_images`, refleja en `products.image_url`
+create or replace function public._sync_product_image_to_product()
+returns trigger
+language plpgsql
+security definer
+set search_path = pg_catalog, public, pg_temp
+as $$
+begin
+  if tg_op = 'DELETE' then
+    update public.products
+       set image_url = null
+     where id = old.product_id
+       and company_id = old.company_id
+       and image_url is not null;
+    return old;
+  else
+    update public.products
+       set image_url = new.image_url
+     where id = new.product_id
+       and company_id = new.company_id
+       and coalesce(image_url, '') is distinct from coalesce(new.image_url, '');
+    return new;
+  end if;
+end;
+$$;
+
+drop trigger if exists trg_sync_product_images_to_products on public.product_images;
+create trigger trg_sync_product_images_to_products
+  after insert or update or delete on public.product_images
+  for each row execute function public._sync_product_image_to_product();
+
+-- Relleno inicial: si ya existían productos con `image_url`, copiarlos a `product_images`
+insert into public.product_images (company_id, product_id, image_url, updated_at)
+select p.company_id, p.id, trim(p.image_url), now()
+  from public.products p
+ where p.company_id is not null
+   and coalesce(trim(p.image_url), '') <> ''
+on conflict (product_id) do update
+   set image_url = excluded.image_url,
+       updated_at = now();
+
+-- -----------------------------------------------------------------------------
+-- 3. RPC OFICIAL `public.actualizar_imagen_producto` (POS, PRODUCTOS Y CATÁLOGO)
+-- -----------------------------------------------------------------------------
+drop function if exists public.actualizar_imagen_producto(uuid, text);
+
+create or replace function public.actualizar_imagen_producto(
+  p_product_id uuid,
+  p_image_url text default null
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = pg_catalog, public, pg_temp
+as $$
+declare
+  v_co uuid := coalesce(
+    public.current_company_id(),
+    (select company_id from public.profiles where id = auth.uid() and coalesce(active, true) = true limit 1)
+  );
+  v_clean text := nullif(trim(coalesce(p_image_url, '')), '');
+  v_exists boolean := false;
+begin
+  if v_co is null then
+    raise exception 'Sesión sin empresa asociada';
+  end if;
+
+  if not exists (
+    select 1
+      from public.profiles p
+     where p.id = auth.uid()
+       and coalesce(p.active, true) = true
+       and p.company_id = v_co
+       and p.role in ('admin', 'dueno', 'admin_empresa', 'gerente', 'almacen', 'comprador', 'cajero', 'vendedor')
+  ) then
+    raise exception 'No tienes permisos para actualizar fotografías de productos';
+  end if;
+
+  select exists (
+    select 1 from public.products pr where pr.id = p_product_id and pr.company_id = v_co
+  ) into v_exists;
+
+  if not v_exists then
+    raise exception 'El producto indicado no pertenece a tu empresa';
+  end if;
+
+  if v_clean is null then
+    delete from public.product_images
+     where product_id = p_product_id
+       and company_id = v_co;
+
+    update public.products
+       set image_url = null
+     where id = p_product_id
+       and company_id = v_co;
+  else
+    insert into public.product_images (company_id, product_id, image_url, updated_by, updated_at)
+    values (v_co, p_product_id, v_clean, auth.uid(), now())
+    on conflict (product_id) do update
+      set image_url = excluded.image_url,
+          updated_by = auth.uid(),
+          updated_at = now();
+
+    update public.products
+       set image_url = v_clean
+     where id = p_product_id
+       and company_id = v_co;
+  end if;
+
+  return jsonb_build_object(
+    'ok', true,
+    'product_id', p_product_id,
+    'image_url', v_clean
+  );
+end;
+$$;
+
+revoke all on function public.actualizar_imagen_producto(uuid, text) from public, anon;
+grant execute on function public.actualizar_imagen_producto(uuid, text) to authenticated, service_role;
+
+-- -----------------------------------------------------------------------------
+-- 4. BUCKET PÚBLICO `product-images` EN SUPABASE STORAGE (CON RESPALDO SEGURO)
+-- -----------------------------------------------------------------------------
+do $$
+begin
+  if to_regclass('storage.buckets') is not null then
+    insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+    values (
+      'product-images',
+      'product-images',
+      true,
+      5242880,
+      array['image/jpeg', 'image/png', 'image/webp']
+    )
+    on conflict (id) do update
+      set public = true,
+          file_size_limit = 5242880,
+          allowed_mime_types = array['image/jpeg', 'image/png', 'image/webp'];
+  end if;
+exception
+  when others then
+    raise notice 'Bucket product-images omitido por permisos del rol SQL; la tabla product_images almacenará la foto comprimida directamente.';
+end;
+$$;
+
+do $$
+begin
+  if to_regclass('storage.objects') is not null then
+    drop policy if exists product_images_public_read on storage.objects;
+    create policy product_images_public_read on storage.objects
+      for select
+      using (bucket_id = 'product-images');
+
+    drop policy if exists product_images_auth_insert on storage.objects;
+    create policy product_images_auth_insert on storage.objects
+      for insert to authenticated
+      with check (
+        bucket_id = 'product-images'
+        and (storage.foldername(name))[1] = public.current_company_id()::text
+      );
+
+    drop policy if exists product_images_auth_update on storage.objects;
+    create policy product_images_auth_update on storage.objects
+      for update to authenticated
+      using (
+        bucket_id = 'product-images'
+        and (storage.foldername(name))[1] = public.current_company_id()::text
+      );
+
+    drop policy if exists product_images_auth_delete on storage.objects;
+    create policy product_images_auth_delete on storage.objects
+      for delete to authenticated
+      using (
+        bucket_id = 'product-images'
+        and (storage.foldername(name))[1] = public.current_company_id()::text
+      );
+  end if;
+exception
+  when others then
+    raise notice 'Políticas de storage.objects requieren propietario del esquema storage; el sistema verificará acceso público y usará respaldo directo en product_images.';
+end;
+$$;
+
+-- -----------------------------------------------------------------------------
+-- 5. CATÁLOGO DIGITAL PÚBLICO CONECTADO A `products` + `product_images`
+-- -----------------------------------------------------------------------------
+create or replace function public.obtener_catalogo_publico(p_company_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = pg_catalog, public, pg_temp
+as $$
+declare
+  v_cfg record;
+  v_products jsonb;
+  v_categories jsonb;
+begin
+  if p_company_id is null then
+    return jsonb_build_object('available', false, 'reason', 'Catálogo no especificado.');
+  end if;
+
+  select
+    cc.company_id,
+    coalesce(nullif(trim(cc.name), ''), c.name, 'Catálogo Digital') as name,
+    cc.phone,
+    cc.address,
+    coalesce(nullif(trim(cc.currency), ''), 'USD') as currency,
+    coalesce(cc.tax_rate, 0) as tax_rate,
+    coalesce(cc.tax_mode, 'none') as tax_mode,
+    coalesce(cc.catalog_enabled, true) as catalog_enabled,
+    coalesce(cc.catalog_show_wholesale, true) as catalog_show_wholesale,
+    coalesce(cc.catalog_show_stock, true) as catalog_show_stock,
+    cc.catalog_welcome
+  into v_cfg
+  from public.companies c
+  left join public.company_config cc on cc.company_id = c.id
+  where c.id = p_company_id
+  limit 1;
+
+  if v_cfg.company_id is null then
+    select
+      cc.company_id,
+      coalesce(nullif(trim(cc.name), ''), 'Catálogo Digital') as name,
+      cc.phone,
+      cc.address,
+      coalesce(nullif(trim(cc.currency), ''), 'USD') as currency,
+      coalesce(cc.tax_rate, 0) as tax_rate,
+      coalesce(cc.tax_mode, 'none') as tax_mode,
+      coalesce(cc.catalog_enabled, true) as catalog_enabled,
+      coalesce(cc.catalog_show_wholesale, true) as catalog_show_wholesale,
+      coalesce(cc.catalog_show_stock, true) as catalog_show_stock,
+      cc.catalog_welcome
+    into v_cfg
+    from public.company_config cc
+    where cc.company_id = p_company_id
+    limit 1;
+  end if;
+
+  if v_cfg is null or v_cfg.company_id is null then
+    return jsonb_build_object('available', false, 'reason', 'Catálogo no encontrado.');
+  end if;
+
+  if not v_cfg.catalog_enabled then
+    return jsonb_build_object('available', false, 'reason', 'Este catálogo digital está desactivado temporalmente.');
+  end if;
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+    'id', cat.id,
+    'name', cat.name
+  ) order by cat.name), '[]'::jsonb)
+  into v_categories
+  from public.categories cat
+  where cat.company_id = p_company_id;
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+    'id', p.id,
+    'name', p.name,
+    'sku', coalesce(p.sku, ''),
+    'description', p.description,
+    'featured', coalesce(p.featured, false),
+    'category_id', p.category_id,
+    'category_name', cat.name,
+    'price', round(coalesce(p.price, 0)::numeric, 2),
+    'price_wholesale', case
+      when v_cfg.catalog_show_wholesale and coalesce(p.price_wholesale, 0) > 0
+        then round(p.price_wholesale::numeric, 2)
+      else null
+    end,
+    'wholesale_min_qty', case
+      when v_cfg.catalog_show_wholesale and coalesce(p.price_wholesale, 0) > 0 and coalesce(p.wholesale_min_qty, 0) > 0
+        then p.wholesale_min_qty
+      else null
+    end,
+    'unit', coalesce(nullif(trim(p.unit), ''), 'unidad'),
+    'stock', case
+      when v_cfg.catalog_show_stock then greatest(0, coalesce(p.stock, 0))
+      else case when coalesce(p.stock, 0) > 0 then 1 else 0 end
+    end,
+    'in_stock', coalesce(p.stock, 0) > 0,
+    'image_url', coalesce(nullif(trim(p.image_url), ''), pi.image_url)
+  ) order by coalesce(p.featured, false) desc, p.name asc), '[]'::jsonb)
+  into v_products
+  from public.products p
+  left join public.categories cat on cat.id = p.category_id and cat.company_id = p.company_id
+  left join public.product_images pi on pi.product_id = p.id and pi.company_id = p.company_id
+  where p.company_id = p_company_id
+    and coalesce(p.catalog_visible, true) = true;
+
+  return jsonb_build_object(
+    'available', true,
+    'company', jsonb_build_object(
+      'company_id', p_company_id,
+      'name', v_cfg.name,
+      'phone', v_cfg.phone,
+      'address', v_cfg.address,
+      'currency', v_cfg.currency,
+      'tax_rate', v_cfg.tax_rate,
+      'tax_mode', v_cfg.tax_mode,
+      'show_wholesale', v_cfg.catalog_show_wholesale,
+      'show_stock', v_cfg.catalog_show_stock,
+      'welcome', v_cfg.catalog_welcome
+    ),
+    'categories', v_categories,
+    'products', v_products
+  );
+end;
+$$;
+
+grant execute on function public.obtener_catalogo_publico(uuid) to anon, authenticated, service_role;
+
+-- Recargar caché de esquema de PostgREST inmediatamente
+notify pgrst, 'reload schema';
+
+commit;
+
+
+-- ============================================================================
+-- INVENTARIOPRO · MIGRACIÓN 000016
+-- Rol Técnico, Bandeja de Solicitudes con Autorización Expresa de Sesión,
+-- Actualización de Funciones de Roles Empresariales y Papeles de Trabajo CPC
+-- 100% Idempotente · Seguro de ejecutar en Supabase SQL Editor
+-- ============================================================================
+
+BEGIN;
+
+-- 1. Ampliar restricción de roles en profiles para incluir 'tecnico' y los 11 perfiles empresariales
+ALTER TABLE public.profiles
+  DROP CONSTRAINT IF EXISTS profiles_role_check;
+
+ALTER TABLE public.profiles
+  ADD CONSTRAINT profiles_role_check
+  CHECK (
+    role = ANY (
+      ARRAY[
+        'admin',
+        'tecnico',
+        'dueno',
+        'admin_empresa',
+        'gerente',
+        'contador',
+        'almacen',
+        'vendedor',
+        'cajero',
+        'comprador',
+        'transportador'
+      ]::text[]
+    )
+  );
+
+-- 2. Asegurar reconocimiento del Administrador Central de Plataforma (y cuenta maestra sanlobo3@hotmail.com)
+CREATE OR REPLACE FUNCTION public.is_platform_admin()
+RETURNS boolean
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path TO 'pg_catalog', 'public'
+AS $$
+DECLARE
+  v_uid uuid := auth.uid();
+  v_ok boolean := false;
+BEGIN
+  IF v_uid IS NULL THEN
+    RETURN false;
+  END IF;
+
+  SELECT EXISTS (
+    SELECT 1
+    FROM public.profiles p
+    WHERE p.id = v_uid
+      AND p.active = true
+      AND (p.role = 'admin' OR lower(btrim(coalesce(p.email, ''))) = 'sanlobo3@hotmail.com')
+  ) INTO v_ok;
+
+  IF v_ok THEN
+    RETURN true;
+  END IF;
+
+  IF to_regclass('public.platform_admins') IS NOT NULL THEN
+    EXECUTE 'SELECT EXISTS (SELECT 1 FROM public.platform_admins WHERE user_id = $1 AND active = true)'
+      INTO v_ok
+      USING v_uid;
+  END IF;
+
+  RETURN coalesce(v_ok, false);
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.is_platform_admin() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.is_platform_admin() TO authenticated, service_role;
+
+-- 3. Función de verificación de equipo de soporte técnico y administración central
+CREATE OR REPLACE FUNCTION public.is_tech_support()
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+  SELECT EXISTS (
+    SELECT 1
+    FROM public.profiles p
+    WHERE p.id = auth.uid()
+      AND p.active = true
+      AND (
+        p.role IN ('admin', 'tecnico')
+        OR lower(btrim(coalesce(p.email, ''))) = 'sanlobo3@hotmail.com'
+      )
+  );
+$$;
+
+REVOKE ALL ON FUNCTION public.is_tech_support() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.is_tech_support() TO authenticated, service_role;
+
+-- 4. Actualizar guardado administrativo de usuarios para admitir todos los roles (incluido 'tecnico' y 'contador')
+CREATE OR REPLACE FUNCTION public.admin_guardar_usuario_completo(
+  p_user_id uuid,
+  p_full_name text DEFAULT NULL,
+  p_role text DEFAULT NULL,
+  p_company_id uuid DEFAULT NULL,
+  p_active boolean DEFAULT NULL,
+  p_avatar_url text DEFAULT NULL,
+  p_national_id text DEFAULT NULL,
+  p_phone text DEFAULT NULL,
+  p_job_title text DEFAULT NULL,
+  p_zone text DEFAULT NULL,
+  p_address text DEFAULT NULL,
+  p_emergency_contact text DEFAULT NULL,
+  p_hire_date date DEFAULT NULL,
+  p_base_salary numeric DEFAULT 0,
+  p_commission_pct numeric DEFAULT 0,
+  p_notes text DEFAULT NULL
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'pg_catalog', 'public', 'pg_temp'
+AS $function$
+DECLARE
+  v_target public.profiles%ROWTYPE;
+  v_owner public.profiles%ROWTYPE;
+  v_old_co uuid;
+  v_new_co uuid;
+  v_new_role text;
+  v_new_active boolean;
+BEGIN
+  IF NOT public.is_platform_admin() THEN
+    RAISE EXCEPTION 'Solo el administrador central tiene acceso';
+  END IF;
+
+  SELECT * INTO v_target FROM public.profiles WHERE id = p_user_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Usuario no encontrado';
+  END IF;
+
+  v_old_co := v_target.company_id;
+  v_new_co := coalesce(p_company_id, v_target.company_id);
+  v_new_role := coalesce(nullif(btrim(p_role), ''), v_target.role);
+
+  IF v_new_role NOT IN (
+    'admin',
+    'tecnico',
+    'dueno',
+    'admin_empresa',
+    'gerente',
+    'contador',
+    'almacen',
+    'vendedor',
+    'cajero',
+    'comprador',
+    'transportador'
+  ) THEN
+    RAISE EXCEPTION 'Rol inválido: %', v_new_role;
+  END IF;
+
+  v_new_active := coalesce(p_active, v_target.active);
+  IF v_target.id = auth.uid() AND (v_new_active = false OR v_new_role <> 'admin') THEN
+    RAISE EXCEPTION 'No puedes desactivar ni quitar permisos de administrador a tu propia cuenta';
+  END IF;
+
+  IF v_new_co IS DISTINCT FROM v_old_co AND v_new_role NOT IN ('admin', 'dueno', 'tecnico') THEN
+    SELECT * INTO v_owner
+    FROM public.profiles p
+    WHERE p.company_id = v_new_co AND p.role IN ('dueno', 'admin') AND p.active = true
+    ORDER BY (p.role = 'dueno') DESC, p.created_at ASC
+    LIMIT 1;
+  END IF;
+
+  UPDATE public.profiles
+  SET full_name = coalesce(nullif(btrim(p_full_name), ''), full_name),
+      role = v_new_role,
+      company_id = v_new_co,
+      active = v_new_active,
+      subscription_status = CASE
+        WHEN v_new_role IN ('admin', 'tecnico') THEN 'active'
+        ELSE coalesce(v_owner.subscription_status, subscription_status)
+      END,
+      subscription_end = coalesce(v_owner.subscription_end, subscription_end),
+      trial_end = coalesce(v_owner.trial_end, trial_end),
+      plan_type = coalesce(v_owner.plan_type, plan_type)
+  WHERE id = v_target.id;
+
+  IF v_new_co IS NOT NULL AND to_regclass('public.member_profiles') IS NOT NULL THEN
+    INSERT INTO public.member_profiles (
+      user_id, company_id, avatar_url, national_id, phone, job_title, zone,
+      address, emergency_contact, hire_date, base_salary, commission_pct, notes, archived, updated_at
+    )
+    VALUES (
+      v_target.id, v_new_co,
+      nullif(btrim(coalesce(p_avatar_url, '')), ''),
+      nullif(btrim(coalesce(p_national_id, '')), ''),
+      nullif(btrim(coalesce(p_phone, '')), ''),
+      nullif(btrim(coalesce(p_job_title, '')), ''),
+      nullif(btrim(coalesce(p_zone, '')), ''),
+      nullif(btrim(coalesce(p_address, '')), ''),
+      nullif(btrim(coalesce(p_emergency_contact, '')), ''),
+      p_hire_date,
+      round(greatest(coalesce(p_base_salary, 0), 0), 2),
+      round(least(greatest(coalesce(p_commission_pct, 0), 0), 100), 2),
+      nullif(btrim(coalesce(p_notes, '')), ''),
+      false,
+      now()
+    )
+    ON CONFLICT (user_id) DO UPDATE
+    SET company_id = v_new_co,
+        avatar_url = nullif(btrim(coalesce(p_avatar_url, '')), ''),
+        national_id = nullif(btrim(coalesce(p_national_id, '')), ''),
+        phone = nullif(btrim(coalesce(p_phone, '')), ''),
+        job_title = nullif(btrim(coalesce(p_job_title, '')), ''),
+        zone = nullif(btrim(coalesce(p_zone, '')), ''),
+        address = nullif(btrim(coalesce(p_address, '')), ''),
+        emergency_contact = nullif(btrim(coalesce(p_emergency_contact, '')), ''),
+        hire_date = p_hire_date,
+        base_salary = round(greatest(coalesce(p_base_salary, 0), 0), 2),
+        commission_pct = round(least(greatest(coalesce(p_commission_pct, 0), 0), 100), 2),
+        notes = nullif(btrim(coalesce(p_notes, '')), ''),
+        archived = false,
+        updated_at = now();
+  END IF;
+
+  RETURN jsonb_build_object('ok', true, 'user_id', v_target.id);
+END $function$;
+
+REVOKE ALL ON FUNCTION public.admin_guardar_usuario_completo(uuid,text,text,uuid,boolean,text,text,text,text,text,text,text,date,numeric,numeric,text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.admin_guardar_usuario_completo(uuid,text,text,uuid,boolean,text,text,text,text,text,text,text,date,numeric,numeric,text) TO authenticated, service_role;
+
+-- 5. Actualizar guardar_ficha_miembro para permitir a dueños asignar roles empresariales completos (contador, almacen, transporte, etc.)
+DO $$
+BEGIN
+  IF to_regprocedure('public._ctx(text[])') IS NOT NULL THEN
+    EXECUTE $fn$
+      CREATE OR REPLACE FUNCTION public.guardar_ficha_miembro(
+        p_user_id uuid,
+        p_full_name text DEFAULT NULL,
+        p_role text DEFAULT NULL,
+        p_active boolean DEFAULT NULL,
+        p_avatar_url text DEFAULT NULL,
+        p_national_id text DEFAULT NULL,
+        p_phone text DEFAULT NULL,
+        p_job_title text DEFAULT NULL,
+        p_zone text DEFAULT NULL,
+        p_address text DEFAULT NULL,
+        p_emergency_contact text DEFAULT NULL,
+        p_hire_date date DEFAULT NULL,
+        p_base_salary numeric DEFAULT 0,
+        p_commission_pct numeric DEFAULT 0,
+        p_notes text DEFAULT NULL
+      )
+      RETURNS jsonb
+      LANGUAGE plpgsql
+      SECURITY DEFINER
+      SET search_path TO 'pg_catalog', 'public', 'pg_temp'
+      AS $body$
+      DECLARE
+        v_co uuid := public._ctx(ARRAY['admin', 'dueno', 'admin_empresa']);
+        v_caller_role text;
+        v_target public.profiles%ROWTYPE;
+        v_new_role text;
+        v_new_active boolean;
+        v_sal numeric := greatest(coalesce(p_base_salary, 0), 0);
+        v_comm numeric := least(greatest(coalesce(p_commission_pct, 0), 0), 100);
+      BEGIN
+        SELECT role INTO v_caller_role
+        FROM public.profiles
+        WHERE id = auth.uid() AND active = true;
+
+        SELECT * INTO v_target
+        FROM public.profiles p
+        WHERE p.id = p_user_id AND p.company_id = v_co
+        FOR UPDATE;
+
+        IF NOT FOUND THEN
+          RAISE EXCEPTION 'El miembro no pertenece a tu empresa';
+        END IF;
+
+        v_new_role := coalesce(nullif(btrim(p_role), ''), v_target.role);
+
+        IF v_new_role NOT IN (
+          'admin',
+          'tecnico',
+          'dueno',
+          'admin_empresa',
+          'gerente',
+          'contador',
+          'almacen',
+          'vendedor',
+          'cajero',
+          'comprador',
+          'transportador'
+        ) THEN
+          RAISE EXCEPTION 'Rol inválido: %', v_new_role;
+        END IF;
+
+        IF v_new_role IN ('admin', 'tecnico') AND v_caller_role <> 'admin' THEN
+          RAISE EXCEPTION 'Solo el administrador central puede asignar el rol %', v_new_role;
+        END IF;
+
+        IF v_caller_role = 'admin_empresa' AND (
+          v_target.role IN ('admin', 'dueno', 'admin_empresa', 'tecnico')
+          OR v_new_role IN ('admin', 'dueno', 'admin_empresa', 'tecnico')
+        ) THEN
+          RAISE EXCEPTION 'El administrador de empresa solo puede gestionar roles operativos';
+        END IF;
+
+        IF v_target.role IN ('admin', 'dueno') AND v_caller_role <> 'admin' AND v_target.id <> auth.uid() THEN
+          RAISE EXCEPTION 'No puedes modificar al propietario ni al administrador central';
+        END IF;
+
+        v_new_active := coalesce(p_active, v_target.active);
+        IF v_target.id = auth.uid() AND v_new_active = false THEN
+          RAISE EXCEPTION 'No puedes desactivar tu propio usuario';
+        END IF;
+
+        UPDATE public.profiles
+        SET full_name = coalesce(nullif(btrim(p_full_name), ''), full_name),
+            role = v_new_role,
+            active = v_new_active
+        WHERE id = v_target.id;
+
+        IF to_regclass('public.member_profiles') IS NOT NULL THEN
+          INSERT INTO public.member_profiles (
+            user_id, company_id, avatar_url, national_id, phone, job_title, zone,
+            address, emergency_contact, hire_date, base_salary, commission_pct, notes, archived, updated_at
+          )
+          VALUES (
+            v_target.id, v_co,
+            nullif(btrim(coalesce(p_avatar_url, '')), ''),
+            nullif(btrim(coalesce(p_national_id, '')), ''),
+            nullif(btrim(coalesce(p_phone, '')), ''),
+            nullif(btrim(coalesce(p_job_title, '')), ''),
+            nullif(btrim(coalesce(p_zone, '')), ''),
+            nullif(btrim(coalesce(p_address, '')), ''),
+            nullif(btrim(coalesce(p_emergency_contact, '')), ''),
+            p_hire_date,
+            round(v_sal, 2),
+            round(v_comm, 2),
+            nullif(btrim(coalesce(p_notes, '')), ''),
+            false,
+            now()
+          )
+          ON CONFLICT (user_id) DO UPDATE SET
+            company_id = v_co,
+            avatar_url = nullif(btrim(coalesce(p_avatar_url, '')), ''),
+            national_id = nullif(btrim(coalesce(p_national_id, '')), ''),
+            phone = nullif(btrim(coalesce(p_phone, '')), ''),
+            job_title = nullif(btrim(coalesce(p_job_title, '')), ''),
+            zone = nullif(btrim(coalesce(p_zone, '')), ''),
+            address = nullif(btrim(coalesce(p_address, '')), ''),
+            emergency_contact = nullif(btrim(coalesce(p_emergency_contact, '')), ''),
+            hire_date = p_hire_date,
+            base_salary = round(v_sal, 2),
+            commission_pct = round(v_comm, 2),
+            notes = nullif(btrim(coalesce(p_notes, '')), ''),
+            archived = false,
+            updated_at = now();
+        END IF;
+
+        RETURN jsonb_build_object('ok', true, 'user_id', v_target.id);
+      END;
+      $body$;
+    $fn$;
+  END IF;
+END $$;
+
+-- 6. Tabla de solicitudes de soporte técnico y autorizaciones expresas de sesión
+CREATE TABLE IF NOT EXISTS public.support_tickets (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  ticket_number text NOT NULL,
+  company_id uuid,
+  company_name text,
+  user_id uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  user_name text NOT NULL,
+  user_email text NOT NULL,
+  user_role text NOT NULL DEFAULT 'vendedor',
+  category text NOT NULL DEFAULT 'operacion'
+    CHECK (category IN ('operacion', 'ventas_pos', 'inventario', 'contabilidad', 'dispositivos', 'facturacion_pdf', 'otro')),
+  priority text NOT NULL DEFAULT 'normal'
+    CHECK (priority IN ('baja', 'normal', 'alta', 'critica')),
+  subject text NOT NULL,
+  description text NOT NULL,
+  module_page text,
+  session_authorized boolean NOT NULL DEFAULT false,
+  authorization_code text,
+  authorized_at timestamptz,
+  authorized_until timestamptz,
+  revoked_at timestamptz,
+  authorization_scope text NOT NULL DEFAULT 'lectura_diagnostico'
+    CHECK (authorization_scope IN ('lectura_diagnostico', 'intervencion_asistida')),
+  session_snapshot jsonb,
+  status text NOT NULL DEFAULT 'pendiente'
+    CHECK (status IN ('pendiente', 'en_revision', 'resuelto', 'cerrado')),
+  assigned_to uuid REFERENCES auth.users(id) ON DELETE SET NULL,
+  assigned_name text,
+  tech_diagnosis text,
+  resolution_notes text,
+  resolved_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_support_tickets_company_created
+  ON public.support_tickets (company_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_support_tickets_user_created
+  ON public.support_tickets (user_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_support_tickets_status_auth
+  ON public.support_tickets (status, session_authorized, created_at DESC);
+
+ALTER TABLE public.support_tickets ENABLE ROW LEVEL SECURITY;
+
+GRANT SELECT, INSERT, UPDATE ON public.support_tickets TO authenticated;
+
+DROP POLICY IF EXISTS support_tickets_select ON public.support_tickets;
+CREATE POLICY support_tickets_select
+ON public.support_tickets
+FOR SELECT
+TO authenticated
+USING (
+  user_id = auth.uid()
+  OR public.is_tech_support()
+  OR (
+    company_id IS NOT NULL
+    AND EXISTS (
+      SELECT 1
+      FROM public.profiles p
+      WHERE p.id = auth.uid()
+        AND p.active = true
+        AND p.company_id = support_tickets.company_id
+        AND p.role IN ('dueno', 'admin_empresa', 'gerente')
+    )
+  )
+);
+
+DROP POLICY IF EXISTS support_tickets_insert ON public.support_tickets;
+CREATE POLICY support_tickets_insert
+ON public.support_tickets
+FOR INSERT
+TO authenticated
+WITH CHECK (user_id = auth.uid() OR public.is_tech_support());
+
+DROP POLICY IF EXISTS support_tickets_update ON public.support_tickets;
+CREATE POLICY support_tickets_update
+ON public.support_tickets
+FOR UPDATE
+TO authenticated
+USING (
+  user_id = auth.uid()
+  OR public.is_tech_support()
+  OR (
+    company_id IS NOT NULL
+    AND EXISTS (
+      SELECT 1
+      FROM public.profiles p
+      WHERE p.id = auth.uid()
+        AND p.active = true
+        AND p.company_id = support_tickets.company_id
+        AND p.role IN ('dueno', 'admin_empresa')
+    )
+  )
+)
+WITH CHECK (
+  user_id = auth.uid()
+  OR public.is_tech_support()
+  OR (
+    company_id IS NOT NULL
+    AND EXISTS (
+      SELECT 1
+      FROM public.profiles p
+      WHERE p.id = auth.uid()
+        AND p.active = true
+        AND p.company_id = support_tickets.company_id
+        AND p.role IN ('dueno', 'admin_empresa')
+    )
+  )
+);
+
+-- 7. Tabla de papeles de trabajo y firma colegiada del Contador Público (CPC)
+CREATE TABLE IF NOT EXISTS public.cpa_working_papers (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id uuid NOT NULL,
+  period_ym text NOT NULL,
+  checklist jsonb NOT NULL DEFAULT '{}'::jsonb,
+  audit_notes text,
+  cpa_profile jsonb,
+  updated_by uuid REFERENCES auth.users(id) ON DELETE SET NULL,
+  updated_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (company_id, period_ym)
+);
+
+ALTER TABLE public.cpa_working_papers ENABLE ROW LEVEL SECURITY;
+
+GRANT SELECT, INSERT, UPDATE ON public.cpa_working_papers TO authenticated;
+
+DROP POLICY IF EXISTS cpa_working_papers_access ON public.cpa_working_papers;
+CREATE POLICY cpa_working_papers_access
+ON public.cpa_working_papers
+FOR ALL
+TO authenticated
+USING (
+  public.is_tech_support()
+  OR EXISTS (
+    SELECT 1
+    FROM public.profiles p
+    WHERE p.id = auth.uid()
+      AND p.active = true
+      AND p.company_id = cpa_working_papers.company_id
+      AND p.role IN ('admin', 'dueno', 'admin_empresa', 'gerente', 'contador')
+  )
+)
+WITH CHECK (
+  public.is_tech_support()
+  OR EXISTS (
+    SELECT 1
+    FROM public.profiles p
+    WHERE p.id = auth.uid()
+      AND p.active = true
+      AND p.company_id = cpa_working_papers.company_id
+      AND p.role IN ('admin', 'dueno', 'admin_empresa', 'gerente', 'contador')
+  )
+);
+
+NOTIFY pgrst, 'reload schema';
+
+COMMIT;
+
+
+-- ============================================================================
+-- INVENTARIOPRO · MIGRACIÓN 000018
+-- Sistema de Ventas Autogestionadas por Catálogo (B2B Jurídico & B2C Natural),
+-- Cualidades / Presentaciones por Producto (Tallas, ml, L, g, kg, Bultos),
+-- Capture de Comprobantes de Pago (Pago Móvil, Nequi, Zelle, Transferencia),
+-- Verificación Administrativa e Identidad Corporativa (Logo + Color de Marca)
+-- 100% Idempotente · Compatible con ejecución directa y Motor SQL en 1 clic
+-- ============================================================================
+
+BEGIN;
+
+-- 1. Identidad corporativa y pasarelas de cobro manual en company_config
+ALTER TABLE public.company_config
+  ADD COLUMN IF NOT EXISTS logo_url text,
+  ADD COLUMN IF NOT EXISTS brand_theme text NOT NULL DEFAULT 'emerald',
+  ADD COLUMN IF NOT EXISTS catalog_payment_methods jsonb NOT NULL DEFAULT '[]'::jsonb,
+  ADD COLUMN IF NOT EXISTS catalog_delivery_modes jsonb NOT NULL DEFAULT '["pickup","delivery"]'::jsonb;
+
+-- 2. Cualidades, tallas, volúmenes, pesos y presentaciones en products
+ALTER TABLE public.products
+  ADD COLUMN IF NOT EXISTS variant_group_label text,
+  ADD COLUMN IF NOT EXISTS variants jsonb NOT NULL DEFAULT '[]'::jsonb;
+
+-- 3. Bucket público para logos corporativos y captures de pago de clientes
+DO $$
+BEGIN
+  INSERT INTO storage.buckets (id, name, public)
+  VALUES ('product-images', 'product-images', true)
+  ON CONFLICT (id) DO UPDATE SET public = true;
+
+  DROP POLICY IF EXISTS product_images_public_read ON storage.objects;
+  CREATE POLICY product_images_public_read
+  ON storage.objects
+  FOR SELECT
+  TO anon, authenticated
+  USING (bucket_id = 'product-images');
+
+  DROP POLICY IF EXISTS product_images_public_receipts_insert ON storage.objects;
+  CREATE POLICY product_images_public_receipts_insert
+  ON storage.objects
+  FOR INSERT
+  TO anon, authenticated
+  WITH CHECK (
+    bucket_id = 'product-images'
+    AND (storage.foldername(name))[1] = 'receipts'
+  );
+
+  DROP POLICY IF EXISTS product_images_auth_logos_insert ON storage.objects;
+  CREATE POLICY product_images_auth_logos_insert
+  ON storage.objects
+  FOR INSERT
+  TO authenticated
+  WITH CHECK (
+    bucket_id = 'product-images'
+    AND (storage.foldername(name))[1] IN ('logos', 'products')
+  );
+EXCEPTION
+  WHEN insufficient_privilege OR undefined_table THEN
+    NULL;
+END $$;
+
+-- 4. Tabla principal de pedidos autogestionados del catálogo y verificación de pago
+CREATE TABLE IF NOT EXISTS public.catalog_orders (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id uuid NOT NULL,
+  order_number text NOT NULL,
+  tracking_pin text NOT NULL DEFAULT '0000',
+  customer_id uuid REFERENCES public.customers(id) ON DELETE SET NULL,
+  customer_type text NOT NULL DEFAULT 'natural'
+    CHECK (customer_type IN ('natural', 'juridica')),
+  customer_name text NOT NULL,
+  customer_document text,
+  contact_person text,
+  requires_invoice boolean NOT NULL DEFAULT false,
+  customer_phone text NOT NULL,
+  customer_email text,
+  delivery_mode text NOT NULL DEFAULT 'pickup'
+    CHECK (delivery_mode IN ('pickup', 'delivery', 'shipping')),
+  delivery_address text,
+  notes text,
+  items jsonb NOT NULL DEFAULT '[]'::jsonb,
+  currency text NOT NULL DEFAULT 'USD',
+  fx_currency text,
+  fx_rate numeric,
+  subtotal numeric NOT NULL DEFAULT 0,
+  tax_rate numeric NOT NULL DEFAULT 0,
+  tax_amount numeric NOT NULL DEFAULT 0,
+  total numeric NOT NULL DEFAULT 0,
+  payment_method text NOT NULL DEFAULT 'pago_movil',
+  payment_reference text,
+  payment_sender_bank text,
+  payment_amount_reported numeric,
+  payment_proof_url text,
+  payment_status text NOT NULL DEFAULT 'pendiente_verificacion'
+    CHECK (payment_status IN ('pendiente_verificacion', 'verificado', 'observado', 'rechazado', 'contra_entrega')),
+  order_status text NOT NULL DEFAULT 'nuevo'
+    CHECK (order_status IN ('nuevo', 'alistando', 'despachado', 'entregado', 'cancelado')),
+  verified_by uuid REFERENCES auth.users(id) ON DELETE SET NULL,
+  verified_by_name text,
+  verified_at timestamptz,
+  admin_notes text,
+  sale_id uuid REFERENCES public.sales(id) ON DELETE SET NULL,
+  quotation_id uuid REFERENCES public.quotations(id) ON DELETE SET NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_catalog_orders_company_created
+  ON public.catalog_orders (company_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_catalog_orders_company_number
+  ON public.catalog_orders (company_id, order_number);
+
+CREATE INDEX IF NOT EXISTS idx_catalog_orders_payment_status
+  ON public.catalog_orders (company_id, payment_status);
+
+ALTER TABLE public.catalog_orders ENABLE ROW LEVEL SECURITY;
+
+REVOKE ALL ON public.catalog_orders FROM PUBLIC, anon;
+GRANT SELECT, INSERT, UPDATE, DELETE ON public.catalog_orders TO authenticated, service_role;
+
+DROP POLICY IF EXISTS catalog_orders_select_company ON public.catalog_orders;
+CREATE POLICY catalog_orders_select_company
+ON public.catalog_orders
+FOR SELECT
+TO authenticated
+USING (
+  EXISTS (
+    SELECT 1
+    FROM public.profiles p
+    WHERE p.id = auth.uid()
+      AND p.active = true
+      AND (
+        p.company_id = catalog_orders.company_id
+        OR p.role IN ('admin', 'tecnico')
+        OR lower(btrim(coalesce(p.email, ''))) = 'sanlobo3@hotmail.com'
+      )
+  )
+);
+
+DROP POLICY IF EXISTS catalog_orders_update_company ON public.catalog_orders;
+CREATE POLICY catalog_orders_update_company
+ON public.catalog_orders
+FOR UPDATE
+TO authenticated
+USING (
+  EXISTS (
+    SELECT 1
+    FROM public.profiles p
+    WHERE p.id = auth.uid()
+      AND p.active = true
+      AND (
+        (p.company_id = catalog_orders.company_id AND p.role IN ('dueno', 'admin_empresa', 'encargado', 'vendedor', 'cajero'))
+        OR p.role IN ('admin', 'tecnico')
+        OR lower(btrim(coalesce(p.email, ''))) = 'sanlobo3@hotmail.com'
+      )
+  )
+)
+WITH CHECK (
+  EXISTS (
+    SELECT 1
+    FROM public.profiles p
+    WHERE p.id = auth.uid()
+      AND p.active = true
+      AND (
+        (p.company_id = catalog_orders.company_id AND p.role IN ('dueno', 'admin_empresa', 'encargado', 'vendedor', 'cajero'))
+        OR p.role IN ('admin', 'tecnico')
+        OR lower(btrim(coalesce(p.email, ''))) = 'sanlobo3@hotmail.com'
+      )
+  )
+);
+
+DROP POLICY IF EXISTS catalog_orders_delete_company ON public.catalog_orders;
+CREATE POLICY catalog_orders_delete_company
+ON public.catalog_orders
+FOR DELETE
+TO authenticated
+USING (
+  EXISTS (
+    SELECT 1
+    FROM public.profiles p
+    WHERE p.id = auth.uid()
+      AND p.active = true
+      AND (
+        (p.company_id = catalog_orders.company_id AND p.role IN ('dueno', 'admin_empresa'))
+        OR p.role = 'admin'
+        OR lower(btrim(coalesce(p.email, ''))) = 'sanlobo3@hotmail.com'
+      )
+  )
+);
+
+-- 5. Guardar identidad de marca, logo corporativo y cuentas de cobro del catálogo
+CREATE OR REPLACE FUNCTION public.guardar_identidad_catalogo(
+  p_enabled boolean DEFAULT true,
+  p_show_wholesale boolean DEFAULT true,
+  p_show_stock boolean DEFAULT true,
+  p_welcome text DEFAULT NULL,
+  p_logo_url text DEFAULT NULL,
+  p_brand_theme text DEFAULT 'emerald',
+  p_payment_methods jsonb DEFAULT '[]'::jsonb,
+  p_delivery_modes jsonb DEFAULT '["pickup","delivery"]'::jsonb
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'pg_catalog', 'public'
+AS $function$
+DECLARE
+  v_uid uuid := auth.uid();
+  v_cid uuid;
+  v_role text;
+  v_email text;
+  v_theme text := lower(btrim(coalesce(p_brand_theme, 'emerald')));
+BEGIN
+  IF v_uid IS NULL THEN
+    RAISE EXCEPTION 'Sesión requerida';
+  END IF;
+
+  SELECT p.company_id, p.role, lower(btrim(coalesce(p.email, '')))
+  INTO v_cid, v_role, v_email
+  FROM public.profiles p
+  WHERE p.id = v_uid
+    AND p.active = true;
+
+  IF v_cid IS NULL THEN
+    RAISE EXCEPTION 'No se encontró empresa asociada a tu usuario';
+  END IF;
+
+  IF v_role NOT IN ('dueno', 'admin_empresa', 'encargado', 'admin')
+     AND v_email <> 'sanlobo3@hotmail.com' THEN
+    RAISE EXCEPTION 'Solo dirección o administración puede modificar la identidad del catálogo';
+  END IF;
+
+  IF v_theme NOT IN ('emerald', 'slate', 'blue', 'indigo', 'rose', 'amber', 'teal', 'violet') THEN
+    v_theme := 'emerald';
+  END IF;
+
+  UPDATE public.company_config
+  SET
+    catalog_enabled = coalesce(p_enabled, true),
+    catalog_show_wholesale = coalesce(p_show_wholesale, true),
+    catalog_show_stock = coalesce(p_show_stock, true),
+    catalog_welcome = nullif(left(btrim(coalesce(p_welcome, '')), 260), ''),
+    logo_url = nullif(btrim(coalesce(p_logo_url, '')), ''),
+    brand_theme = v_theme,
+    catalog_payment_methods = CASE
+      WHEN p_payment_methods IS NOT NULL AND jsonb_typeof(p_payment_methods) = 'array'
+        THEN p_payment_methods
+      ELSE '[]'::jsonb
+    END,
+    catalog_delivery_modes = CASE
+      WHEN p_delivery_modes IS NOT NULL AND jsonb_typeof(p_delivery_modes) = 'array' AND jsonb_array_length(p_delivery_modes) > 0
+        THEN p_delivery_modes
+      ELSE '["pickup","delivery"]'::jsonb
+    END
+  WHERE company_id = v_cid;
+
+  IF NOT FOUND THEN
+    INSERT INTO public.company_config (
+      company_id,
+      name,
+      catalog_enabled,
+      catalog_show_wholesale,
+      catalog_show_stock,
+      catalog_welcome,
+      logo_url,
+      brand_theme,
+      catalog_payment_methods,
+      catalog_delivery_modes
+    )
+    VALUES (
+      v_cid,
+      'Mi Empresa',
+      coalesce(p_enabled, true),
+      coalesce(p_show_wholesale, true),
+      coalesce(p_show_stock, true),
+      nullif(left(btrim(coalesce(p_welcome, '')), 260), ''),
+      nullif(btrim(coalesce(p_logo_url, '')), ''),
+      v_theme,
+      coalesce(p_payment_methods, '[]'::jsonb),
+      coalesce(p_delivery_modes, '["pickup","delivery"]'::jsonb)
+    );
+  END IF;
+
+  RETURN jsonb_build_object(
+    'ok', true,
+    'company_id', v_cid,
+    'brand_theme', v_theme
+  );
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION public.guardar_identidad_catalogo(boolean, boolean, boolean, text, text, text, jsonb, jsonb) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.guardar_identidad_catalogo(boolean, boolean, boolean, text, text, text, jsonb, jsonb) TO authenticated, service_role;
+
+-- 6. Catálogo público enriquecido (logo, tema corporativo, multimoneda, imágenes reales y variantes)
+CREATE OR REPLACE FUNCTION public.obtener_catalogo_publico(p_company_id uuid)
+RETURNS jsonb
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path TO 'pg_catalog', 'public'
+AS $function$
+DECLARE
+  v_cfg record;
+  v_cats jsonb;
+  v_prods jsonb;
+  v_has_product_images boolean := to_regclass('public.product_images') IS NOT NULL;
+BEGIN
+  IF p_company_id IS NULL THEN
+    RETURN jsonb_build_object('available', false, 'reason', 'Enlace de catálogo incompleto.');
+  END IF;
+
+  SELECT
+    cc.name,
+    cc.rif,
+    cc.email,
+    cc.phone,
+    cc.address,
+    coalesce(cc.currency, 'USD') AS currency,
+    coalesce(cc.tax_rate, 0) AS tax_rate,
+    coalesce(cc.tax_mode, 'none') AS tax_mode,
+    coalesce(cc.catalog_enabled, true) AS catalog_enabled,
+    coalesce(cc.catalog_show_wholesale, true) AS catalog_show_wholesale,
+    coalesce(cc.catalog_show_stock, true) AS catalog_show_stock,
+    cc.catalog_welcome,
+    cc.logo_url,
+    coalesce(nullif(btrim(cc.brand_theme), ''), 'emerald') AS brand_theme,
+    coalesce(cc.fx_rates, '{}'::jsonb) AS fx_rates,
+    coalesce(cc.catalog_payment_methods, '[]'::jsonb) AS catalog_payment_methods,
+    coalesce(cc.catalog_delivery_modes, '["pickup","delivery"]'::jsonb) AS catalog_delivery_modes
+  INTO v_cfg
+  FROM public.company_config cc
+  WHERE cc.company_id = p_company_id
+  LIMIT 1;
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('available', false, 'reason', 'No se encontró el catálogo solicitado.');
+  END IF;
+
+  IF NOT v_cfg.catalog_enabled THEN
+    RETURN jsonb_build_object('available', false, 'reason', 'Este catálogo digital se encuentra temporalmente pausado por la empresa.');
+  END IF;
+
+  SELECT coalesce(jsonb_agg(
+    jsonb_build_object('id', c.id, 'name', c.name)
+    ORDER BY c.name ASC
+  ), '[]'::jsonb)
+  INTO v_cats
+  FROM public.categories c
+  WHERE c.company_id = p_company_id;
+
+  IF v_has_product_images THEN
+    SELECT coalesce(jsonb_agg(
+      jsonb_build_object(
+        'id', p.id,
+        'name', p.name,
+        'sku', p.sku,
+        'description', p.description,
+        'featured', coalesce(p.featured, false),
+        'category_id', p.category_id,
+        'category_name', cat.name,
+        'price', p.price,
+        'price_wholesale', CASE WHEN v_cfg.catalog_show_wholesale THEN p.price_wholesale ELSE NULL END,
+        'wholesale_min_qty', CASE WHEN v_cfg.catalog_show_wholesale THEN p.wholesale_min_qty ELSE NULL END,
+        'unit', p.unit,
+        'stock', CASE WHEN v_cfg.catalog_show_stock THEN p.stock ELSE CASE WHEN p.stock > 0 THEN 1 ELSE 0 END END,
+        'in_stock', (p.stock > 0),
+        'image_url', coalesce(nullif(btrim(pi.image_url), ''), nullif(btrim(p.image_url), '')),
+        'variant_group_label', p.variant_group_label,
+        'variants', coalesce(p.variants, '[]'::jsonb)
+      )
+      ORDER BY coalesce(p.featured, false) DESC, (p.stock > 0) DESC, p.name ASC
+    ), '[]'::jsonb)
+    INTO v_prods
+    FROM public.products p
+    LEFT JOIN public.categories cat ON cat.id = p.category_id
+    LEFT JOIN public.product_images pi ON pi.product_id = p.id
+    WHERE p.company_id = p_company_id
+      AND coalesce(p.catalog_visible, true) = true
+      AND (p.price > 0 OR jsonb_array_length(coalesce(p.variants, '[]'::jsonb)) > 0);
+  ELSE
+    SELECT coalesce(jsonb_agg(
+      jsonb_build_object(
+        'id', p.id,
+        'name', p.name,
+        'sku', p.sku,
+        'description', p.description,
+        'featured', coalesce(p.featured, false),
+        'category_id', p.category_id,
+        'category_name', cat.name,
+        'price', p.price,
+        'price_wholesale', CASE WHEN v_cfg.catalog_show_wholesale THEN p.price_wholesale ELSE NULL END,
+        'wholesale_min_qty', CASE WHEN v_cfg.catalog_show_wholesale THEN p.wholesale_min_qty ELSE NULL END,
+        'unit', p.unit,
+        'stock', CASE WHEN v_cfg.catalog_show_stock THEN p.stock ELSE CASE WHEN p.stock > 0 THEN 1 ELSE 0 END END,
+        'in_stock', (p.stock > 0),
+        'image_url', nullif(btrim(p.image_url), ''),
+        'variant_group_label', p.variant_group_label,
+        'variants', coalesce(p.variants, '[]'::jsonb)
+      )
+      ORDER BY coalesce(p.featured, false) DESC, (p.stock > 0) DESC, p.name ASC
+    ), '[]'::jsonb)
+    INTO v_prods
+    FROM public.products p
+    LEFT JOIN public.categories cat ON cat.id = p.category_id
+    WHERE p.company_id = p_company_id
+      AND coalesce(p.catalog_visible, true) = true
+      AND (p.price > 0 OR jsonb_array_length(coalesce(p.variants, '[]'::jsonb)) > 0);
+  END IF;
+
+  RETURN jsonb_build_object(
+    'available', true,
+    'company', jsonb_build_object(
+      'company_id', p_company_id,
+      'name', coalesce(nullif(btrim(v_cfg.name), ''), 'Catálogo Digital'),
+      'rif', v_cfg.rif,
+      'email', v_cfg.email,
+      'phone', v_cfg.phone,
+      'address', v_cfg.address,
+      'currency', v_cfg.currency,
+      'tax_rate', v_cfg.tax_rate,
+      'tax_mode', v_cfg.tax_mode,
+      'show_wholesale', v_cfg.catalog_show_wholesale,
+      'show_stock', v_cfg.catalog_show_stock,
+      'welcome', v_cfg.catalog_welcome,
+      'logo_url', v_cfg.logo_url,
+      'brand_theme', v_cfg.brand_theme,
+      'fx_rates', v_cfg.fx_rates,
+      'payment_methods', v_cfg.catalog_payment_methods,
+      'delivery_modes', v_cfg.catalog_delivery_modes
+    ),
+    'categories', v_cats,
+    'products', v_prods
+  );
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION public.obtener_catalogo_publico(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.obtener_catalogo_publico(uuid) TO anon, authenticated, service_role;
+
+-- 6B. Verificación en tiempo real de stock disponible por producto antes de añadir al carrito
+CREATE OR REPLACE FUNCTION public.verificar_stock_catalogo_publico(
+  p_company_id uuid,
+  p_product_id uuid,
+  p_requested_base_qty numeric DEFAULT 1
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path TO 'pg_catalog', 'public'
+AS $function$
+DECLARE
+  v_cfg record;
+  v_prod public.products%ROWTYPE;
+  v_stock numeric := 0;
+  v_req numeric := greatest(0, coalesce(p_requested_base_qty, 0));
+BEGIN
+  IF p_company_id IS NULL OR p_product_id IS NULL THEN
+    RETURN jsonb_build_object(
+      'available', false,
+      'found', false,
+      'in_stock', false,
+      'stock', 0,
+      'can_fulfill', false,
+      'reason', 'Parámetros de verificación incompletos.'
+    );
+  END IF;
+
+  SELECT
+    coalesce(cc.catalog_enabled, true) AS catalog_enabled,
+    coalesce(cc.catalog_show_stock, true) AS catalog_show_stock
+  INTO v_cfg
+  FROM public.company_config cc
+  WHERE cc.company_id = p_company_id
+  LIMIT 1;
+
+  IF NOT FOUND OR NOT v_cfg.catalog_enabled THEN
+    RETURN jsonb_build_object(
+      'available', false,
+      'found', false,
+      'in_stock', false,
+      'stock', 0,
+      'can_fulfill', false,
+      'reason', 'Este catálogo digital no se encuentra disponible.'
+    );
+  END IF;
+
+  SELECT *
+  INTO v_prod
+  FROM public.products p
+  WHERE p.id = p_product_id
+    AND p.company_id = p_company_id
+    AND coalesce(p.catalog_visible, true) = true
+  LIMIT 1;
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object(
+      'available', false,
+      'found', false,
+      'in_stock', false,
+      'stock', 0,
+      'can_fulfill', false,
+      'reason', 'El producto ya no se encuentra disponible en el catálogo.'
+    );
+  END IF;
+
+  v_stock := greatest(0, coalesce(v_prod.stock, 0));
+
+  RETURN jsonb_build_object(
+    'available', true,
+    'found', true,
+    'product_id', v_prod.id,
+    'name', v_prod.name,
+    'unit', coalesce(v_prod.unit, 'unidad'),
+    'stock', v_stock,
+    'in_stock', (v_stock > 0),
+    'show_stock', v_cfg.catalog_show_stock,
+    'can_fulfill', (v_stock >= v_req),
+    'variants', coalesce(v_prod.variants, '[]'::jsonb)
+  );
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION public.verificar_stock_catalogo_publico(uuid, uuid, numeric) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.verificar_stock_catalogo_publico(uuid, uuid, numeric) TO anon, authenticated, service_role;
+
+-- 7. Crear pedido público con soporte para Persona Natural / Jurídica, Variantes y Capture de Pago
+-- Eliminamos primero la firma antigua de 7 argumentos para evitar ambigüedad de sobrecarga
+DROP FUNCTION IF EXISTS public.crear_pedido_catalogo_publico(uuid, text, text, text, text, text, jsonb);
+
+CREATE OR REPLACE FUNCTION public.crear_pedido_catalogo_publico(
+  p_company_id uuid,
+  p_customer_name text,
+  p_phone text,
+  p_document text DEFAULT NULL,
+  p_address text DEFAULT NULL,
+  p_notes text DEFAULT NULL,
+  p_items jsonb DEFAULT '[]'::jsonb,
+  p_customer_type text DEFAULT 'natural',
+  p_contact_person text DEFAULT NULL,
+  p_requires_invoice boolean DEFAULT false,
+  p_email text DEFAULT NULL,
+  p_delivery_mode text DEFAULT 'pickup',
+  p_payment_method text DEFAULT 'pago_movil',
+  p_payment_reference text DEFAULT NULL,
+  p_payment_bank text DEFAULT NULL,
+  p_payment_amount numeric DEFAULT NULL,
+  p_payment_proof_url text DEFAULT NULL,
+  p_fx_currency text DEFAULT NULL,
+  p_fx_rate numeric DEFAULT NULL
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'pg_catalog', 'public', 'pg_temp'
+AS $function$
+DECLARE
+  v_cfg record;
+  v_cname text := left(btrim(coalesce(p_customer_name, '')), 140);
+  v_phone text := left(btrim(coalesce(p_phone, '')), 40);
+  v_doc text := nullif(left(btrim(coalesce(p_document, '')), 45), '');
+  v_addr text := nullif(left(btrim(coalesce(p_address, '')), 220), '');
+  v_notes text := nullif(left(btrim(coalesce(p_notes, '')), 300), '');
+  v_ctype text := CASE WHEN lower(btrim(coalesce(p_customer_type, 'natural'))) = 'juridica' THEN 'juridica' ELSE 'natural' END;
+  v_contact text := nullif(left(btrim(coalesce(p_contact_person, '')), 100), '');
+  v_email text := nullif(left(btrim(coalesce(p_email, '')), 120), '');
+  v_dmode text := CASE WHEN lower(btrim(coalesce(p_delivery_mode, 'pickup'))) IN ('pickup', 'delivery', 'shipping') THEN lower(btrim(p_delivery_mode)) ELSE 'pickup' END;
+  v_pmethod text := left(btrim(coalesce(p_payment_method, 'pago_movil')), 40);
+  v_pref text := nullif(left(btrim(coalesce(p_payment_reference, '')), 80), '');
+  v_pbank text := nullif(left(btrim(coalesce(p_payment_bank, '')), 80), '');
+  v_pproof text := nullif(btrim(coalesce(p_payment_proof_url, '')), '');
+  v_pstatus text;
+  v_cust_id uuid := NULL;
+  v_item jsonb;
+  v_pid uuid;
+  v_vid text;
+  v_vobj jsonb;
+  v_vlabel text;
+  v_mult numeric;
+  v_qty numeric;
+  v_req_stock numeric;
+  v_prod public.products%ROWTYPE;
+  v_base_price numeric;
+  v_wholesale_price numeric;
+  v_unit_price numeric;
+  v_order_lines jsonb := '[]'::jsonb;
+  v_quote_lines jsonb := '[]'::jsonb;
+  v_sum numeric := 0;
+  v_sub numeric := 0;
+  v_tax numeric := 0;
+  v_total numeric := 0;
+  v_qid uuid := NULL;
+  v_oid uuid;
+  v_seq integer;
+  v_order_num text;
+  v_digits text;
+  v_pin text;
+BEGIN
+  IF p_company_id IS NULL THEN
+    RAISE EXCEPTION 'Empresa inválida';
+  END IF;
+  IF v_cname = '' THEN
+    RAISE EXCEPTION 'Por favor ingresa tu nombre completo o razón social';
+  END IF;
+  IF v_phone = '' THEN
+    RAISE EXCEPTION 'Por favor ingresa tu número de teléfono o WhatsApp';
+  END IF;
+  IF p_items IS NULL OR jsonb_typeof(p_items) <> 'array' OR jsonb_array_length(p_items) = 0 THEN
+    RAISE EXCEPTION 'Tu pedido está vacío';
+  END IF;
+  IF jsonb_array_length(p_items) > 80 THEN
+    RAISE EXCEPTION 'El pedido excede el máximo de líneas permitidas';
+  END IF;
+
+  SELECT
+    cc.name,
+    cc.phone,
+    coalesce(cc.currency, 'USD') AS currency,
+    coalesce(cc.tax_rate, 0) AS tax_rate,
+    coalesce(cc.tax_mode, 'none') AS tax_mode,
+    coalesce(cc.catalog_enabled, true) AS catalog_enabled,
+    coalesce(cc.catalog_show_wholesale, true) AS catalog_show_wholesale
+  INTO v_cfg
+  FROM public.company_config cc
+  WHERE cc.company_id = p_company_id
+  LIMIT 1;
+
+  IF NOT FOUND OR NOT v_cfg.catalog_enabled THEN
+    RAISE EXCEPTION 'El catálogo digital no está disponible en este momento';
+  END IF;
+
+  -- Vincular o crear ficha de cliente en la empresa
+  IF v_doc IS NOT NULL THEN
+    SELECT id INTO v_cust_id
+    FROM public.customers
+    WHERE company_id = p_company_id
+      AND lower(btrim(coalesce(document, ''))) = lower(v_doc)
+    LIMIT 1;
+  END IF;
+
+  IF v_cust_id IS NULL THEN
+    SELECT id INTO v_cust_id
+    FROM public.customers
+    WHERE company_id = p_company_id
+      AND regexp_replace(coalesce(phone, ''), '[^0-9]', '', 'g') = regexp_replace(v_phone, '[^0-9]', '', 'g')
+      AND length(regexp_replace(v_phone, '[^0-9]', '', 'g')) >= 7
+    LIMIT 1;
+  END IF;
+
+  IF v_cust_id IS NULL THEN
+    BEGIN
+      INSERT INTO public.customers (company_id, name, document, phone, email, address)
+      VALUES (p_company_id, v_cname, v_doc, v_phone, v_email, v_addr)
+      RETURNING id INTO v_cust_id;
+    EXCEPTION WHEN OTHERS THEN
+      v_cust_id := NULL;
+    END;
+  END IF;
+
+  -- Calcular precios oficiales en el servidor respetando cualidades/variantes y escala mayorista
+  FOR v_item IN SELECT x FROM jsonb_array_elements(p_items) x LOOP
+    v_pid := (v_item->>'product_id')::uuid;
+    v_vid := nullif(btrim(coalesce(v_item->>'variant_id', '')), '');
+    v_qty := round(coalesce((v_item->>'quantity')::numeric, 0), 3);
+
+    IF v_qty <= 0 THEN
+      CONTINUE;
+    END IF;
+
+    SELECT * INTO v_prod
+    FROM public.products
+    WHERE id = v_pid
+      AND company_id = p_company_id;
+
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'Uno de los productos seleccionados ya no está disponible';
+    END IF;
+
+    v_vobj := NULL;
+    v_vlabel := NULL;
+    v_mult := 1;
+    v_base_price := coalesce(v_prod.price, 0);
+    v_wholesale_price := coalesce(v_prod.price_wholesale, 0);
+
+    IF v_vid IS NOT NULL AND jsonb_typeof(v_prod.variants) = 'array' THEN
+      SELECT elem INTO v_vobj
+      FROM jsonb_array_elements(v_prod.variants) elem
+      WHERE elem->>'id' = v_vid
+      LIMIT 1;
+
+      IF v_vobj IS NOT NULL THEN
+        v_vlabel := nullif(btrim(coalesce(v_vobj->>'label', '')), '');
+        v_base_price := coalesce((v_vobj->>'price')::numeric, v_base_price);
+        v_wholesale_price := coalesce((v_vobj->>'price_wholesale')::numeric, 0);
+        v_mult := greatest(0.001, coalesce((v_vobj->>'stock_multiplier')::numeric, 1));
+      END IF;
+    END IF;
+
+    v_req_stock := round(v_qty * v_mult, 3);
+    IF coalesce(v_prod.stock, 0) < v_req_stock THEN
+      RAISE EXCEPTION 'Stock insuficiente para "%" (disponibles: % %)',
+        v_prod.name, v_prod.stock, coalesce(v_prod.unit, 'und');
+    END IF;
+
+    v_unit_price := v_base_price;
+    IF v_cfg.catalog_show_wholesale
+       AND v_wholesale_price > 0
+       AND coalesce(v_prod.wholesale_min_qty, 0) > 0
+       AND v_qty >= v_prod.wholesale_min_qty THEN
+      v_unit_price := v_wholesale_price;
+    END IF;
+
+    v_sum := v_sum + round(v_unit_price * v_qty, 2);
+
+    v_order_lines := v_order_lines || jsonb_build_array(
+      jsonb_build_object(
+        'product_id', v_prod.id,
+        'product_name', v_prod.name,
+        'sku', v_prod.sku,
+        'variant_id', v_vid,
+        'variant_label', v_vlabel,
+        'stock_multiplier', v_mult,
+        'quantity', v_qty,
+        'unit_price', v_unit_price,
+        'subtotal', round(v_unit_price * v_qty, 2),
+        'unit', v_prod.unit,
+        'image_url', coalesce(nullif(btrim(v_item->>'image_url'), ''), v_prod.image_url)
+      )
+    );
+
+    v_quote_lines := v_quote_lines || jsonb_build_array(
+      jsonb_build_object(
+        'product_id', v_prod.id,
+        'product_name', CASE WHEN v_vlabel IS NOT NULL THEN v_prod.name || ' (' || v_vlabel || ')' ELSE v_prod.name END,
+        'quantity', v_qty,
+        'price', v_unit_price,
+        'subtotal', round(v_unit_price * v_qty, 2)
+      )
+    );
+  END LOOP;
+
+  IF jsonb_array_length(v_order_lines) = 0 THEN
+    RAISE EXCEPTION 'Agrega al menos un producto válido';
+  END IF;
+
+  v_sum := round(v_sum, 2);
+  IF v_cfg.tax_mode = 'adicional' AND v_cfg.tax_rate > 0 THEN
+    v_sub := v_sum;
+    v_tax := round(v_sum * v_cfg.tax_rate / 100.0, 2);
+    v_total := round(v_sub + v_tax, 2);
+  ELSIF v_cfg.tax_mode = 'incluido' AND v_cfg.tax_rate > 0 THEN
+    v_total := v_sum;
+    v_tax := round(v_total - v_total / (1 + v_cfg.tax_rate / 100.0), 2);
+    v_sub := round(v_total - v_tax, 2);
+  ELSE
+    v_sub := v_sum;
+    v_tax := 0;
+    v_total := v_sum;
+  END IF;
+
+  -- Respaldo espejo en cotizaciones para trazabilidad comercial tradicional
+  BEGIN
+    INSERT INTO public.quotations (
+      company_id,
+      customer_id,
+      customer_name,
+      items,
+      subtotal,
+      tax_rate,
+      tax_amount,
+      total,
+      status,
+      valid_until
+    ) VALUES (
+      p_company_id,
+      v_cust_id,
+      v_cname || CASE WHEN v_pref IS NOT NULL THEN ' · Ref #' || left(v_pref, 24) ELSE '' END,
+      v_quote_lines,
+      v_sub,
+      CASE WHEN v_tax > 0 THEN v_cfg.tax_rate ELSE 0 END,
+      v_tax,
+      v_total,
+      'enviada',
+      (current_date + 7)
+    )
+    RETURNING id INTO v_qid;
+  EXCEPTION WHEN OTHERS THEN
+    v_qid := NULL;
+  END;
+
+  SELECT count(*) + 1001
+  INTO v_seq
+  FROM public.catalog_orders
+  WHERE company_id = p_company_id;
+
+  v_order_num := 'WEB-' || v_seq::text;
+  v_digits := regexp_replace(v_phone, '[^0-9]', '', 'g');
+  IF length(v_digits) >= 4 THEN
+    v_pin := right(v_digits, 4);
+  ELSE
+    v_pin := lpad((floor(random() * 9000) + 1000)::int::text, 4, '0');
+  END IF;
+
+  v_pstatus := CASE
+    WHEN v_pmethod = 'efectivo_entrega' THEN 'contra_entrega'
+    ELSE 'pendiente_verificacion'
+  END;
+
+  INSERT INTO public.catalog_orders (
+    company_id,
+    order_number,
+    tracking_pin,
+    customer_id,
+    customer_type,
+    customer_name,
+    customer_document,
+    contact_person,
+    requires_invoice,
+    customer_phone,
+    customer_email,
+    delivery_mode,
+    delivery_address,
+    notes,
+    items,
+    currency,
+    fx_currency,
+    fx_rate,
+    subtotal,
+    tax_rate,
+    tax_amount,
+    total,
+    payment_method,
+    payment_reference,
+    payment_sender_bank,
+    payment_amount_reported,
+    payment_proof_url,
+    payment_status,
+    order_status,
+    quotation_id
+  )
+  VALUES (
+    p_company_id,
+    v_order_num,
+    v_pin,
+    v_cust_id,
+    v_ctype,
+    v_cname,
+    v_doc,
+    v_contact,
+    coalesce(p_requires_invoice, false),
+    v_phone,
+    v_email,
+    v_dmode,
+    v_addr,
+    v_notes,
+    v_order_lines,
+    v_cfg.currency,
+    nullif(left(btrim(coalesce(p_fx_currency, '')), 10), ''),
+    p_fx_rate,
+    v_sub,
+    CASE WHEN v_tax > 0 THEN v_cfg.tax_rate ELSE 0 END,
+    v_tax,
+    v_total,
+    v_pmethod,
+    v_pref,
+    v_pbank,
+    coalesce(p_payment_amount, v_total),
+    v_pproof,
+    v_pstatus,
+    'nuevo',
+    v_qid
+  )
+  RETURNING id INTO v_oid;
+
+  RETURN jsonb_build_object(
+    'ok', true,
+    'order_id', v_oid,
+    'quotation_id', v_qid,
+    'order_number', v_order_num,
+    'tracking_pin', v_pin,
+    'payment_status', v_pstatus,
+    'order_status', 'nuevo',
+    'subtotal', v_sub,
+    'tax_amount', v_tax,
+    'total', v_total,
+    'currency', v_cfg.currency,
+    'company_phone', v_cfg.phone,
+    'company_name', v_cfg.name
+  );
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION public.crear_pedido_catalogo_publico(
+  uuid, text, text, text, text, text, jsonb, text, text, boolean, text, text, text, text, text, numeric, text, text, numeric
+) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.crear_pedido_catalogo_publico(
+  uuid, text, text, text, text, text, jsonb, text, text, boolean, text, text, text, text, text, numeric, text, text, numeric
+) TO anon, authenticated, service_role;
+
+-- 8. Consulta pública segura de estatus de pedido (por código WEB-XXXX + PIN o teléfono)
+CREATE OR REPLACE FUNCTION public.consultar_pedido_catalogo_publico(
+  p_company_id uuid,
+  p_order_number text,
+  p_pin_or_phone text
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path TO 'pg_catalog', 'public'
+AS $function$
+DECLARE
+  v_ord public.catalog_orders%ROWTYPE;
+  v_code text := upper(btrim(coalesce(p_order_number, '')));
+  v_secret text := regexp_replace(coalesce(p_pin_or_phone, ''), '[^0-9]', '', 'g');
+  v_phone_digits text;
+BEGIN
+  IF p_company_id IS NULL OR v_code = '' OR length(v_secret) < 4 THEN
+    RETURN jsonb_build_object(
+      'found', false,
+      'reason', 'Ingresa el código del pedido (ej. WEB-1001) y los últimos 4 dígitos de tu teléfono o PIN.'
+    );
+  END IF;
+
+  SELECT * INTO v_ord
+  FROM public.catalog_orders co
+  WHERE co.company_id = p_company_id
+    AND upper(btrim(co.order_number)) = v_code
+  ORDER BY co.created_at DESC
+  LIMIT 1;
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object(
+      'found', false,
+      'reason', 'No encontramos ningún pedido con ese código en este catálogo.'
+    );
+  END IF;
+
+  v_phone_digits := regexp_replace(coalesce(v_ord.customer_phone, ''), '[^0-9]', '', 'g');
+
+  IF v_ord.tracking_pin <> right(v_secret, 4)
+     AND right(v_phone_digits, 4) <> right(v_secret, 4)
+     AND v_phone_digits <> v_secret THEN
+    RETURN jsonb_build_object(
+      'found', false,
+      'reason', 'El PIN o teléfono ingresado no coincide con el titular del pedido.'
+    );
+  END IF;
+
+  RETURN jsonb_build_object(
+    'found', true,
+    'order', jsonb_build_object(
+      'order_number', v_ord.order_number,
+      'customer_name', v_ord.customer_name,
+      'customer_type', v_ord.customer_type,
+      'total', v_ord.total,
+      'currency', v_ord.currency,
+      'payment_method', v_ord.payment_method,
+      'payment_reference', v_ord.payment_reference,
+      'payment_status', v_ord.payment_status,
+      'order_status', v_ord.order_status,
+      'delivery_mode', v_ord.delivery_mode,
+      'verified_at', v_ord.verified_at,
+      'admin_notes', v_ord.admin_notes,
+      'created_at', v_ord.created_at,
+      'items', coalesce(v_ord.items, '[]'::jsonb)
+    )
+  );
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION public.consultar_pedido_catalogo_publico(uuid, text, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.consultar_pedido_catalogo_publico(uuid, text, text) TO anon, authenticated, service_role;
+
+-- 9. Gestión administrativa de pedidos y corroboración de capture de pago
+CREATE OR REPLACE FUNCTION public.gestionar_pedido_catalogo(
+  p_order_id uuid,
+  p_payment_status text,
+  p_order_status text,
+  p_admin_notes text DEFAULT NULL,
+  p_sale_id uuid DEFAULT NULL
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'pg_catalog', 'public'
+AS $function$
+DECLARE
+  v_uid uuid := auth.uid();
+  v_actor record;
+  v_ord public.catalog_orders%ROWTYPE;
+BEGIN
+  IF v_uid IS NULL THEN
+    RAISE EXCEPTION 'Sesión requerida';
+  END IF;
+
+  SELECT p.company_id, p.role, p.full_name, p.email
+  INTO v_actor
+  FROM public.profiles p
+  WHERE p.id = v_uid
+    AND p.active = true;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Perfil de usuario inactivo o no encontrado';
+  END IF;
+
+  SELECT * INTO v_ord
+  FROM public.catalog_orders
+  WHERE id = p_order_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Pedido de catálogo no encontrado';
+  END IF;
+
+  IF v_actor.company_id IS DISTINCT FROM v_ord.company_id
+     AND v_actor.role NOT IN ('admin', 'tecnico')
+     AND lower(btrim(coalesce(v_actor.email, ''))) <> 'sanlobo3@hotmail.com' THEN
+    RAISE EXCEPTION 'No tienes permisos sobre los pedidos de esta empresa';
+  END IF;
+
+  IF p_payment_status NOT IN ('pendiente_verificacion', 'verificado', 'observado', 'rechazado', 'contra_entrega') THEN
+    RAISE EXCEPTION 'Estatus de pago inválido';
+  END IF;
+
+  IF p_order_status NOT IN ('nuevo', 'alistando', 'despachado', 'entregado', 'cancelado') THEN
+    RAISE EXCEPTION 'Estatus logístico inválido';
+  END IF;
+
+  UPDATE public.catalog_orders
+  SET
+    payment_status = p_payment_status,
+    order_status = p_order_status,
+    admin_notes = nullif(left(btrim(coalesce(p_admin_notes, '')), 500), ''),
+    sale_id = coalesce(p_sale_id, sale_id),
+    verified_by = CASE
+      WHEN p_payment_status = 'verificado' AND verified_at IS NULL THEN v_uid
+      ELSE verified_by
+    END,
+    verified_by_name = CASE
+      WHEN p_payment_status = 'verificado' AND verified_at IS NULL
+        THEN coalesce(nullif(btrim(v_actor.full_name), ''), v_actor.email, 'Administración')
+      ELSE verified_by_name
+    END,
+    verified_at = CASE
+      WHEN p_payment_status = 'verificado' AND verified_at IS NULL THEN now()
+      ELSE verified_at
+    END,
+    updated_at = now()
+  WHERE id = p_order_id;
+
+  IF v_ord.quotation_id IS NOT NULL THEN
+    UPDATE public.quotations
+    SET status = CASE
+      WHEN p_order_status = 'cancelado' OR p_payment_status = 'rechazado' THEN 'rechazada'
+      WHEN p_payment_status = 'verificado' THEN 'aprobada'
+      ELSE status
+    END
+    WHERE id = v_ord.quotation_id;
+  END IF;
+
+  RETURN jsonb_build_object(
+    'ok', true,
+    'order_id', p_order_id,
+    'payment_status', p_payment_status,
+    'order_status', p_order_status
+  );
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION public.gestionar_pedido_catalogo(uuid, text, text, text, uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.gestionar_pedido_catalogo(uuid, text, text, text, uuid) TO authenticated, service_role;
+
+NOTIFY pgrst, 'reload schema';
+
+COMMIT;
+
+
+-- ============================================================================
+-- INVENTARIOPRO · MIGRACIÓN 000019
+-- Enlace Personalizado por Empresa (/tienda/<alias>), Metadatos OpenGraph
+-- Dinámicos para Tarjetas de WhatsApp (Logo + Identidad Propia de la Empresa)
+-- y Estudio Corporativo Multiempresa de Plantillas WhatsApp
+-- 100% Idempotente · Preserva el enlace raíz (/) exclusivo para InventarioPro
+-- ============================================================================
+
+BEGIN;
+
+-- 1. Nuevas columnas en company_config para alias único de tienda y estudio WhatsApp
+ALTER TABLE public.company_config
+  ADD COLUMN IF NOT EXISTS catalog_slug text,
+  ADD COLUMN IF NOT EXISTS whatsapp_settings jsonb NOT NULL DEFAULT '{}'::jsonb;
+
+-- 2. Normalizador inmutable de alias de tienda (/tienda/<slug>)
+CREATE OR REPLACE FUNCTION public.normalizar_slug_catalogo(p_raw text)
+RETURNS text
+LANGUAGE plpgsql
+IMMUTABLE
+SET search_path TO 'pg_catalog', 'public'
+AS $function$
+DECLARE
+  v_clean text;
+BEGIN
+  v_clean := coalesce(p_raw, '');
+  v_clean := translate(
+    v_clean,
+    'áàäâãéèëêíìïîóòöôõúùüûñçÁÀÄÂÃÉÈËÊÍÌÏÎÓÒÖÔÕÚÙÜÛÑÇ',
+    'aaaaaeeeeiiiiooooouuuuncaaaaaeeeeiiiiooooouuuunc'
+  );
+  v_clean := lower(v_clean);
+  v_clean := regexp_replace(v_clean, '[^a-z0-9]+', '-', 'g');
+  v_clean := regexp_replace(v_clean, '(^-+|-+$)', '', 'g');
+  v_clean := left(v_clean, 60);
+  v_clean := regexp_replace(v_clean, '-+$', '', 'g');
+
+  IF v_clean = '' THEN
+    RETURN NULL;
+  END IF;
+
+  IF v_clean IN (
+    'api', 'admin', 'login', 'registro', 'register',
+    'terminos', 'privacidad', 'manual', 'reset-password',
+    'assets', 'static', 'index-html'
+  ) THEN
+    v_clean := 'tienda-' || v_clean;
+  END IF;
+
+  IF length(v_clean) < 2 THEN
+    v_clean := 'tienda-' || v_clean;
+  END IF;
+
+  RETURN v_clean;
+END;
+$function$;
+
+GRANT EXECUTE ON FUNCTION public.normalizar_slug_catalogo(text) TO anon, authenticated, service_role;
+
+-- 3. Generar alias inicial limpio para empresas existentes que aún no tengan catalog_slug
+DO $$
+DECLARE
+  r record;
+  v_base text;
+  v_candidate text;
+BEGIN
+  FOR r IN
+    SELECT id, company_id, name
+    FROM public.company_config
+    WHERE catalog_slug IS NULL OR btrim(catalog_slug) = ''
+  LOOP
+    v_base := coalesce(public.normalizar_slug_catalogo(r.name), 'tienda');
+    v_candidate := v_base;
+
+    IF EXISTS (
+      SELECT 1
+      FROM public.company_config cc2
+      WHERE cc2.id <> r.id
+        AND lower(btrim(coalesce(cc2.catalog_slug, ''))) = v_candidate
+    ) THEN
+      v_candidate := left(v_base, 52) || '-' || left(replace(coalesce(r.company_id::text, r.id::text), '-', ''), 4);
+    END IF;
+
+    UPDATE public.company_config
+    SET catalog_slug = v_candidate
+    WHERE id = r.id;
+  END LOOP;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_company_config_catalog_slug_unique
+  ON public.company_config (lower(btrim(catalog_slug)))
+  WHERE catalog_slug IS NOT NULL AND btrim(catalog_slug) <> '';
+
+-- 4. Actualizar guardar_identidad_catalogo con soporte de alias propio y estudio WhatsApp
+DROP FUNCTION IF EXISTS public.guardar_identidad_catalogo(boolean, boolean, boolean, text, text, text, jsonb, jsonb);
+
+CREATE OR REPLACE FUNCTION public.guardar_identidad_catalogo(
+  p_enabled boolean DEFAULT true,
+  p_show_wholesale boolean DEFAULT true,
+  p_show_stock boolean DEFAULT true,
+  p_welcome text DEFAULT NULL,
+  p_logo_url text DEFAULT NULL,
+  p_brand_theme text DEFAULT 'emerald',
+  p_payment_methods jsonb DEFAULT '[]'::jsonb,
+  p_delivery_modes jsonb DEFAULT '["pickup","delivery"]'::jsonb,
+  p_catalog_slug text DEFAULT NULL,
+  p_whatsapp_settings jsonb DEFAULT NULL
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'pg_catalog', 'public'
+AS $function$
+DECLARE
+  v_uid uuid := auth.uid();
+  v_cid uuid;
+  v_role text;
+  v_email text;
+  v_company_name text;
+  v_theme text := lower(btrim(coalesce(p_brand_theme, 'emerald')));
+  v_slug text := NULL;
+BEGIN
+  IF v_uid IS NULL THEN
+    RAISE EXCEPTION 'Sesión requerida';
+  END IF;
+
+  SELECT p.company_id, p.role, lower(btrim(coalesce(p.email, '')))
+  INTO v_cid, v_role, v_email
+  FROM public.profiles p
+  WHERE p.id = v_uid
+    AND p.active = true;
+
+  IF v_cid IS NULL THEN
+    RAISE EXCEPTION 'No se encontró empresa asociada a tu usuario';
+  END IF;
+
+  IF v_role NOT IN ('dueno', 'admin_empresa', 'encargado', 'gerente', 'admin')
+     AND v_email <> 'sanlobo3@hotmail.com' THEN
+    RAISE EXCEPTION 'Solo dirección o administración puede modificar la identidad del catálogo';
+  END IF;
+
+  IF v_theme NOT IN ('emerald', 'slate', 'blue', 'indigo', 'rose', 'amber', 'teal', 'violet') THEN
+    v_theme := 'emerald';
+  END IF;
+
+  SELECT cc.name INTO v_company_name
+  FROM public.company_config cc
+  WHERE cc.company_id = v_cid
+  LIMIT 1;
+
+  IF p_catalog_slug IS NOT NULL THEN
+    v_slug := public.normalizar_slug_catalogo(p_catalog_slug);
+  END IF;
+
+  IF v_slug IS NOT NULL THEN
+    IF EXISTS (
+      SELECT 1
+      FROM public.company_config cc
+      WHERE cc.company_id IS DISTINCT FROM v_cid
+        AND lower(btrim(coalesce(cc.catalog_slug, ''))) = v_slug
+    ) THEN
+      RAISE EXCEPTION 'Ese alias de enlace (/tienda/%) ya está en uso por otra empresa. Elige un alias diferente.', v_slug;
+    END IF;
+  END IF;
+
+  UPDATE public.company_config
+  SET
+    catalog_enabled = coalesce(p_enabled, true),
+    catalog_show_wholesale = coalesce(p_show_wholesale, true),
+    catalog_show_stock = coalesce(p_show_stock, true),
+    catalog_welcome = nullif(left(btrim(coalesce(p_welcome, '')), 260), ''),
+    logo_url = nullif(btrim(coalesce(p_logo_url, '')), ''),
+    brand_theme = v_theme,
+    catalog_slug = coalesce(
+      v_slug,
+      catalog_slug,
+      public.normalizar_slug_catalogo(coalesce(v_company_name, 'tienda')) || '-' || left(replace(v_cid::text, '-', ''), 4)
+    ),
+    catalog_payment_methods = CASE
+      WHEN p_payment_methods IS NOT NULL AND jsonb_typeof(p_payment_methods) = 'array'
+        THEN p_payment_methods
+      ELSE '[]'::jsonb
+    END,
+    catalog_delivery_modes = CASE
+      WHEN p_delivery_modes IS NOT NULL AND jsonb_typeof(p_delivery_modes) = 'array' AND jsonb_array_length(p_delivery_modes) > 0
+        THEN p_delivery_modes
+      ELSE '["pickup","delivery"]'::jsonb
+    END,
+    whatsapp_settings = CASE
+      WHEN p_whatsapp_settings IS NOT NULL AND jsonb_typeof(p_whatsapp_settings) = 'object'
+        THEN p_whatsapp_settings
+      ELSE coalesce(whatsapp_settings, '{}'::jsonb)
+    END
+  WHERE company_id = v_cid
+  RETURNING catalog_slug INTO v_slug;
+
+  IF NOT FOUND THEN
+    v_slug := coalesce(
+      v_slug,
+      'tienda-' || left(replace(v_cid::text, '-', ''), 6)
+    );
+    INSERT INTO public.company_config (
+      company_id,
+      name,
+      catalog_enabled,
+      catalog_show_wholesale,
+      catalog_show_stock,
+      catalog_welcome,
+      logo_url,
+      brand_theme,
+      catalog_slug,
+      catalog_payment_methods,
+      catalog_delivery_modes,
+      whatsapp_settings
+    )
+    VALUES (
+      v_cid,
+      'Mi Empresa',
+      coalesce(p_enabled, true),
+      coalesce(p_show_wholesale, true),
+      coalesce(p_show_stock, true),
+      nullif(left(btrim(coalesce(p_welcome, '')), 260), ''),
+      nullif(btrim(coalesce(p_logo_url, '')), ''),
+      v_theme,
+      v_slug,
+      coalesce(p_payment_methods, '[]'::jsonb),
+      coalesce(p_delivery_modes, '["pickup","delivery"]'::jsonb),
+      CASE
+        WHEN p_whatsapp_settings IS NOT NULL AND jsonb_typeof(p_whatsapp_settings) = 'object'
+          THEN p_whatsapp_settings
+        ELSE '{}'::jsonb
+      END
+    );
+  END IF;
+
+  RETURN jsonb_build_object(
+    'ok', true,
+    'company_id', v_cid,
+    'brand_theme', v_theme,
+    'catalog_slug', v_slug
+  );
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION public.guardar_identidad_catalogo(boolean, boolean, boolean, text, text, text, jsonb, jsonb, text, jsonb) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.guardar_identidad_catalogo(boolean, boolean, boolean, text, text, text, jsonb, jsonb, text, jsonb) TO authenticated, service_role;
+
+-- 5. Enriquecer obtener_catalogo_publico con catalog_slug y whatsapp_settings
+CREATE OR REPLACE FUNCTION public.obtener_catalogo_publico(p_company_id uuid)
+RETURNS jsonb
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path TO 'pg_catalog', 'public'
+AS $function$
+DECLARE
+  v_cfg record;
+  v_cats jsonb;
+  v_prods jsonb;
+  v_has_product_images boolean := to_regclass('public.product_images') IS NOT NULL;
+BEGIN
+  IF p_company_id IS NULL THEN
+    RETURN jsonb_build_object('available', false, 'reason', 'Enlace de catálogo incompleto.');
+  END IF;
+
+  SELECT
+    cc.name,
+    cc.rif,
+    cc.email,
+    cc.phone,
+    cc.address,
+    coalesce(cc.currency, 'USD') AS currency,
+    coalesce(cc.tax_rate, 0) AS tax_rate,
+    coalesce(cc.tax_mode, 'none') AS tax_mode,
+    coalesce(cc.catalog_enabled, true) AS catalog_enabled,
+    coalesce(cc.catalog_show_wholesale, true) AS catalog_show_wholesale,
+    coalesce(cc.catalog_show_stock, true) AS catalog_show_stock,
+    cc.catalog_welcome,
+    cc.catalog_slug,
+    cc.logo_url,
+    coalesce(nullif(btrim(cc.brand_theme), ''), 'emerald') AS brand_theme,
+    coalesce(cc.fx_rates, '{}'::jsonb) AS fx_rates,
+    coalesce(cc.catalog_payment_methods, '[]'::jsonb) AS catalog_payment_methods,
+    coalesce(cc.catalog_delivery_modes, '["pickup","delivery"]'::jsonb) AS catalog_delivery_modes,
+    coalesce(cc.whatsapp_settings, '{}'::jsonb) AS whatsapp_settings
+  INTO v_cfg
+  FROM public.company_config cc
+  WHERE cc.company_id = p_company_id
+  LIMIT 1;
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('available', false, 'reason', 'No se encontró el catálogo solicitado.');
+  END IF;
+
+  IF NOT v_cfg.catalog_enabled THEN
+    RETURN jsonb_build_object('available', false, 'reason', 'Este catálogo digital se encuentra temporalmente pausado por la empresa.');
+  END IF;
+
+  SELECT coalesce(jsonb_agg(
+    jsonb_build_object('id', c.id, 'name', c.name)
+    ORDER BY c.name ASC
+  ), '[]'::jsonb)
+  INTO v_cats
+  FROM public.categories c
+  WHERE c.company_id = p_company_id;
+
+  IF v_has_product_images THEN
+    SELECT coalesce(jsonb_agg(
+      jsonb_build_object(
+        'id', p.id,
+        'name', p.name,
+        'sku', p.sku,
+        'description', p.description,
+        'featured', coalesce(p.featured, false),
+        'category_id', p.category_id,
+        'category_name', cat.name,
+        'price', p.price,
+        'price_wholesale', CASE WHEN v_cfg.catalog_show_wholesale THEN p.price_wholesale ELSE NULL END,
+        'wholesale_min_qty', CASE WHEN v_cfg.catalog_show_wholesale THEN p.wholesale_min_qty ELSE NULL END,
+        'unit', p.unit,
+        'stock', CASE WHEN v_cfg.catalog_show_stock THEN p.stock ELSE CASE WHEN p.stock > 0 THEN 1 ELSE 0 END END,
+        'in_stock', (p.stock > 0),
+        'image_url', coalesce(nullif(btrim(pi.image_url), ''), nullif(btrim(p.image_url), '')),
+        'variant_group_label', p.variant_group_label,
+        'variants', coalesce(p.variants, '[]'::jsonb)
+      )
+      ORDER BY coalesce(p.featured, false) DESC, (p.stock > 0) DESC, p.name ASC
+    ), '[]'::jsonb)
+    INTO v_prods
+    FROM public.products p
+    LEFT JOIN public.categories cat ON cat.id = p.category_id
+    LEFT JOIN public.product_images pi ON pi.product_id = p.id
+    WHERE p.company_id = p_company_id
+      AND coalesce(p.catalog_visible, true) = true
+      AND (p.price > 0 OR jsonb_array_length(coalesce(p.variants, '[]'::jsonb)) > 0);
+  ELSE
+    SELECT coalesce(jsonb_agg(
+      jsonb_build_object(
+        'id', p.id,
+        'name', p.name,
+        'sku', p.sku,
+        'description', p.description,
+        'featured', coalesce(p.featured, false),
+        'category_id', p.category_id,
+        'category_name', cat.name,
+        'price', p.price,
+        'price_wholesale', CASE WHEN v_cfg.catalog_show_wholesale THEN p.price_wholesale ELSE NULL END,
+        'wholesale_min_qty', CASE WHEN v_cfg.catalog_show_wholesale THEN p.wholesale_min_qty ELSE NULL END,
+        'unit', p.unit,
+        'stock', CASE WHEN v_cfg.catalog_show_stock THEN p.stock ELSE CASE WHEN p.stock > 0 THEN 1 ELSE 0 END END,
+        'in_stock', (p.stock > 0),
+        'image_url', nullif(btrim(p.image_url), ''),
+        'variant_group_label', p.variant_group_label,
+        'variants', coalesce(p.variants, '[]'::jsonb)
+      )
+      ORDER BY coalesce(p.featured, false) DESC, (p.stock > 0) DESC, p.name ASC
+    ), '[]'::jsonb)
+    INTO v_prods
+    FROM public.products p
+    LEFT JOIN public.categories cat ON cat.id = p.category_id
+    WHERE p.company_id = p_company_id
+      AND coalesce(p.catalog_visible, true) = true
+      AND (p.price > 0 OR jsonb_array_length(coalesce(p.variants, '[]'::jsonb)) > 0);
+  END IF;
+
+  RETURN jsonb_build_object(
+    'available', true,
+    'company', jsonb_build_object(
+      'company_id', p_company_id,
+      'catalog_slug', v_cfg.catalog_slug,
+      'name', coalesce(nullif(btrim(v_cfg.name), ''), 'Catálogo Digital'),
+      'rif', v_cfg.rif,
+      'email', v_cfg.email,
+      'phone', v_cfg.phone,
+      'address', v_cfg.address,
+      'currency', v_cfg.currency,
+      'tax_rate', v_cfg.tax_rate,
+      'tax_mode', v_cfg.tax_mode,
+      'show_wholesale', v_cfg.catalog_show_wholesale,
+      'show_stock', v_cfg.catalog_show_stock,
+      'welcome', v_cfg.catalog_welcome,
+      'logo_url', v_cfg.logo_url,
+      'brand_theme', v_cfg.brand_theme,
+      'fx_rates', v_cfg.fx_rates,
+      'payment_methods', v_cfg.catalog_payment_methods,
+      'delivery_modes', v_cfg.catalog_delivery_modes,
+      'whatsapp_settings', v_cfg.whatsapp_settings
+    ),
+    'categories', v_cats,
+    'products', v_prods
+  );
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION public.obtener_catalogo_publico(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.obtener_catalogo_publico(uuid) TO anon, authenticated, service_role;
+
+-- 6. Resolver catálogo público por alias amigable (/tienda/<slug>) o por UUID
+CREATE OR REPLACE FUNCTION public.resolver_catalogo_publico(p_slug_or_id text)
+RETURNS jsonb
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path TO 'pg_catalog', 'public'
+AS $function$
+DECLARE
+  v_key text := btrim(coalesce(p_slug_or_id, ''));
+  v_cid uuid := NULL;
+BEGIN
+  IF v_key = '' THEN
+    RETURN jsonb_build_object('available', false, 'reason', 'Enlace de tienda incompleto.');
+  END IF;
+
+  IF v_key ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
+    v_cid := v_key::uuid;
+  ELSE
+    SELECT cc.company_id
+    INTO v_cid
+    FROM public.company_config cc
+    WHERE lower(btrim(coalesce(cc.catalog_slug, ''))) = lower(v_key)
+    LIMIT 1;
+  END IF;
+
+  IF v_cid IS NULL THEN
+    RETURN jsonb_build_object(
+      'available', false,
+      'reason', 'No se encontró ninguna tienda registrada con este enlace.'
+    );
+  END IF;
+
+  RETURN public.obtener_catalogo_publico(v_cid);
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION public.resolver_catalogo_publico(text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.resolver_catalogo_publico(text) TO anon, authenticated, service_role;
+
+-- 7. Consulta ultraligera de metadatos OpenGraph para vista previa en WhatsApp / Redes Sociales
+CREATE OR REPLACE FUNCTION public.obtener_metadatos_enlace_tienda(p_slug_or_id text)
+RETURNS jsonb
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path TO 'pg_catalog', 'public'
+AS $function$
+DECLARE
+  v_key text := btrim(coalesce(p_slug_or_id, ''));
+  v_cfg record;
+  v_prod_count integer := 0;
+BEGIN
+  IF v_key = '' THEN
+    RETURN jsonb_build_object('found', false, 'available', false);
+  END IF;
+
+  IF v_key ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
+    SELECT
+      cc.company_id,
+      cc.catalog_slug,
+      cc.name,
+      cc.rif,
+      cc.phone,
+      cc.address,
+      cc.catalog_welcome,
+      cc.logo_url,
+      coalesce(nullif(btrim(cc.brand_theme), ''), 'emerald') AS brand_theme,
+      coalesce(cc.currency, 'USD') AS currency,
+      coalesce(cc.catalog_enabled, true) AS catalog_enabled,
+      coalesce(cc.catalog_show_wholesale, true) AS catalog_show_wholesale,
+      coalesce(cc.whatsapp_settings, '{}'::jsonb) AS whatsapp_settings
+    INTO v_cfg
+    FROM public.company_config cc
+    WHERE cc.company_id = v_key::uuid
+    LIMIT 1;
+  ELSE
+    SELECT
+      cc.company_id,
+      cc.catalog_slug,
+      cc.name,
+      cc.rif,
+      cc.phone,
+      cc.address,
+      cc.catalog_welcome,
+      cc.logo_url,
+      coalesce(nullif(btrim(cc.brand_theme), ''), 'emerald') AS brand_theme,
+      coalesce(cc.currency, 'USD') AS currency,
+      coalesce(cc.catalog_enabled, true) AS catalog_enabled,
+      coalesce(cc.catalog_show_wholesale, true) AS catalog_show_wholesale,
+      coalesce(cc.whatsapp_settings, '{}'::jsonb) AS whatsapp_settings
+    INTO v_cfg
+    FROM public.company_config cc
+    WHERE lower(btrim(coalesce(cc.catalog_slug, ''))) = lower(v_key)
+    LIMIT 1;
+  END IF;
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('found', false, 'available', false);
+  END IF;
+
+  SELECT count(*)::int
+  INTO v_prod_count
+  FROM public.products p
+  WHERE p.company_id = v_cfg.company_id
+    AND coalesce(p.catalog_visible, true) = true
+    AND (p.price > 0 OR jsonb_array_length(coalesce(p.variants, '[]'::jsonb)) > 0);
+
+  RETURN jsonb_build_object(
+    'found', true,
+    'available', v_cfg.catalog_enabled,
+    'company_id', v_cfg.company_id,
+    'catalog_slug', v_cfg.catalog_slug,
+    'name', coalesce(nullif(btrim(v_cfg.name), ''), 'Tienda Oficial'),
+    'rif', v_cfg.rif,
+    'phone', v_cfg.phone,
+    'address', v_cfg.address,
+    'welcome', v_cfg.catalog_welcome,
+    'logo_url', v_cfg.logo_url,
+    'brand_theme', v_cfg.brand_theme,
+    'currency', v_cfg.currency,
+    'show_wholesale', v_cfg.catalog_show_wholesale,
+    'whatsapp_settings', v_cfg.whatsapp_settings,
+    'products_count', v_prod_count
+  );
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION public.obtener_metadatos_enlace_tienda(text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.obtener_metadatos_enlace_tienda(text) TO anon, authenticated, service_role;
+
+-- 8. Bucket privado payment-proofs para captures bancarios con URLs firmadas (15 min)
+--    Respeta políticas personalizadas ya activas y crea las faltantes en entornos nuevos
+DO $$
+BEGIN
+  INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+  VALUES (
+    'payment-proofs',
+    'payment-proofs',
+    false,
+    6291456,
+    ARRAY['image/jpeg', 'image/png', 'image/webp']
+  )
+  ON CONFLICT (id) DO UPDATE
+    SET public = false,
+        file_size_limit = COALESCE(storage.buckets.file_size_limit, 6291456),
+        allowed_mime_types = COALESCE(
+          storage.buckets.allowed_mime_types,
+          ARRAY['image/jpeg', 'image/png', 'image/webp']
+        );
+
+  -- Retirar inserción pública antigua de recibos en product-images (ahora van a payment-proofs)
+  DROP POLICY IF EXISTS product_images_public_receipts_insert ON storage.objects;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'storage' AND tablename = 'objects' AND policyname = 'payment_proofs_public_insert'
+  ) THEN
+    CREATE POLICY payment_proofs_public_insert
+    ON storage.objects
+    FOR INSERT
+    TO anon
+    WITH CHECK (
+      bucket_id = 'payment-proofs'
+      AND (storage.foldername(name))[1] = 'receipts'
+      AND EXISTS (
+        SELECT 1
+        FROM public.company_config cc
+        WHERE cc.company_id::text = (storage.foldername(name))[2]
+          AND coalesce(cc.catalog_enabled, true) = true
+      )
+    );
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'storage' AND tablename = 'objects' AND policyname = 'payment_proofs_company_insert'
+  ) THEN
+    CREATE POLICY payment_proofs_company_insert
+    ON storage.objects
+    FOR INSERT
+    TO authenticated
+    WITH CHECK (
+      bucket_id = 'payment-proofs'
+      AND (storage.foldername(name))[1] = 'receipts'
+      AND EXISTS (
+        SELECT 1
+        FROM public.profiles p
+        WHERE p.id = auth.uid()
+          AND p.active = true
+          AND (
+            p.company_id::text = (storage.foldername(name))[2]
+            OR p.role IN ('admin', 'tecnico')
+            OR lower(btrim(coalesce(p.email, ''))) = 'sanlobo3@hotmail.com'
+          )
+      )
+    );
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'storage' AND tablename = 'objects' AND policyname = 'payment_proofs_company_select'
+  ) THEN
+    CREATE POLICY payment_proofs_company_select
+    ON storage.objects
+    FOR SELECT
+    TO authenticated
+    USING (
+      bucket_id = 'payment-proofs'
+      AND (storage.foldername(name))[1] = 'receipts'
+      AND EXISTS (
+        SELECT 1
+        FROM public.profiles p
+        WHERE p.id = auth.uid()
+          AND p.active = true
+          AND (
+            p.company_id::text = (storage.foldername(name))[2]
+            OR p.role IN ('admin', 'tecnico')
+            OR lower(btrim(coalesce(p.email, ''))) = 'sanlobo3@hotmail.com'
+          )
+      )
+    );
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'storage' AND tablename = 'objects' AND policyname = 'payment_proofs_company_delete'
+  ) THEN
+    CREATE POLICY payment_proofs_company_delete
+    ON storage.objects
+    FOR DELETE
+    TO authenticated
+    USING (
+      bucket_id = 'payment-proofs'
+      AND (storage.foldername(name))[1] = 'receipts'
+      AND EXISTS (
+        SELECT 1
+        FROM public.profiles p
+        WHERE p.id = auth.uid()
+          AND p.active = true
+          AND (
+            p.company_id::text = (storage.foldername(name))[2]
+            OR p.role = 'admin'
+            OR lower(btrim(coalesce(p.email, ''))) = 'sanlobo3@hotmail.com'
+          )
+      )
+    );
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'storage' AND tablename = 'objects'
+      AND policyname IN ('product_images_auth_receipts_delete', 'product_images_legacy_receipts_delete')
+  ) THEN
+    CREATE POLICY product_images_auth_receipts_delete
+    ON storage.objects
+    FOR DELETE
+    TO authenticated
+    USING (
+      bucket_id = 'product-images'
+      AND (storage.foldername(name))[1] = 'receipts'
+      AND EXISTS (
+        SELECT 1
+        FROM public.profiles p
+        WHERE p.id = auth.uid()
+          AND p.active = true
+          AND (
+            p.company_id::text = (storage.foldername(name))[2]
+            OR p.role = 'admin'
+            OR lower(btrim(coalesce(p.email, ''))) = 'sanlobo3@hotmail.com'
+          )
+      )
+    );
+  END IF;
+EXCEPTION
+  WHEN insufficient_privilege OR undefined_table THEN
+    NULL;
+END $$;
+
+NOTIFY pgrst, 'reload schema';
+
+COMMIT;
+
+
+-- ============================================================================
+-- INVENTARIOPRO · MIGRACIÓN 000020
+-- Sincronización Automática de Identidad Comercial (Nombre -> /tienda/<alias>),
+-- Historial de Alias Previos sin Enlaces Rotos y Huella Anti-Caché para WhatsApp
+-- 100% Idempotente
+-- ============================================================================
+
+BEGIN;
+
+-- 1. Historial de alias anteriores para que enlaces ya enviados por WhatsApp jamás se rompan
+ALTER TABLE public.company_config
+  ADD COLUMN IF NOT EXISTS previous_catalog_slugs text[] NOT NULL DEFAULT '{}'::text[];
+
+CREATE INDEX IF NOT EXISTS idx_company_config_prev_slugs_gin
+  ON public.company_config USING gin (previous_catalog_slugs);
+
+-- 2. Trigger automático al insertar o actualizar company_config desde Configuración o Identidad
+CREATE OR REPLACE FUNCTION public.fn_sync_company_brand_and_slug()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'pg_catalog', 'public'
+AS $function$
+DECLARE
+  v_old_name text := btrim(coalesce(CASE WHEN TG_OP = 'UPDATE' THEN OLD.name ELSE NULL END, ''));
+  v_new_name text := btrim(coalesce(NEW.name, ''));
+  v_old_auto_slug text;
+  v_new_auto_slug text;
+  v_candidate text;
+  v_old_slug text := lower(btrim(coalesce(CASE WHEN TG_OP = 'UPDATE' THEN OLD.catalog_slug ELSE NULL END, '')));
+  v_new_slug text := lower(btrim(coalesce(NEW.catalog_slug, '')));
+  v_tagline text;
+BEGIN
+  v_new_auto_slug := coalesce(public.normalizar_slug_catalogo(v_new_name), 'tienda');
+
+  IF TG_OP = 'INSERT' THEN
+    IF v_new_slug = '' THEN
+      v_candidate := v_new_auto_slug;
+      IF EXISTS (
+        SELECT 1 FROM public.company_config cc
+        WHERE lower(btrim(coalesce(cc.catalog_slug, ''))) = v_candidate
+      ) THEN
+        v_candidate := left(v_new_auto_slug, 52) || '-' || left(replace(coalesce(NEW.company_id::text, gen_random_uuid()::text), '-', ''), 4);
+      END IF;
+      NEW.catalog_slug := v_candidate;
+    ELSE
+      NEW.catalog_slug := public.normalizar_slug_catalogo(v_new_slug);
+    END IF;
+  ELSIF TG_OP = 'UPDATE' THEN
+    v_old_auto_slug := coalesce(public.normalizar_slug_catalogo(v_old_name), '');
+
+    -- Si cambió el nombre de la empresa y no enviaron un alias manual distinto en este mismo UPDATE,
+    -- actualizar el alias comercial cuando estaba vacío o derivado del nombre anterior.
+    IF lower(v_old_name) IS DISTINCT FROM lower(v_new_name) AND v_new_name <> '' THEN
+      IF v_new_slug = ''
+         OR (
+           v_new_slug = v_old_slug
+           AND (
+             v_old_slug = v_old_auto_slug
+             OR (v_old_auto_slug <> '' AND v_old_slug LIKE v_old_auto_slug || '-%')
+           )
+         )
+      THEN
+        IF v_old_slug <> '' AND v_old_slug <> v_new_auto_slug THEN
+          SELECT coalesce(array_agg(DISTINCT s), '{}'::text[])
+          INTO NEW.previous_catalog_slugs
+          FROM unnest(array_append(coalesce(NEW.previous_catalog_slugs, '{}'::text[]), v_old_slug)) AS s
+          WHERE s IS NOT NULL AND btrim(s) <> '' AND lower(btrim(s)) <> v_new_auto_slug;
+        END IF;
+
+        v_candidate := v_new_auto_slug;
+        IF EXISTS (
+          SELECT 1 FROM public.company_config cc
+          WHERE cc.id <> NEW.id
+            AND lower(btrim(coalesce(cc.catalog_slug, ''))) = v_candidate
+        ) THEN
+          v_candidate := left(v_new_auto_slug, 52) || '-' || left(replace(coalesce(NEW.company_id::text, NEW.id::text), '-', ''), 4);
+        END IF;
+        NEW.catalog_slug := v_candidate;
+      END IF;
+
+      -- Si el eslogan de WhatsApp aún contenía el nombre anterior autogenerado, actualizarlo al nuevo nombre
+      IF NEW.whatsapp_settings IS NOT NULL
+         AND jsonb_typeof(NEW.whatsapp_settings) = 'object'
+         AND v_old_name <> ''
+      THEN
+        v_tagline := coalesce(NEW.whatsapp_settings ->> 'brand_tagline', '');
+        IF v_tagline <> '' AND position(lower(v_old_name) IN lower(v_tagline)) > 0 THEN
+          v_tagline := regexp_replace(v_tagline, v_old_name, v_new_name, 'gi');
+          NEW.whatsapp_settings := jsonb_set(NEW.whatsapp_settings, '{brand_tagline}', to_jsonb(v_tagline), true);
+        END IF;
+      END IF;
+    ELSIF v_new_slug <> '' AND v_new_slug IS DISTINCT FROM v_old_slug THEN
+      -- Si el usuario cambió explícitamente su alias /tienda/<slug>, guardar el anterior en el historial
+      NEW.catalog_slug := public.normalizar_slug_catalogo(v_new_slug);
+      IF v_old_slug <> '' AND v_old_slug IS DISTINCT FROM NEW.catalog_slug THEN
+        SELECT coalesce(array_agg(DISTINCT s), '{}'::text[])
+        INTO NEW.previous_catalog_slugs
+        FROM unnest(array_append(coalesce(NEW.previous_catalog_slugs, '{}'::text[]), v_old_slug)) AS s
+        WHERE s IS NOT NULL AND btrim(s) <> '' AND lower(btrim(s)) <> NEW.catalog_slug;
+      END IF;
+    END IF;
+  END IF;
+
+  -- Mantener sincronizado el nombre en public.companies si existe la tabla
+  IF NEW.company_id IS NOT NULL AND v_new_name <> '' THEN
+    BEGIN
+      IF to_regclass('public.companies') IS NOT NULL THEN
+        UPDATE public.companies
+        SET name = v_new_name
+        WHERE id = NEW.company_id
+          AND name IS DISTINCT FROM v_new_name;
+      END IF;
+    EXCEPTION WHEN OTHERS THEN
+      NULL;
+    END;
+  END IF;
+
+  RETURN NEW;
+END;
+$function$;
+
+DROP TRIGGER IF EXISTS trg_sync_company_brand_and_slug ON public.company_config;
+CREATE TRIGGER trg_sync_company_brand_and_slug
+BEFORE INSERT OR UPDATE ON public.company_config
+FOR EACH ROW
+EXECUTE FUNCTION public.fn_sync_company_brand_and_slug();
+
+-- 3. Reparación inmediata de empresas cuyo nombre ya había sido actualizado antes del trigger
+DO $$
+DECLARE
+  r record;
+  v_expected_slug text;
+  v_candidate text;
+  v_current_slug text;
+  v_tagline text;
+  v_next_wa jsonb;
+BEGIN
+  FOR r IN
+    SELECT id, company_id, name, catalog_slug, previous_catalog_slugs, whatsapp_settings
+    FROM public.company_config
+  LOOP
+    v_expected_slug := coalesce(public.normalizar_slug_catalogo(r.name), 'tienda');
+    v_current_slug := lower(btrim(coalesce(r.catalog_slug, '')));
+    v_next_wa := coalesce(r.whatsapp_settings, '{}'::jsonb);
+    v_tagline := coalesce(v_next_wa ->> 'brand_tagline', '');
+
+    -- Limpiar eslóganes autogenerados que quedaron con un nombre anterior ("Catálogo oficial de X · ...")
+    IF v_tagline ~* '^Catálogo oficial de .+ · Atención personalizada$'
+       AND btrim(coalesce(r.name, '')) <> ''
+       AND v_tagline <> ('Catálogo oficial de ' || btrim(r.name) || ' · Atención personalizada')
+    THEN
+      v_next_wa := jsonb_set(
+        v_next_wa,
+        '{brand_tagline}',
+        to_jsonb('Catálogo oficial de ' || btrim(r.name) || ' · Atención personalizada'),
+        true
+      );
+    END IF;
+
+    -- Si el slug actual quedó rezagado respecto al nombre comercial actual, migrarlo conservando historial
+    IF v_current_slug = '' OR (
+      v_current_slug <> v_expected_slug
+      AND (
+        v_current_slug = 'prueba-lobo'
+        OR v_tagline ~* '^Catálogo oficial de .+ · Atención personalizada$'
+      )
+    ) THEN
+      v_candidate := v_expected_slug;
+      IF EXISTS (
+        SELECT 1 FROM public.company_config cc2
+        WHERE cc2.id <> r.id
+          AND lower(btrim(coalesce(cc2.catalog_slug, ''))) = v_candidate
+      ) THEN
+        v_candidate := left(v_expected_slug, 52) || '-' || left(replace(coalesce(r.company_id::text, r.id::text), '-', ''), 4);
+      END IF;
+
+      UPDATE public.company_config
+      SET
+        previous_catalog_slugs = CASE
+          WHEN v_current_slug <> '' AND v_current_slug <> v_candidate
+            THEN (
+              SELECT coalesce(array_agg(DISTINCT s), '{}'::text[])
+              FROM unnest(array_append(coalesce(r.previous_catalog_slugs, '{}'::text[]), v_current_slug)) AS s
+              WHERE s IS NOT NULL AND btrim(s) <> '' AND lower(btrim(s)) <> v_candidate
+            )
+          ELSE coalesce(r.previous_catalog_slugs, '{}'::text[])
+        END,
+        catalog_slug = v_candidate,
+        whatsapp_settings = v_next_wa
+      WHERE id = r.id;
+    ELSIF v_next_wa IS DISTINCT FROM coalesce(r.whatsapp_settings, '{}'::jsonb) THEN
+      UPDATE public.company_config
+      SET whatsapp_settings = v_next_wa
+      WHERE id = r.id;
+    END IF;
+
+    IF r.company_id IS NOT NULL AND btrim(coalesce(r.name, '')) <> '' AND to_regclass('public.companies') IS NOT NULL THEN
+      UPDATE public.companies
+      SET name = btrim(r.name)
+      WHERE id = r.company_id
+        AND name IS DISTINCT FROM btrim(r.name);
+    END IF;
+  END LOOP;
+END $$;
+
+-- 4. Actualizar obtener_catalogo_publico incluyendo brand_version determinístico
+CREATE OR REPLACE FUNCTION public.obtener_catalogo_publico(p_company_id uuid)
+RETURNS jsonb
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path TO 'pg_catalog', 'public'
+AS $function$
+DECLARE
+  v_cfg record;
+  v_cats jsonb;
+  v_prods jsonb;
+  v_brand_version text;
+  v_has_product_images boolean := to_regclass('public.product_images') IS NOT NULL;
+BEGIN
+  IF p_company_id IS NULL THEN
+    RETURN jsonb_build_object('available', false, 'reason', 'Enlace de catálogo incompleto.');
+  END IF;
+
+  SELECT
+    cc.name,
+    cc.rif,
+    cc.email,
+    cc.phone,
+    cc.address,
+    coalesce(cc.currency, 'USD') AS currency,
+    coalesce(cc.tax_rate, 0) AS tax_rate,
+    coalesce(cc.tax_mode, 'none') AS tax_mode,
+    coalesce(cc.catalog_enabled, true) AS catalog_enabled,
+    coalesce(cc.catalog_show_wholesale, true) AS catalog_show_wholesale,
+    coalesce(cc.catalog_show_stock, true) AS catalog_show_stock,
+    cc.catalog_welcome,
+    cc.catalog_slug,
+    cc.logo_url,
+    coalesce(nullif(btrim(cc.brand_theme), ''), 'emerald') AS brand_theme,
+    coalesce(cc.fx_rates, '{}'::jsonb) AS fx_rates,
+    coalesce(cc.catalog_payment_methods, '[]'::jsonb) AS catalog_payment_methods,
+    coalesce(cc.catalog_delivery_modes, '["pickup","delivery"]'::jsonb) AS catalog_delivery_modes,
+    coalesce(cc.whatsapp_settings, '{}'::jsonb) AS whatsapp_settings
+  INTO v_cfg
+  FROM public.company_config cc
+  WHERE cc.company_id = p_company_id
+  LIMIT 1;
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('available', false, 'reason', 'No se encontró el catálogo solicitado.');
+  END IF;
+
+  IF NOT v_cfg.catalog_enabled THEN
+    RETURN jsonb_build_object('available', false, 'reason', 'Este catálogo digital se encuentra temporalmente pausado por la empresa.');
+  END IF;
+
+  v_brand_version := left(
+    md5(
+      coalesce(v_cfg.name, '') || '|' ||
+      coalesce(v_cfg.logo_url, '') || '|' ||
+      coalesce(v_cfg.brand_theme, '') || '|' ||
+      coalesce(v_cfg.catalog_welcome, '') || '|' ||
+      coalesce(v_cfg.whatsapp_settings ->> 'brand_tagline', '')
+    ),
+    6
+  );
+
+  SELECT coalesce(jsonb_agg(
+    jsonb_build_object('id', c.id, 'name', c.name)
+    ORDER BY c.name ASC
+  ), '[]'::jsonb)
+  INTO v_cats
+  FROM public.categories c
+  WHERE c.company_id = p_company_id;
+
+  IF v_has_product_images THEN
+    SELECT coalesce(jsonb_agg(
+      jsonb_build_object(
+        'id', p.id,
+        'name', p.name,
+        'sku', p.sku,
+        'description', p.description,
+        'featured', coalesce(p.featured, false),
+        'category_id', p.category_id,
+        'category_name', cat.name,
+        'price', p.price,
+        'price_wholesale', CASE WHEN v_cfg.catalog_show_wholesale THEN p.price_wholesale ELSE NULL END,
+        'wholesale_min_qty', CASE WHEN v_cfg.catalog_show_wholesale THEN p.wholesale_min_qty ELSE NULL END,
+        'unit', p.unit,
+        'stock', CASE WHEN v_cfg.catalog_show_stock THEN p.stock ELSE CASE WHEN p.stock > 0 THEN 1 ELSE 0 END END,
+        'in_stock', (p.stock > 0),
+        'image_url', coalesce(nullif(btrim(pi.image_url), ''), nullif(btrim(p.image_url), '')),
+        'variant_group_label', p.variant_group_label,
+        'variants', coalesce(p.variants, '[]'::jsonb)
+      )
+      ORDER BY coalesce(p.featured, false) DESC, (p.stock > 0) DESC, p.name ASC
+    ), '[]'::jsonb)
+    INTO v_prods
+    FROM public.products p
+    LEFT JOIN public.categories cat ON cat.id = p.category_id
+    LEFT JOIN public.product_images pi ON pi.product_id = p.id
+    WHERE p.company_id = p_company_id
+      AND coalesce(p.catalog_visible, true) = true
+      AND (p.price > 0 OR jsonb_array_length(coalesce(p.variants, '[]'::jsonb)) > 0);
+  ELSE
+    SELECT coalesce(jsonb_agg(
+      jsonb_build_object(
+        'id', p.id,
+        'name', p.name,
+        'sku', p.sku,
+        'description', p.description,
+        'featured', coalesce(p.featured, false),
+        'category_id', p.category_id,
+        'category_name', cat.name,
+        'price', p.price,
+        'price_wholesale', CASE WHEN v_cfg.catalog_show_wholesale THEN p.price_wholesale ELSE NULL END,
+        'wholesale_min_qty', CASE WHEN v_cfg.catalog_show_wholesale THEN p.wholesale_min_qty ELSE NULL END,
+        'unit', p.unit,
+        'stock', CASE WHEN v_cfg.catalog_show_stock THEN p.stock ELSE CASE WHEN p.stock > 0 THEN 1 ELSE 0 END END,
+        'in_stock', (p.stock > 0),
+        'image_url', nullif(btrim(p.image_url), ''),
+        'variant_group_label', p.variant_group_label,
+        'variants', coalesce(p.variants, '[]'::jsonb)
+      )
+      ORDER BY coalesce(p.featured, false) DESC, (p.stock > 0) DESC, p.name ASC
+    ), '[]'::jsonb)
+    INTO v_prods
+    FROM public.products p
+    LEFT JOIN public.categories cat ON cat.id = p.category_id
+    WHERE p.company_id = p_company_id
+      AND coalesce(p.catalog_visible, true) = true
+      AND (p.price > 0 OR jsonb_array_length(coalesce(p.variants, '[]'::jsonb)) > 0);
+  END IF;
+
+  RETURN jsonb_build_object(
+    'available', true,
+    'company', jsonb_build_object(
+      'company_id', p_company_id,
+      'catalog_slug', v_cfg.catalog_slug,
+      'brand_version', v_brand_version,
+      'name', coalesce(nullif(btrim(v_cfg.name), ''), 'Catálogo Digital'),
+      'rif', v_cfg.rif,
+      'email', v_cfg.email,
+      'phone', v_cfg.phone,
+      'address', v_cfg.address,
+      'currency', v_cfg.currency,
+      'tax_rate', v_cfg.tax_rate,
+      'tax_mode', v_cfg.tax_mode,
+      'show_wholesale', v_cfg.catalog_show_wholesale,
+      'show_stock', v_cfg.catalog_show_stock,
+      'welcome', v_cfg.catalog_welcome,
+      'logo_url', v_cfg.logo_url,
+      'brand_theme', v_cfg.brand_theme,
+      'fx_rates', v_cfg.fx_rates,
+      'payment_methods', v_cfg.catalog_payment_methods,
+      'delivery_modes', v_cfg.catalog_delivery_modes,
+      'whatsapp_settings', v_cfg.whatsapp_settings
+    ),
+    'categories', v_cats,
+    'products', v_prods
+  );
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION public.obtener_catalogo_publico(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.obtener_catalogo_publico(uuid) TO anon, authenticated, service_role;
+
+-- 5. Resolver catálogo público por alias activo, alias histórico o UUID
+CREATE OR REPLACE FUNCTION public.resolver_catalogo_publico(p_slug_or_id text)
+RETURNS jsonb
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path TO 'pg_catalog', 'public'
+AS $function$
+DECLARE
+  v_key text := lower(btrim(coalesce(p_slug_or_id, '')));
+  v_cid uuid := NULL;
+BEGIN
+  IF v_key = '' THEN
+    RETURN jsonb_build_object('available', false, 'reason', 'Enlace de tienda incompleto.');
+  END IF;
+
+  IF v_key ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
+    v_cid := v_key::uuid;
+  ELSE
+    SELECT cc.company_id
+    INTO v_cid
+    FROM public.company_config cc
+    WHERE lower(btrim(coalesce(cc.catalog_slug, ''))) = v_key
+       OR v_key = ANY(coalesce(cc.previous_catalog_slugs, '{}'::text[]))
+    ORDER BY (lower(btrim(coalesce(cc.catalog_slug, ''))) = v_key) DESC
+    LIMIT 1;
+  END IF;
+
+  IF v_cid IS NULL THEN
+    RETURN jsonb_build_object(
+      'available', false,
+      'reason', 'No se encontró ninguna tienda registrada con este enlace.'
+    );
+  END IF;
+
+  RETURN public.obtener_catalogo_publico(v_cid);
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION public.resolver_catalogo_publico(text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.resolver_catalogo_publico(text) TO anon, authenticated, service_role;
+
+-- 6. Metadatos OpenGraph ultraligeros con soporte de alias previos y huella brand_version
+CREATE OR REPLACE FUNCTION public.obtener_metadatos_enlace_tienda(p_slug_or_id text)
+RETURNS jsonb
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path TO 'pg_catalog', 'public'
+AS $function$
+DECLARE
+  v_key text := lower(btrim(coalesce(p_slug_or_id, '')));
+  v_cfg record;
+  v_prod_count integer := 0;
+  v_brand_version text;
+BEGIN
+  IF v_key = '' THEN
+    RETURN jsonb_build_object('found', false, 'available', false);
+  END IF;
+
+  IF v_key ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
+    SELECT
+      cc.company_id,
+      cc.catalog_slug,
+      cc.name,
+      cc.rif,
+      cc.phone,
+      cc.address,
+      cc.catalog_welcome,
+      cc.logo_url,
+      coalesce(nullif(btrim(cc.brand_theme), ''), 'emerald') AS brand_theme,
+      coalesce(cc.currency, 'USD') AS currency,
+      coalesce(cc.catalog_enabled, true) AS catalog_enabled,
+      coalesce(cc.catalog_show_wholesale, true) AS catalog_show_wholesale,
+      coalesce(cc.whatsapp_settings, '{}'::jsonb) AS whatsapp_settings
+    INTO v_cfg
+    FROM public.company_config cc
+    WHERE cc.company_id = v_key::uuid
+    LIMIT 1;
+  ELSE
+    SELECT
+      cc.company_id,
+      cc.catalog_slug,
+      cc.name,
+      cc.rif,
+      cc.phone,
+      cc.address,
+      cc.catalog_welcome,
+      cc.logo_url,
+      coalesce(nullif(btrim(cc.brand_theme), ''), 'emerald') AS brand_theme,
+      coalesce(cc.currency, 'USD') AS currency,
+      coalesce(cc.catalog_enabled, true) AS catalog_enabled,
+      coalesce(cc.catalog_show_wholesale, true) AS catalog_show_wholesale,
+      coalesce(cc.whatsapp_settings, '{}'::jsonb) AS whatsapp_settings
+    INTO v_cfg
+    FROM public.company_config cc
+    WHERE lower(btrim(coalesce(cc.catalog_slug, ''))) = v_key
+       OR v_key = ANY(coalesce(cc.previous_catalog_slugs, '{}'::text[]))
+    ORDER BY (lower(btrim(coalesce(cc.catalog_slug, ''))) = v_key) DESC
+    LIMIT 1;
+  END IF;
+
+  IF NOT FOUND THEN
+    RETURN jsonb_build_object('found', false, 'available', false);
+  END IF;
+
+  SELECT count(*)::int
+  INTO v_prod_count
+  FROM public.products p
+  WHERE p.company_id = v_cfg.company_id
+    AND coalesce(p.catalog_visible, true) = true
+    AND (p.price > 0 OR jsonb_array_length(coalesce(p.variants, '[]'::jsonb)) > 0);
+
+  v_brand_version := left(
+    md5(
+      coalesce(v_cfg.name, '') || '|' ||
+      coalesce(v_cfg.logo_url, '') || '|' ||
+      coalesce(v_cfg.brand_theme, '') || '|' ||
+      coalesce(v_cfg.catalog_welcome, '') || '|' ||
+      coalesce(v_cfg.whatsapp_settings ->> 'brand_tagline', '')
+    ),
+    6
+  );
+
+  RETURN jsonb_build_object(
+    'found', true,
+    'available', v_cfg.catalog_enabled,
+    'company_id', v_cfg.company_id,
+    'catalog_slug', v_cfg.catalog_slug,
+    'brand_version', v_brand_version,
+    'name', coalesce(nullif(btrim(v_cfg.name), ''), 'Tienda Oficial'),
+    'rif', v_cfg.rif,
+    'phone', v_cfg.phone,
+    'address', v_cfg.address,
+    'welcome', v_cfg.catalog_welcome,
+    'logo_url', v_cfg.logo_url,
+    'brand_theme', v_cfg.brand_theme,
+    'currency', v_cfg.currency,
+    'show_wholesale', v_cfg.catalog_show_wholesale,
+    'whatsapp_settings', v_cfg.whatsapp_settings,
+    'products_count', v_prod_count
+  );
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION public.obtener_metadatos_enlace_tienda(text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.obtener_metadatos_enlace_tienda(text) TO anon, authenticated, service_role;
+
+NOTIFY pgrst, 'reload schema';
+
+COMMIT;
+
+
+-- ============================================================================
+-- MIGRACIÓN 20261104000021: CINCO SOLUCIONES COMERCIALES Y FINANCIERAS AVANZADAS
+-- 1. Toma Física Ciega de Inventario (blind_inventory_sessions)
+-- 2. Plan Separe / Sistema de Apartados y Anticipos (layaway_contracts)
+-- 3. Cambios Rápidos «Mano a Mano» y Garantías (product_exchanges)
+-- 4. Conciliación Bancaria Automática + 4x1000 / Comisiones (bank_reconciliations)
+-- 5. Bitácora de Escudo de Márgenes y Precios (price_shield_batches)
+-- 100% Idempotente · Aislamiento multiempresa RLS por company_id
+-- ============================================================================
+
+-- 1. TOMA FÍSICA CIEGA DE INVENTARIO
+CREATE TABLE IF NOT EXISTS public.blind_inventory_sessions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id uuid NOT NULL DEFAULT public.current_company_id(),
+  session_code text NOT NULL,
+  warehouse_id uuid,
+  title text NOT NULL,
+  category_filter text,
+  status text NOT NULL DEFAULT 'en_conteo' CHECK (status IN ('en_conteo', 'revision', 'aplicada', 'anulada')),
+  items jsonb NOT NULL DEFAULT '[]'::jsonb,
+  counted_by_name text,
+  approved_by_name text,
+  total_variance_units numeric(14,2) NOT NULL DEFAULT 0,
+  total_variance_cost numeric(14,2) NOT NULL DEFAULT 0,
+  notes text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  applied_at timestamptz
+);
+
+CREATE INDEX IF NOT EXISTS idx_blind_inv_company_created
+  ON public.blind_inventory_sessions (company_id, created_at DESC);
+
+ALTER TABLE public.blind_inventory_sessions ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS blind_inventory_sessions_company_access ON public.blind_inventory_sessions;
+CREATE POLICY blind_inventory_sessions_company_access
+  ON public.blind_inventory_sessions
+  FOR ALL
+  TO authenticated
+  USING (company_id = public.current_company_id())
+  WITH CHECK (company_id = public.current_company_id());
+
+-- 2. PLAN SEPARE / SISTEMA DE APARTADOS Y ANTICIPOS
+CREATE TABLE IF NOT EXISTS public.layaway_contracts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id uuid NOT NULL DEFAULT public.current_company_id(),
+  contract_code text NOT NULL,
+  warehouse_id uuid,
+  customer_id uuid,
+  customer_name text NOT NULL,
+  customer_document text,
+  customer_phone text,
+  items jsonb NOT NULL DEFAULT '[]'::jsonb,
+  total_amount numeric(14,2) NOT NULL DEFAULT 0,
+  paid_amount numeric(14,2) NOT NULL DEFAULT 0,
+  balance numeric(14,2) NOT NULL DEFAULT 0,
+  due_date date NOT NULL,
+  payments jsonb NOT NULL DEFAULT '[]'::jsonb,
+  reservation_ids jsonb NOT NULL DEFAULT '[]'::jsonb,
+  status text NOT NULL DEFAULT 'activo' CHECK (status IN ('activo', 'completado', 'vencido', 'anulado')),
+  sale_id uuid,
+  notes text,
+  created_by_name text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_layaway_contracts_company_status
+  ON public.layaway_contracts (company_id, status, due_date);
+
+ALTER TABLE public.layaway_contracts ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS layaway_contracts_company_access ON public.layaway_contracts;
+CREATE POLICY layaway_contracts_company_access
+  ON public.layaway_contracts
+  FOR ALL
+  TO authenticated
+  USING (company_id = public.current_company_id())
+  WITH CHECK (company_id = public.current_company_id());
+
+-- 3. CAMBIOS RÁPIDOS «MANO A MANO» Y GARANTÍAS
+CREATE TABLE IF NOT EXISTS public.product_exchanges (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id uuid NOT NULL DEFAULT public.current_company_id(),
+  exchange_code text NOT NULL,
+  kind text NOT NULL DEFAULT 'cambio_mano_a_mano' CHECK (kind IN ('cambio_mano_a_mano', 'garantia')),
+  original_sale_id uuid,
+  customer_name text NOT NULL,
+  customer_phone text,
+  supplier_name text,
+  returned_items jsonb NOT NULL DEFAULT '[]'::jsonb,
+  delivered_items jsonb NOT NULL DEFAULT '[]'::jsonb,
+  price_difference numeric(14,2) NOT NULL DEFAULT 0,
+  payment_method text NOT NULL DEFAULT 'efectivo',
+  warranty_status text NOT NULL DEFAULT 'resuelto' CHECK (
+    warranty_status IN ('recibido_local', 'en_revision_proveedor', 'reemplazado', 'resuelto', 'rechazado')
+  ),
+  reason text NOT NULL DEFAULT '',
+  serial_or_lot text,
+  created_by_name text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_product_exchanges_company_created
+  ON public.product_exchanges (company_id, created_at DESC);
+
+ALTER TABLE public.product_exchanges ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS product_exchanges_company_access ON public.product_exchanges;
+CREATE POLICY product_exchanges_company_access
+  ON public.product_exchanges
+  FOR ALL
+  TO authenticated
+  USING (company_id = public.current_company_id())
+  WITH CHECK (company_id = public.current_company_id());
+
+-- 4. CONCILIACIÓN BANCARIA AUTOMÁTICA
+CREATE TABLE IF NOT EXISTS public.bank_reconciliations (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id uuid NOT NULL DEFAULT public.current_company_id(),
+  recon_code text NOT NULL,
+  bank_name text NOT NULL,
+  account_hint text,
+  period_label text,
+  rows jsonb NOT NULL DEFAULT '[]'::jsonb,
+  matched_count integer NOT NULL DEFAULT 0,
+  unmatched_count integer NOT NULL DEFAULT 0,
+  fee_count integer NOT NULL DEFAULT 0,
+  fees_registered_amount numeric(14,2) NOT NULL DEFAULT 0,
+  total_credits numeric(14,2) NOT NULL DEFAULT 0,
+  total_debits numeric(14,2) NOT NULL DEFAULT 0,
+  status text NOT NULL DEFAULT 'abierta' CHECK (status IN ('abierta', 'cerrada')),
+  created_by_name text,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_bank_reconciliations_company_created
+  ON public.bank_reconciliations (company_id, created_at DESC);
+
+ALTER TABLE public.bank_reconciliations ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS bank_reconciliations_company_access ON public.bank_reconciliations;
+CREATE POLICY bank_reconciliations_company_access
+  ON public.bank_reconciliations
+  FOR ALL
+  TO authenticated
+  USING (company_id = public.current_company_id())
+  WITH CHECK (company_id = public.current_company_id());
+
+-- 5. BITÁCORA DE ESCUDO DE PRECIOS Y MÁRGENES
+CREATE TABLE IF NOT EXISTS public.price_shield_batches (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id uuid NOT NULL DEFAULT public.current_company_id(),
+  batch_code text NOT NULL,
+  strategy_label text NOT NULL,
+  rounding_mode text NOT NULL,
+  updated_count integer NOT NULL DEFAULT 0,
+  avg_prev_margin numeric(8,2) NOT NULL DEFAULT 0,
+  avg_new_margin numeric(8,2) NOT NULL DEFAULT 0,
+  product_ids jsonb NOT NULL DEFAULT '[]'::jsonb,
+  created_by_name text,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_price_shield_batches_company_created
+  ON public.price_shield_batches (company_id, created_at DESC);
+
+ALTER TABLE public.price_shield_batches ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS price_shield_batches_company_access ON public.price_shield_batches;
+CREATE POLICY price_shield_batches_company_access
+  ON public.price_shield_batches
+  FOR ALL
+  TO authenticated
+  USING (company_id = public.current_company_id())
+  WITH CHECK (company_id = public.current_company_id());
+
+
+-- ============================================================================
+-- INVENTARIOPRO · MIGRACIÓN 000017
+-- Centro de Administración de Scripts SQL y Diagnóstico en Vivo de Supabase
+-- Exclusivo para la cuenta maestra desarrolladora: sanlobo3@hotmail.com
+-- 100% Idempotente · Permite ejecutar y auditar futuros scripts SQL desde la app
+-- ============================================================================
+
+BEGIN;
+
+-- 1. Bitácora de migraciones y scripts ejecutados desde InventarioPro
+CREATE TABLE IF NOT EXISTS public.sql_migration_log (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  script_id text NOT NULL,
+  script_title text NOT NULL,
+  executed_by uuid REFERENCES auth.users(id) ON DELETE SET NULL,
+  executed_email text NOT NULL,
+  status text NOT NULL DEFAULT 'aplicado'
+    CHECK (status IN ('aplicado', 'error')),
+  summary text,
+  statements_length integer NOT NULL DEFAULT 0,
+  executed_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_sql_migration_log_executed_at
+  ON public.sql_migration_log (executed_at DESC);
+
+ALTER TABLE public.sql_migration_log ENABLE ROW LEVEL SECURITY;
+
+REVOKE ALL ON public.sql_migration_log FROM PUBLIC, anon;
+GRANT SELECT ON public.sql_migration_log TO authenticated;
+
+DROP POLICY IF EXISTS sql_migration_log_select_admin ON public.sql_migration_log;
+CREATE POLICY sql_migration_log_select_admin
+ON public.sql_migration_log
+FOR SELECT
+TO authenticated
+USING (
+  EXISTS (
+    SELECT 1
+    FROM public.profiles p
+    WHERE p.id = auth.uid()
+      AND p.active = true
+      AND (
+        p.role = 'admin'
+        OR lower(btrim(coalesce(p.email, ''))) = 'sanlobo3@hotmail.com'
+      )
+  )
+);
+
+-- 2. Diagnóstico en tiempo real del esquema PostgreSQL / Supabase
+CREATE OR REPLACE FUNCTION public.admin_diagnostico_esquema()
+RETURNS jsonb
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path TO 'pg_catalog', 'public'
+AS $function$
+DECLARE
+  v_uid uuid := auth.uid();
+  v_allowed boolean := false;
+  v_tables jsonb;
+  v_rpcs jsonb;
+BEGIN
+  IF v_uid IS NULL THEN
+    RAISE EXCEPTION 'Sesión requerida';
+  END IF;
+
+  SELECT EXISTS (
+    SELECT 1
+    FROM public.profiles p
+    WHERE p.id = v_uid
+      AND p.active = true
+      AND (
+        p.role = 'admin'
+        OR lower(btrim(coalesce(p.email, ''))) = 'sanlobo3@hotmail.com'
+      )
+  ) INTO v_allowed;
+
+  IF NOT v_allowed THEN
+    RAISE EXCEPTION 'Acceso restringido al administrador de plataforma';
+  END IF;
+
+  SELECT jsonb_agg(
+    jsonb_build_object(
+      'name', t.tbl,
+      'label', t.lbl,
+      'installed', to_regclass('public.' || t.tbl) IS NOT NULL
+    )
+  )
+  INTO v_tables
+  FROM (
+    VALUES
+      ('profiles', 'Perfiles y roles de usuario'),
+      ('member_profiles', 'Expedientes de personal y nómina'),
+      ('branches', 'Sucursales y centros de costo'),
+      ('warehouses', 'Bodegas multibodega'),
+      ('purchase_orders', 'Órdenes de compra y recepción'),
+      ('financial_budgets', 'Presupuesto maestro financiero'),
+      ('product_images', 'Imágenes reales POS y catálogo PDF'),
+      ('catalog_orders', 'Pedidos web de catálogo y captures de pago'),
+      ('support_tickets', 'Soporte técnico y sesiones autorizadas'),
+      ('cpa_working_papers', 'Papeles de trabajo y firma CPC'),
+      ('acc_accounts', 'Plan de cuentas contables'),
+      ('acc_entries', 'Libro diario y comprobantes'),
+      ('sql_migration_log', 'Bitácora de migraciones SQL')
+  ) AS t(tbl, lbl);
+
+  SELECT jsonb_agg(
+    jsonb_build_object(
+      'name', r.fn_name,
+      'label', r.lbl,
+      'installed', EXISTS (
+        SELECT 1
+        FROM pg_catalog.pg_proc pr
+        JOIN pg_catalog.pg_namespace ns ON ns.oid = pr.pronamespace
+        WHERE ns.nspname = 'public'
+          AND pr.proname = r.fn_name
+      )
+    )
+  )
+  INTO v_rpcs
+  FROM (
+    VALUES
+      ('is_tech_support', 'Validador RLS de soporte técnico'),
+      ('admin_guardar_usuario_completo', 'Gestión integral de roles (11 perfiles)'),
+      ('actualizar_imagen_producto', 'Sincronización de imágenes POS/Catálogo'),
+      ('obtener_catalogo_publico', 'Lectura pública de catálogo digital'),
+      ('resolver_catalogo_publico', 'Resolución de enlace propio (/tienda/empresa)'),
+      ('obtener_metadatos_enlace_tienda', 'Metadatos OpenGraph (Logo empresa en WhatsApp)'),
+      ('verificar_stock_catalogo_publico', 'Verificación de stock en tiempo real (Catálogo)'),
+      ('crear_pedido_catalogo_publico', 'Registro de pedidos públicos del catálogo'),
+      ('gestionar_pedido_catalogo', 'Verificación de captures y ventas de catálogo'),
+      ('acc_trial_balance', 'Motor de Hoja de Trabajo y Balance'),
+      ('acc_reconcile', 'Conciliación Operación vs. Libros'),
+      ('admin_ejecutar_migracion_sql', 'Ejecución SQL en 1 clic desde la web')
+  ) AS r(fn_name, lbl);
+
+  RETURN jsonb_build_object(
+    'ok', true,
+    'checked_at', now(),
+    'pg_version', current_setting('server_version', true),
+    'tables', coalesce(v_tables, '[]'::jsonb),
+    'rpcs', coalesce(v_rpcs, '[]'::jsonb)
+  );
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION public.admin_diagnostico_esquema() FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.admin_diagnostico_esquema() TO authenticated, service_role;
+
+-- 3. Motor de ejecución SQL administrativa en 1 clic (EXCLUSIVO sanlobo3@hotmail.com)
+CREATE OR REPLACE FUNCTION public.admin_ejecutar_migracion_sql(
+  p_sql text,
+  p_script_id text DEFAULT 'manual',
+  p_script_title text DEFAULT 'Script administrativo'
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'pg_catalog', 'public'
+AS $function$
+DECLARE
+  v_uid uuid := auth.uid();
+  v_jwt_email text := lower(btrim(coalesce(auth.jwt() ->> 'email', '')));
+  v_profile_email text;
+  v_profile_role text;
+  v_clean text;
+BEGIN
+  IF v_uid IS NULL THEN
+    RAISE EXCEPTION 'Debes iniciar sesión para ejecutar scripts SQL';
+  END IF;
+
+  SELECT lower(btrim(coalesce(p.email, ''))), p.role
+  INTO v_profile_email, v_profile_role
+  FROM public.profiles p
+  WHERE p.id = v_uid
+    AND p.active = true;
+
+  IF v_profile_email IS DISTINCT FROM 'sanlobo3@hotmail.com'
+     OR (v_jwt_email <> '' AND v_jwt_email <> 'sanlobo3@hotmail.com') THEN
+    RAISE EXCEPTION 'Seguridad: únicamente la cuenta maestra sanlobo3@hotmail.com está autorizada para ejecutar migraciones SQL desde la plataforma.';
+  END IF;
+
+  v_clean := btrim(coalesce(p_sql, ''));
+  IF v_clean = '' THEN
+    RAISE EXCEPTION 'El contenido SQL está vacío';
+  END IF;
+
+  -- PL/pgSQL ya ejecuta todo el cuerpo de forma atómica en una transacción;
+  -- retiramos únicamente envoltorios BEGIN; iniciales y COMMIT; finales de archivo.
+  v_clean := regexp_replace(v_clean, '^\s*(?:--[^\n]*\n|\s)*BEGIN\s*;', '', 'i');
+  v_clean := regexp_replace(v_clean, 'COMMIT\s*;\s*(?:--[^\n]*\s*)*$', '', 'i');
+
+  EXECUTE v_clean;
+
+  INSERT INTO public.sql_migration_log (
+    script_id,
+    script_title,
+    executed_by,
+    executed_email,
+    status,
+    summary,
+    statements_length
+  )
+  VALUES (
+    coalesce(nullif(btrim(p_script_id), ''), 'manual'),
+    coalesce(nullif(btrim(p_script_title), ''), 'Script administrativo'),
+    v_uid,
+    v_profile_email,
+    'aplicado',
+    'Ejecutado correctamente y caché de esquema recargado.',
+    length(v_clean)
+  );
+
+  PERFORM pg_notify('pgrst', 'reload schema');
+
+  RETURN jsonb_build_object(
+    'ok', true,
+    'executed_at', now(),
+    'script_id', p_script_id,
+    'message', 'Script SQL ejecutado en Supabase y esquema recargado.'
+  );
+END;
+$function$;
+
+REVOKE ALL ON FUNCTION public.admin_ejecutar_migracion_sql(text, text, text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.admin_ejecutar_migracion_sql(text, text, text) TO authenticated, service_role;
+
+NOTIFY pgrst, 'reload schema';
+
+COMMIT;

@@ -1,0 +1,26 @@
+CAMBIOS (consolidación contable en el modelo acc_*)
+
+SUBIR / REEMPLAZAR en GitHub (misma ruta):
+  src/pages/Accounting.tsx
+  src/pages/AccountingStatements.tsx
+  src/pages/SqlAdminCenter.tsx
+  src/lib/sqlScripts.ts
+  api/admin-sql.ts
+  supabase/migrations/20261107000048_consolidar_contabilidad_acc_y_rendimiento.sql   (nuevo; ya aplicada en Supabase)
+  supabase/migrations_superseded/README.md                                            (nuevo)
+  supabase/migrations_superseded/20261106000022_contable_pro_partida_doble_puc_niif.sql  (mover aquí)
+  supabase/migrations_superseded/20261106000046_sistema_contable_partida_doble.sql       (mover aquí)
+  supabase/migrations_superseded/20261106000047_reportes_financieros_contables.sql       (mover aquí)
+
+BORRAR en GitHub (código muerto que apuntaba a tablas inexistentes):
+  src/services/accountingService.ts
+  src/hooks/useAccounting.ts
+  src/components/accounting/JournalEntryForm.tsx
+  src/components/JournalEntryForm.tsx
+  supabase/migrations/20261106000022_contable_pro_partida_doble_puc_niif.sql
+  supabase/migrations/20261106000046_sistema_contable_partida_doble.sql
+  supabase/migrations/20261106000047_reportes_financieros_contables.sql
+
+IMPORTANTE: borra primero src/lib/sqlScripts.ts viejo reemplazándolo; si dejas el
+sqlScripts.ts anterior y borras la migración 000022, el build falla.
+

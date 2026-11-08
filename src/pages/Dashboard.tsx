@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { supabase } from '../lib/supabase'
-import { isPageAllowedForRole } from '../lib/pagePermissions'
 import {
   useAuth,
   isCompanyManager,
@@ -169,14 +168,8 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
   const canSell = canRegisterSales(user?.role)
   const canInventory = canManageInventory(user?.role)
   const showGoal = !!user && !isManager && canSell
-  // Solo se muestran atajos a páginas a las que este rol realmente puede entrar (misma tabla que el menú)
-  const canGo = (page: string) => isPageAllowedForRole(page, user?.role)
-  // Almacén y Compras NO ven cifras comerciales (ventas, cartera por cobrar, ingresos, clientes): solo lo suyo.
-  const showCommercial = isManager || canSell || canViewAccounting(user?.role)
-  // Cuentas por pagar: la RPC cuentas_por_pagar() de la base SOLO responde a dueño/admin; el resto ve «Restringido»
-  const canSeePayables = user?.role === 'dueno' || user?.role === 'admin'
 
-  const [activeKpi, setActiveKpi] = useState<KpiId>(showCommercial ? 'sales_today' : 'low_stock')
+  const [activeKpi, setActiveKpi] = useState<KpiId>('sales_today')
   const [initialLoading, setInitialLoading] = useState(true)
   const [refreshingKpi, setRefreshingKpi] = useState<KpiId | 'all' | null>(null)
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
@@ -214,11 +207,7 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
   const [debtFilter, setDebtFilter] = useState<'todos' | 'vencidos' | 'al_dia'>('todos')
 
   const cp = useCopilot()
-  const COMMERCIAL_ALERT_PAGES = ['quotations', 'sales', 'cartera', 'layaways', 'goals', 'catorders', 'omnichannel', 'customers']
-  const topAlerts = visibleAlerts(cp)
-    .filter(a => a.severity !== 'info')
-    .filter(a => showCommercial || !COMMERCIAL_ALERT_PAGES.includes(String(a.page || '')))
-    .slice(0, 4)
+  const topAlerts = visibleAlerts(cp).filter(a => a.severity !== 'info').slice(0, 4)
 
   const innovationsSummary = useMemo(() => {
     try {
@@ -363,7 +352,7 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
   }, [])
 
   const loadPayables = useCallback(async () => {
-    if (!canSeePayables) {
+    if (!canInventory) {
       setPayables({ total_owed: 0, total_overdue: 0, suppliers: [], available: false })
       return
     }
@@ -427,7 +416,7 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
       suppliers: Array.from(bySup.values()).sort((a, b) => b.overdue - a.overdue || b.owed - a.owed),
       available: true,
     })
-  }, [canSeePayables])
+  }, [canInventory])
 
   const loadReceivables = useCallback(async () => {
     if (!canSell) {
@@ -858,10 +847,10 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
     {
       id: 'payables',
       label: 'Cuentas por pagar',
-      value: canSeePayables ? money(payables.total_owed) : 'Restringido',
+      value: canInventory ? money(payables.total_owed) : 'Restringido',
       icon: <Receipt className="w-4 h-4" />,
       tone:
-        !canSeePayables
+        !canInventory
           ? 'normal'
           : payables.total_overdue > 0
             ? 'critical'
@@ -870,7 +859,7 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
               : 'positive',
       meta: (
         <div className="flex items-center gap-1.5 text-xs text-slate-500 truncate tabular-nums">
-          {!canSeePayables ? (
+          {!canInventory ? (
             <span>Solo administración</span>
           ) : payables.total_owed <= 0 ? (
             <span className="text-emerald-700 font-medium">Sin deuda con proveedores</span>
@@ -920,10 +909,6 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
       ),
     },
   ]
-
-  const visibleKpiCards = kpiCards.filter(
-    c => showCommercial || (c.id !== 'sales_today' && c.id !== 'receivables')
-  )
 
   const isGlobalSyncing = refreshingKpi === 'all'
 
@@ -1093,7 +1078,6 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
             </div>
 
             <div className="flex items-center gap-2 flex-wrap">
-              {canGo('omnichannel') && (
               <button
                 type="button"
                 onClick={() => onNavigate('omnichannel')}
@@ -1107,8 +1091,6 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
                   </span>
                 )}
               </button>
-              )}
-              {canGo('ai_actions') && (
               <button
                 type="button"
                 onClick={() => onNavigate('ai_actions')}
@@ -1122,12 +1104,10 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
                   </span>
                 )}
               </button>
-              )}
             </div>
           </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5 pt-3.5">
-            {canGo('omnichannel') && (
             <button
               type="button"
               onClick={() => onNavigate('omnichannel')}
@@ -1142,9 +1122,7 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
               </div>
               <p className="text-[10px] text-indigo-300/70 truncate">WhatsApp, Tienda, Ruta</p>
             </button>
-            )}
 
-            {canGo('ai_actions') && (
             <button
               type="button"
               onClick={() => onNavigate('ai_actions')}
@@ -1159,9 +1137,7 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
               </div>
               <p className="text-[10px] text-indigo-300/70 truncate">Human-in-the-loop</p>
             </button>
-            )}
 
-            {canGo('branch_balance') && (
             <button
               type="button"
               onClick={() => onNavigate('branch_balance')}
@@ -1176,9 +1152,7 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
               </div>
               <p className="text-[10px] text-indigo-300/70 truncate">Traslados sugeridos</p>
             </button>
-            )}
 
-            {canGo('anomaly_detector') && (
             <button
               type="button"
               onClick={() => onNavigate('anomaly_detector')}
@@ -1193,9 +1167,7 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
               </div>
               <p className="text-[10px] text-indigo-300/70 truncate">Auditoría anti-fraude</p>
             </button>
-            )}
 
-            {canGo('compliance') && (
             <button
               type="button"
               onClick={() => onNavigate('compliance')}
@@ -1210,7 +1182,6 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
               </div>
               <p className="text-[10px] text-indigo-300/70 truncate">SOAT, DIAN, Cámaras</p>
             </button>
-            )}
           </div>
         </div>
       )}
@@ -1235,7 +1206,7 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-            {visibleKpiCards.map(card => {
+            {kpiCards.map(card => {
               const selected = activeKpi === card.id
               const syncingThis = refreshingKpi === card.id || refreshingKpi === 'all'
               const iconTone =
@@ -1607,7 +1578,7 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
                 </div>
               </div>
 
-              {canSeePayables && (
+              {canInventory && (
                 <div className="flex flex-wrap items-center gap-2">
                   <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg">
                     {(
@@ -1654,7 +1625,7 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
               )}
             </div>
 
-            {!canSeePayables ? (
+            {!canInventory ? (
               <div className="px-5 py-10 text-center text-sm text-slate-500">
                 La consulta de cuentas por pagar a proveedores está disponible para el dueño y el administrador.
               </div>
@@ -1846,7 +1817,6 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
       </section>
 
       {/* Gráficos interactivos de rendimiento y tendencias */}
-      {showCommercial && (
       <section className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
           <div>
@@ -1955,23 +1925,20 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
           />
         )}
       </section>
-      )}
 
       {/* Franja secundaria de pulso mensual del negocio */}
-      <section className={`bg-white rounded-xl border border-slate-200 overflow-hidden grid ${showCommercial ? 'grid-cols-2 lg:grid-cols-4' : 'grid-cols-1'}`}>
-        {showCommercial && (
-          <button
-            type="button"
-            onClick={() => onNavigate?.(isManager ? 'reports' : 'sales')}
-            className="p-4 text-left hover:bg-slate-50/70 transition-colors border-b lg:border-b-0 border-r border-slate-200"
-          >
-            <p className="text-xs text-slate-500">Ingresos del mes</p>
-            <p className="text-lg font-bold text-slate-900 tabular-nums mt-1">{money(stats.revenue_month)}</p>
-            <p className="text-[11px] text-slate-400 tabular-nums mt-0.5">
-              Histórico: {money(stats.revenue_total)}
-            </p>
-          </button>
-        )}
+      <section className="bg-white rounded-xl border border-slate-200 overflow-hidden grid grid-cols-2 lg:grid-cols-4">
+        <button
+          type="button"
+          onClick={() => onNavigate?.(isManager ? 'reports' : 'sales')}
+          className="p-4 text-left hover:bg-slate-50/70 transition-colors border-b lg:border-b-0 border-r border-slate-200"
+        >
+          <p className="text-xs text-slate-500">Ingresos del mes</p>
+          <p className="text-lg font-bold text-slate-900 tabular-nums mt-1">{money(stats.revenue_month)}</p>
+          <p className="text-[11px] text-slate-400 tabular-nums mt-0.5">
+            Histórico: {money(stats.revenue_total)}
+          </p>
+        </button>
 
         {isManager && (
           <button
@@ -1997,23 +1964,19 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
           <p className="text-xs text-slate-500">Catálogo de productos</p>
           <p className="text-lg font-bold text-slate-900 tabular-nums mt-1">{stats.products_count}</p>
           <p className="text-[11px] text-slate-400 tabular-nums mt-0.5">
-            {showCommercial
-              ? `${stats.sales_count} ${stats.sales_count === 1 ? 'venta histórica' : 'ventas históricas'}`
-              : 'Productos en inventario'}
+            {stats.sales_count} {stats.sales_count === 1 ? 'venta histórica' : 'ventas históricas'}
           </p>
         </button>
 
-        {showCommercial && (
-          <button
-            type="button"
-            onClick={() => onNavigate?.('customers')}
-            className="p-4 text-left hover:bg-slate-50/70 transition-colors"
-          >
-            <p className="text-xs text-slate-500">Clientes registrados</p>
-            <p className="text-lg font-bold text-slate-900 tabular-nums mt-1">{stats.customers_count}</p>
-            <p className="text-[11px] text-slate-400 mt-0.5">Directorio comercial activo</p>
-          </button>
-        )}
+        <button
+          type="button"
+          onClick={() => onNavigate?.('customers')}
+          className="p-4 text-left hover:bg-slate-50/70 transition-colors"
+        >
+          <p className="text-xs text-slate-500">Clientes registrados</p>
+          <p className="text-lg font-bold text-slate-900 tabular-nums mt-1">{stats.customers_count}</p>
+          <p className="text-[11px] text-slate-400 mt-0.5">Directorio comercial activo</p>
+        </button>
       </section>
 
       {/* Meta del vendedor (si aplica) y Copiloto */}

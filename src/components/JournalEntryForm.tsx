@@ -1,5 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
-import { supabase } from '../lib/supabase'
+import { useMemo, useState } from 'react'
+import {
+  SEED_PUC_ACCOUNTS,
+  buildAccountTree,
+  type AccountNode,
+} from '../lib/accountingTree'
 import {
   Plus,
   Trash2,
@@ -17,17 +21,6 @@ import {
   Info,
 } from 'lucide-react'
 
-// Cuenta del plan contable real de la empresa (tabla acc_accounts)
-interface PucAccount {
-  id: string
-  code: string
-  name: string
-  type: string
-  nature: 'Débito' | 'Crédito'
-  level: number
-  postable: boolean
-}
-
 export interface JournalLineItem {
   id: string
   account_code: string
@@ -43,8 +36,9 @@ interface JournalEntryFormProps {
 }
 
 export default function JournalEntryForm({ onSuccess, onCancel }: JournalEntryFormProps) {
-  // El número lo asigna la base de datos (acc_next_number) al guardar
-  const [entryNumber, setEntryNumber] = useState('')
+  const [entryNumber, setEntryNumber] = useState(
+    () => `AS-${new Date().getFullYear()}-${Math.floor(100 + Math.random() * 900)}`
+  )
   const [entryDate, setEntryDate] = useState(() => new Date().toISOString().split('T')[0])
   const [concept, setConcept] = useState('')
   const [sourceModule, setSourceModule] = useState('manual')
@@ -55,60 +49,23 @@ export default function JournalEntryForm({ onSuccess, onCancel }: JournalEntryFo
 
   // Líneas dinámicas del asiento contable
   const [lines, setLines] = useState<JournalLineItem[]>([
-    { id: 'line-init-1', account_code: '', account_name: '', debit: '', credit: '', memo: '' },
-    { id: 'line-init-2', account_code: '', account_name: '', debit: '', credit: '', memo: '' },
+    {
+      id: 'line-init-1',
+      account_code: '110505',
+      account_name: 'Caja General',
+      debit: 100000,
+      credit: '',
+      memo: 'Ingreso a caja',
+    },
+    {
+      id: 'line-init-2',
+      account_code: '413505',
+      account_name: 'Venta de Mercancías',
+      debit: '',
+      credit: 100000,
+      memo: 'Contrapartida de venta',
+    },
   ])
-
-  // Plan de cuentas real de la empresa (acc_accounts), con jerarquía por parent_id
-  const [accounts, setAccounts] = useState<PucAccount[]>([])
-  const [accountsLoading, setAccountsLoading] = useState(true)
-
-  useEffect(() => {
-    let alive = true
-    ;(async () => {
-      const { data, error } = await supabase
-        .from('acc_accounts')
-        .select('id, code, name, type, nature, parent_id, is_postable, active')
-        .eq('active', true)
-        .order('code', { ascending: true })
-      if (!alive) return
-      if (error) {
-        setErrorMessage(`No se pudo cargar el plan de cuentas: ${error.message}`)
-        setAccountsLoading(false)
-        return
-      }
-      const rows = (data || []) as Array<{
-        id: string
-        code: string
-        name: string
-        type: string
-        nature: string
-        parent_id: string | null
-        is_postable: boolean
-      }>
-      const byId = new Map(rows.map((r) => [r.id, r]))
-      const depth = (r: { parent_id: string | null }, guard = 0): number => {
-        const parent = r.parent_id ? byId.get(r.parent_id) : undefined
-        return !parent || guard > 12 ? 1 : 1 + depth(parent, guard + 1)
-      }
-      const cap = (t: string) => (t ? t.charAt(0).toUpperCase() + t.slice(1) : t)
-      setAccounts(
-        rows.map((r) => ({
-          id: r.id,
-          code: r.code,
-          name: r.name,
-          type: cap(r.type),
-          nature: r.nature === 'credito' ? 'Crédito' : 'Débito',
-          level: depth(r),
-          postable: r.is_postable,
-        }))
-      )
-      setAccountsLoading(false)
-    })()
-    return () => {
-      alive = false
-    }
-  }, [])
 
   // Explorador del Árbol PUC modal
   const [pucModalOpen, setPucModalOpen] = useState(false)
@@ -137,14 +94,19 @@ export default function JournalEntryForm({ onSuccess, onCancel }: JournalEntryFo
     }
   }, [lines])
 
-  // Cuentas filtradas para el explorador del plan de cuentas
+  // Árbol PUC jerárquico NIIF
+  const accountTree = useMemo(() => {
+    return buildAccountTree(SEED_PUC_ACCOUNTS)
+  }, [])
+
+  // Cuentas filtradas para selector rápido
   const filteredAccounts = useMemo(() => {
-    if (!pucSearch.trim()) return accounts
+    if (!pucSearch.trim()) return SEED_PUC_ACCOUNTS
     const q = pucSearch.toLowerCase().trim()
-    return accounts.filter(
+    return SEED_PUC_ACCOUNTS.filter(
       (a) => a.code.toLowerCase().includes(q) || a.name.toLowerCase().includes(q)
     )
-  }, [pucSearch, accounts])
+  }, [pucSearch])
 
   // Agregar fila
   function addLine() {
@@ -187,7 +149,7 @@ export default function JournalEntryForm({ onSuccess, onCancel }: JournalEntryFo
 
         // Si se cambia el código de cuenta, actualizar el nombre
         if (field === 'account_code') {
-          const acc = accounts.find((a) => a.code === value)
+          const acc = SEED_PUC_ACCOUNTS.find((a) => a.code === value)
           if (acc) updated.account_name = acc.name
         }
 
@@ -220,12 +182,7 @@ export default function JournalEntryForm({ onSuccess, onCancel }: JournalEntryFo
   }
 
   // Seleccionar cuenta desde el modal PUC
-  function handleSelectAccount(account: PucAccount) {
-    if (!account.postable) {
-      setErrorMessage(`La cuenta ${account.code} · ${account.name} es de agrupación: elige una cuenta auxiliar que acepte movimientos.`)
-      return
-    }
-    setErrorMessage(null)
+  function handleSelectAccount(account: AccountNode) {
     if (activeLineIdForPuc) {
       setLines((prev) =>
         prev.map((l) =>
@@ -274,51 +231,40 @@ export default function JournalEntryForm({ onSuccess, onCancel }: JournalEntryFo
     setSaving(true)
 
     try {
-      const byCode = new Map(accounts.map((a) => [a.code, a]))
-      const rpcLines: Array<{ account_id: string; debit: number; credit: number; memo: string }> = []
-      for (const [idx, l] of lines.entries()) {
-        const acc = byCode.get(l.account_code)
-        if (!acc) {
-          throw new Error(`La línea #${idx + 1} usa una cuenta que no existe en tu plan de cuentas.`)
-        }
-        if (!acc.postable) {
-          throw new Error(`La cuenta ${acc.code} · ${acc.name} es de agrupación: elige una cuenta auxiliar que acepte movimientos.`)
-        }
-        rpcLines.push({
-          account_id: acc.id,
+      const payload = {
+        entry_number: entryNumber,
+        entry_date: entryDate,
+        concept,
+        status: status === 'posteado' ? 'POSTED' : 'DRAFT',
+        source_module: sourceModule,
+        lines: lines.map((l) => ({
+          account_code: l.account_code,
+          account_name: l.account_name,
           debit: Number(l.debit) || 0,
           credit: Number(l.credit) || 0,
           memo: l.memo || concept,
-        })
+        })),
       }
 
-      // Libro oficial: acc_create_entry (partida doble, periodos y numeración en la base de datos)
-      const { data: entryId, error: rpcError } = await supabase.rpc('acc_create_entry', {
-        p_date: entryDate,
-        p_description: concept.trim(),
-        p_lines: rpcLines,
-        p_post: status === 'posteado',
-        p_source_type: sourceModule === 'ajustes' ? 'ajuste' : 'manual',
-        p_source_id: null,
-        p_event: sourceModule,
+      const res = await fetch('/api/accounting/entries', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
       })
-      if (rpcError) throw new Error(rpcError.message)
 
-      const { data: numRow } = await supabase
-        .from('acc_entries')
-        .select('number')
-        .eq('id', entryId as string)
-        .maybeSingle()
-      const number = (numRow as { number?: string } | null)?.number || ''
-      setEntryNumber(number)
+      const data = await res.json()
+
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || 'No se pudo registrar el asiento contable.')
+      }
 
       setSuccessMessage(
         status === 'posteado'
-          ? `✓ Asiento ${number} contabilizado bajo partida doble. Queda inmutable (solo se corrige con un reverso).`
-          : `✓ Asiento ${number} guardado en borrador con éxito.`
+          ? `✓ Asiento ${entryNumber} posteado exitosamente bajo principio de partida doble. Estado inmutable registrado.`
+          : `✓ Asiento ${entryNumber} guardado en borrador con éxito.`
       )
 
-      if (onSuccess) onSuccess({ id: entryId, number })
+      if (onSuccess) onSuccess(data.entry)
     } catch (err: any) {
       setErrorMessage(err.message || 'Error de comunicación al guardar el asiento.')
     } finally {
@@ -386,9 +332,9 @@ export default function JournalEntryForm({ onSuccess, onCancel }: JournalEntryFo
           <input
             type="text"
             value={entryNumber}
-            placeholder="Se asigna al guardar"
-            readOnly
-            className="w-full px-3 py-2 text-xs font-mono font-semibold rounded-xl border border-slate-200 bg-slate-50 text-slate-600 focus:outline-none"
+            onChange={(e) => setEntryNumber(e.target.value)}
+            className="w-full px-3 py-2 text-xs font-mono font-semibold rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            required
           />
         </div>
 
@@ -500,10 +446,8 @@ export default function JournalEntryForm({ onSuccess, onCancel }: JournalEntryFo
                           onChange={(e) => updateLine(line.id, 'account_code', e.target.value)}
                           className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-300 bg-white font-mono focus:ring-1 focus:ring-indigo-500"
                         >
-                          <option value="">
-                            {accountsLoading ? 'Cargando plan de cuentas…' : '-- Seleccione Cuenta --'}
-                          </option>
-                          {accounts.filter((a) => a.postable).map((a) => (
+                          <option value="">-- Seleccione Cuenta --</option>
+                          {SEED_PUC_ACCOUNTS.map((a) => (
                             <option key={a.code} value={a.code}>
                               {a.code} - {a.name} ({a.nature})
                             </option>

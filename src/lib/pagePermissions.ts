@@ -1,0 +1,123 @@
+// ---------------------------------------------------------------------------
+// FUENTE ÚNICA de permisos por página.
+// La usan el menú (AppLayout.tsx), el guardián de rutas (App.tsx) y el simulador «Paso Maestro»,
+// de modo que lo que se ve en el menú siempre coincide con lo que la página permite abrir.
+// Si cambias lo que ve un rol, cámbialo AQUÍ. Cada página/RPC debe exigir lo mismo o menos.
+// ---------------------------------------------------------------------------
+import {
+  canAccessCashAndAudit,
+  canManageInventory,
+  canManagePurchases,
+  canManageSettings,
+  canManageTeam,
+  canManageTransport,
+  canManageUsers,
+  canRegisterSales,
+  canViewAccounting,
+  canViewDashboard,
+  canViewStats,
+  isCompanyManager,
+} from './auth'
+import type { Role } from '../types'
+
+type Rule = (role?: Role) => boolean
+
+/** Reglas de los roles de alcance ESTRICTO (solo ven estas páginas). */
+const STRICT_ROLE_PAGES: Partial<Record<Role, string[]>> = {
+  contador: ['accounting', 'accounting_puc', 'journal_entry', 'accstate'],
+  vendedor: ['pos', 'products', 'cash'],
+  gerente: ['stats', 'reports', 'profit', 'compliance', 'compliance_monitor', 'history', 'anomaly_detector'],
+  transportador: ['warehouses', 'map', 'dispatch', 'routeplan', 'dispatch_history', 'equipment_assets'],
+}
+
+/** Reglas del resto de roles (dueño, admin empresa, almacén, compras, cajero, soporte...). */
+const GENERIC_RULES: Record<string, Rule> = {
+  dashboard: role => canViewDashboard(role),
+  command: role => isCompanyManager(role) || canViewAccounting(role),
+  summary: role => role === 'admin' || role === 'dueno',
+  copilot: role => true,
+  ask: role => true,
+  ai_actions: role => true,
+  pos: role => canRegisterSales(role),
+  omnichannel: role => canRegisterSales(role) || isCompanyManager(role),
+  catalog: role => true,
+  catorders: role => canRegisterSales(role) || isCompanyManager(role) || canViewAccounting(role),
+  sales: role => canRegisterSales(role) || canViewAccounting(role),
+  dispatch_history: role => canRegisterSales(role) || canManageInventory(role) || canViewAccounting(role) || isCompanyManager(role),
+  layaways: role => canRegisterSales(role),
+  cartera: role => canRegisterSales(role) || canViewAccounting(role),
+  quotations: role => canRegisterSales(role),
+  customers: role => true,
+  devolutions: role => canRegisterSales(role) || canManageInventory(role),
+  exchanges: role => canRegisterSales(role) || canManageInventory(role),
+  sellers: role => canManageTeam(role) || canViewAccounting(role),
+  employee_portal: role => true,
+  routeplan: role => canRegisterSales(role) || canManageTransport(role),
+  dispatch: role => canRegisterSales(role) || canManageTransport(role) || canManageInventory(role),
+  goals: role => canRegisterSales(role) || isCompanyManager(role),
+  purchaseorders: role => canManagePurchases(role) || canManageInventory(role) || canViewAccounting(role),
+  purchases: role => canManagePurchases(role) || canViewAccounting(role),
+  payables: role => canManageInventory(role),
+  buyplan: role => canManagePurchases(role) || canManageInventory(role),
+  suppliers: role => canManagePurchases(role) || canManageInventory(role),
+  supplier_intel: role => canManagePurchases(role) || canManageInventory(role),
+  products: role => true,
+  priceshield: role => canManageInventory(role),
+  blindcount: role => canManageInventory(role) || canViewAccounting(role) || isCompanyManager(role),
+  warehouses: role => canManageInventory(role),
+  branch_balance: role => canManageInventory(role),
+  equipment_assets: role => canManageInventory(role) || isCompanyManager(role),
+  categories: role => canManageInventory(role),
+  lots: role => canManageInventory(role),
+  kardex: role => true,
+  labels: role => canManageInventory(role),
+  treasury: role => isCompanyManager(role) || canViewAccounting(role),
+  bankrecon: role => isCompanyManager(role) || canViewAccounting(role),
+  cash: role => canAccessCashAndAudit(role),
+  expenses: role => isCompanyManager(role) || canViewAccounting(role),
+  anomaly_detector: role => canAccessCashAndAudit(role) || isCompanyManager(role),
+  compliance: role => isCompanyManager(role) || canViewAccounting(role),
+  reports: role => canViewStats(role),
+  profit: role => isCompanyManager(role) || canViewAccounting(role),
+  predict: role => canManageInventory(role) || canManagePurchases(role),
+  stats: role => canViewStats(role),
+  map: role => isCompanyManager(role) || canManageTransport(role),
+  history: role => canAccessCashAndAudit(role),
+  cpa: role => canViewAccounting(role),
+  accounting: role => canViewAccounting(role),
+  journal_entry: role => canViewAccounting(role),
+  accstate: role => canViewAccounting(role),
+  costcenters: role => isCompanyManager(role) || canViewAccounting(role),
+  accsetup: role => canViewAccounting(role),
+  accclose: role => canViewAccounting(role),
+  taxes: role => canViewAccounting(role),
+  erpbridge: role => isCompanyManager(role) || canViewAccounting(role),
+  support: role => true,
+  api_ecosystem: role => canManageSettings(role) || isCompanyManager(role),
+  team: role => canManageTeam(role),
+  users: role => canManageUsers(role),
+  settings: role => canManageSettings(role),
+  manual: role => true,
+  accounting_puc: role => canViewAccounting(role),
+  compliance_monitor: role => isCompanyManager(role) || canViewAccounting(role),
+  despachos: role => canRegisterSales(role) || canManageInventory(role) || canViewAccounting(role) || isCompanyManager(role),
+  trazabilidad: role => canRegisterSales(role) || canManageInventory(role) || canViewAccounting(role) || isCompanyManager(role),
+  companies: role => role === 'admin' || (role as string) === 'super_admin',
+  adminplans: role => role === 'admin' || (role as string) === 'super_admin',
+  subscription: role => role === 'dueno' || role === 'admin' || (role as string) === 'super_admin',
+}
+
+export function isPageAllowedForRole(
+  page: string,
+  role?: Role,
+  _opts?: { isMasterAccount?: boolean; isDemo?: boolean }
+): boolean {
+  // Centro de Scripts SQL y Supabase: solo Administrador Central; nunca roles de alcance estricto
+  if (page === 'sqlcenter') {
+    return role === 'admin' || (role as string) === 'super_admin'
+  }
+  const strict = role ? STRICT_ROLE_PAGES[role] : undefined
+  if (strict) return strict.includes(page)
+  const rule = GENERIC_RULES[page]
+  return rule ? rule(role) : true
+}

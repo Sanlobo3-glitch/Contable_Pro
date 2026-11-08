@@ -17,7 +17,7 @@ Stack: Vite + React 19 + TypeScript + Tailwind 4 · Supabase (Postgres + RLS + R
 
 ## Roles
 `admin`/`super_admin` (administrador central; Centro SQL solo para la cuenta maestra), `dueno`, `admin_empresa`, `gerente`, `contador`, `vendedor`, `cajero`, `almacen`, `comprador`, `transportador` y `tecnico`.
-El acceso se define en **tres sitios que deben cambiarse juntos**: el menú (`src/components/AppLayout.tsx`, `navItems`), el guardián de páginas (`isPageAllowedForRole` en `src/App.tsx`) y las funciones de `src/lib/auth.tsx` (`canViewDashboard`, `getDefaultPageForRole`, `can*`).
+Los permisos por página tienen **fuente única: `src/lib/pagePermissions.ts`** (tabla legible en `docs/PERMISOS_POR_ROL.md`). El menú (`AppLayout.tsx`) y el guardián de rutas (`App.tsx`) la usan; la pantalla de inicio por rol está en `getDefaultPageForRole` (`src/lib/auth.tsx`). Cada página y RPC debe exigir lo mismo o menos que esa tabla.
 El «Paso Maestro» (simulador de roles de `sanlobo3@hotmail.com`) usa exactamente esas mismas reglas: simulado y real deben coincidir.
 Caja/ventas (`cajero`, `vendedor`) no ven el Panel ejecutivo; su inicio es el Mostrador (POS).
 

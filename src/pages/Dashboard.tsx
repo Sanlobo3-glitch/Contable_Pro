@@ -168,8 +168,12 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
   const canSell = canRegisterSales(user?.role)
   const canInventory = canManageInventory(user?.role)
   const showGoal = !!user && !isManager && canSell
+  // Almacén y Compras NO ven cifras comerciales (ventas, cartera por cobrar, ingresos, clientes): solo lo suyo.
+  const showCommercial = isManager || canSell || canViewAccounting(user?.role)
+  // Cuentas por pagar: la RPC cuentas_por_pagar() de la base SOLO responde a dueño/admin; el resto ve «Restringido»
+  const canSeePayables = user?.role === 'dueno' || user?.role === 'admin'
 
-  const [activeKpi, setActiveKpi] = useState<KpiId>('sales_today')
+  const [activeKpi, setActiveKpi] = useState<KpiId>(showCommercial ? 'sales_today' : 'low_stock')
   const [initialLoading, setInitialLoading] = useState(true)
   const [refreshingKpi, setRefreshingKpi] = useState<KpiId | 'all' | null>(null)
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
@@ -207,7 +211,11 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
   const [debtFilter, setDebtFilter] = useState<'todos' | 'vencidos' | 'al_dia'>('todos')
 
   const cp = useCopilot()
-  const topAlerts = visibleAlerts(cp).filter(a => a.severity !== 'info').slice(0, 4)
+  const COMMERCIAL_ALERT_PAGES = ['quotations', 'sales', 'cartera', 'layaways', 'goals', 'catorders', 'omnichannel', 'customers']
+  const topAlerts = visibleAlerts(cp)
+    .filter(a => a.severity !== 'info')
+    .filter(a => showCommercial || !COMMERCIAL_ALERT_PAGES.includes(String(a.page || '')))
+    .slice(0, 4)
 
   const innovationsSummary = useMemo(() => {
     try {
@@ -352,7 +360,7 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
   }, [])
 
   const loadPayables = useCallback(async () => {
-    if (!canInventory) {
+    if (!canSeePayables) {
       setPayables({ total_owed: 0, total_overdue: 0, suppliers: [], available: false })
       return
     }
@@ -416,7 +424,7 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
       suppliers: Array.from(bySup.values()).sort((a, b) => b.overdue - a.overdue || b.owed - a.owed),
       available: true,
     })
-  }, [canInventory])
+  }, [canSeePayables])
 
   const loadReceivables = useCallback(async () => {
     if (!canSell) {
@@ -847,10 +855,10 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
     {
       id: 'payables',
       label: 'Cuentas por pagar',
-      value: canInventory ? money(payables.total_owed) : 'Restringido',
+      value: canSeePayables ? money(payables.total_owed) : 'Restringido',
       icon: <Receipt className="w-4 h-4" />,
       tone:
-        !canInventory
+        !canSeePayables
           ? 'normal'
           : payables.total_overdue > 0
             ? 'critical'
@@ -859,7 +867,7 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
               : 'positive',
       meta: (
         <div className="flex items-center gap-1.5 text-xs text-slate-500 truncate tabular-nums">
-          {!canInventory ? (
+          {!canSeePayables ? (
             <span>Solo administración</span>
           ) : payables.total_owed <= 0 ? (
             <span className="text-emerald-700 font-medium">Sin deuda con proveedores</span>
@@ -909,6 +917,10 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
       ),
     },
   ]
+
+  const visibleKpiCards = kpiCards.filter(
+    c => showCommercial || (c.id !== 'sales_today' && c.id !== 'receivables')
+  )
 
   const isGlobalSyncing = refreshingKpi === 'all'
 
@@ -1206,7 +1218,7 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-            {kpiCards.map(card => {
+            {visibleKpiCards.map(card => {
               const selected = activeKpi === card.id
               const syncingThis = refreshingKpi === card.id || refreshingKpi === 'all'
               const iconTone =
@@ -1578,7 +1590,7 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
                 </div>
               </div>
 
-              {canInventory && (
+              {canSeePayables && (
                 <div className="flex flex-wrap items-center gap-2">
                   <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-lg">
                     {(
@@ -1625,7 +1637,7 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
               )}
             </div>
 
-            {!canInventory ? (
+            {!canSeePayables ? (
               <div className="px-5 py-10 text-center text-sm text-slate-500">
                 La consulta de cuentas por pagar a proveedores está disponible para el dueño y el administrador.
               </div>
@@ -1817,6 +1829,7 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
       </section>
 
       {/* Gráficos interactivos de rendimiento y tendencias */}
+      {showCommercial && (
       <section className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
         <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
           <div>
@@ -1925,20 +1938,23 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
           />
         )}
       </section>
+      )}
 
       {/* Franja secundaria de pulso mensual del negocio */}
-      <section className="bg-white rounded-xl border border-slate-200 overflow-hidden grid grid-cols-2 lg:grid-cols-4">
-        <button
-          type="button"
-          onClick={() => onNavigate?.(isManager ? 'reports' : 'sales')}
-          className="p-4 text-left hover:bg-slate-50/70 transition-colors border-b lg:border-b-0 border-r border-slate-200"
-        >
-          <p className="text-xs text-slate-500">Ingresos del mes</p>
-          <p className="text-lg font-bold text-slate-900 tabular-nums mt-1">{money(stats.revenue_month)}</p>
-          <p className="text-[11px] text-slate-400 tabular-nums mt-0.5">
-            Histórico: {money(stats.revenue_total)}
-          </p>
-        </button>
+      <section className={`bg-white rounded-xl border border-slate-200 overflow-hidden grid ${showCommercial ? 'grid-cols-2 lg:grid-cols-4' : 'grid-cols-1'}`}>
+        {showCommercial && (
+          <button
+            type="button"
+            onClick={() => onNavigate?.(isManager ? 'reports' : 'sales')}
+            className="p-4 text-left hover:bg-slate-50/70 transition-colors border-b lg:border-b-0 border-r border-slate-200"
+          >
+            <p className="text-xs text-slate-500">Ingresos del mes</p>
+            <p className="text-lg font-bold text-slate-900 tabular-nums mt-1">{money(stats.revenue_month)}</p>
+            <p className="text-[11px] text-slate-400 tabular-nums mt-0.5">
+              Histórico: {money(stats.revenue_total)}
+            </p>
+          </button>
+        )}
 
         {isManager && (
           <button
@@ -1964,19 +1980,23 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
           <p className="text-xs text-slate-500">Catálogo de productos</p>
           <p className="text-lg font-bold text-slate-900 tabular-nums mt-1">{stats.products_count}</p>
           <p className="text-[11px] text-slate-400 tabular-nums mt-0.5">
-            {stats.sales_count} {stats.sales_count === 1 ? 'venta histórica' : 'ventas históricas'}
+            {showCommercial
+              ? `${stats.sales_count} ${stats.sales_count === 1 ? 'venta histórica' : 'ventas históricas'}`
+              : 'Productos en inventario'}
           </p>
         </button>
 
-        <button
-          type="button"
-          onClick={() => onNavigate?.('customers')}
-          className="p-4 text-left hover:bg-slate-50/70 transition-colors"
-        >
-          <p className="text-xs text-slate-500">Clientes registrados</p>
-          <p className="text-lg font-bold text-slate-900 tabular-nums mt-1">{stats.customers_count}</p>
-          <p className="text-[11px] text-slate-400 mt-0.5">Directorio comercial activo</p>
-        </button>
+        {showCommercial && (
+          <button
+            type="button"
+            onClick={() => onNavigate?.('customers')}
+            className="p-4 text-left hover:bg-slate-50/70 transition-colors"
+          >
+            <p className="text-xs text-slate-500">Clientes registrados</p>
+            <p className="text-lg font-bold text-slate-900 tabular-nums mt-1">{stats.customers_count}</p>
+            <p className="text-[11px] text-slate-400 mt-0.5">Directorio comercial activo</p>
+          </button>
+        )}
       </section>
 
       {/* Meta del vendedor (si aplica) y Copiloto */}

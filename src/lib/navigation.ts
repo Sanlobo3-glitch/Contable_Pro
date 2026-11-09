@@ -101,9 +101,21 @@ export const PAGE_LABELS: Record<string, string> = {
   supplier_intel: 'Evaluación de proveedores',
   anomaly_detector: 'Detección de anomalías',
   equipment_assets: 'Activos y maquinaria',
-  employee_portal: 'Portal de vendedores',
   compliance: 'Cumplimiento y vencimientos',
+  compliance_monitor: 'Auditoría de cumplimiento legal',
   api_ecosystem: 'API y Webhooks',
+  // Centro de Dirección Gerencial
+  manager_center: 'Centro de Dirección Gerencial',
+  manager_summary: '1. Resumen Ejecutivo — Mi Empresa',
+  manager_commercial: '2. Dirección Comercial',
+  manager_operations: '3. Dirección de Operaciones',
+  manager_financial: '4. Dirección Financiera',
+  manager_hr: '5. Dirección del Talento Humano',
+  manager_authorizations: '6. Centro de Autorizaciones',
+  manager_action_plans: '7. Planes de Acción Gerencial',
+  manager_intelligence: '8. Inteligencia Empresarial',
+  manager_reports: '9. Informes Gerenciales',
+  manager_notifications: '10. Notificaciones Gerenciales',
 }
 
 export function isValidAppPage(page: string | null | undefined): page is string {

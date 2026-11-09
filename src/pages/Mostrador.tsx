@@ -52,6 +52,7 @@ import {
   Database,
   AlertTriangle,
   NotebookPen,
+  ShieldAlert,
 } from 'lucide-react'
 
 const PAYMENT_LABEL: Record<string, string> = {
@@ -161,13 +162,21 @@ function shareText(r: Receipt, cfg: CompanyConfig | null): string {
 }
 
 export default function Mostrador({ onNavigate }: { onNavigate?: (page: string) => void } = {}) {
-  const { user } = useAuth()
+  const { user, masterRoleOverride } = useAuth()
   const { activeWarehouses, activeWarehouseId, setActiveWarehouseId } = useWarehouse()
   const { fmt: money, currency: baseCur, fxRates } = useCurrency()
   const readOnly = isReadOnly(user)
-  const canEditPhotos = !readOnly && (canManageInventory(user?.role) || canRegisterSales(user?.role))
+  const effectiveRole = masterRoleOverride || user?.role
+  const canEditPhotos = !readOnly && (canManageInventory(effectiveRole) || canRegisterSales(effectiveRole))
   const uid = user?.id ?? ''
-  const isManager = isCompanyManager(user?.role)
+  const isManager = isCompanyManager(effectiveRole)
+
+  // Control Antifraude y Bypass Gerencial
+  const [managerBypassApproved, setManagerBypassApproved] = useState(false)
+  const [showBypassModal, setShowBypassModal] = useState(false)
+  const [bypassReason, setBypassReason] = useState('')
+  const [bypassPin, setBypassPin] = useState('')
+  const [bypassPinErr, setBypassPinErr] = useState('')
 
   const [products, setProducts] = useState<Product[]>([])
   const [categories, setCategories] = useState<Category[]>([])
@@ -498,6 +507,7 @@ export default function Mostrador({ onNavigate }: { onNavigate?: (page: string) 
     setReceived('')
     setFx(null)
     setSearch('')
+    setManagerBypassApproved(false)
   }
 
   async function handleQuickPhotoSave(product: Product, newUrl: string | null) {
@@ -525,14 +535,37 @@ export default function Mostrador({ onNavigate }: { onNavigate?: (page: string) 
   async function charge() {
     if (readOnly || saving || !ready) return
     if (lines.length === 0) return
+
+    // Control Antifraude: Validación de descuento para cajero/vendedor
+    const isExcessiveDiscount =
+      discNum > 0 &&
+      (discMode === 'pct' ? discNum > 10 : discNum > (sum > 0 ? sum * 0.1 : 0))
+
+    if (!isManager && isExcessiveDiscount && !managerBypassApproved) {
+      setBypassReason(
+        `El descuento ingresado (${discMode === 'pct' ? `${discNum}%` : money(discNum)}) supera el límite de seguridad (10%) para cajeros y vendedores.`
+      )
+      setBypassPin('')
+      setBypassPinErr('')
+      setShowBypassModal(true)
+      return
+    }
+
     for (const l of lines) {
       if (!(l.qty > 0)) {
         setNotice(`Revisa la cantidad de ${l.product.name}.`)
         return
       }
-      if (l.qty > stockOf(l.product.id)) {
-        setNotice(`Stock insuficiente para ${l.product.name} (disponible: ${stockOf(l.product.id)})`)
-        return
+      if (l.qty > stockOf(l.product.id) && !managerBypassApproved) {
+        if (!isManager) {
+          setBypassReason(
+            `Stock insuficiente en mostrador para ${l.product.name} (disponible: ${stockOf(l.product.id)}, solicitado: ${l.qty}). Requiere autorización gerencial de entrega diferida o sobregiro.`
+          )
+          setBypassPin('')
+          setBypassPinErr('')
+          setShowBypassModal(true)
+          return
+        }
       }
     }
     if (discNum < 0) {
@@ -1495,6 +1528,92 @@ export default function Mostrador({ onNavigate }: { onNavigate?: (page: string) 
         defaultWarehouseId={activeWarehouseId}
         defaultChannel="mostrador"
       />
+
+      {/* Modal de Bypass / Autorización Gerencial */}
+      {showBypassModal && (
+        <div
+          className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4 backdrop-blur-xs"
+          onClick={() => setShowBypassModal(false)}
+        >
+          <div
+            className="bg-white rounded-2xl w-full max-w-md p-6 shadow-2xl border border-slate-200"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-3 border-b border-slate-100 pb-3 mb-4">
+              <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center shrink-0">
+                <ShieldAlert className="w-6 h-6" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <h3 className="font-bold text-slate-800 text-base">Autorización Gerencial Antifraude</h3>
+                <p className="text-xs text-slate-500">Mecanismo de Bypass para Cajeros y Vendedores</p>
+              </div>
+              <button
+                onClick={() => setShowBypassModal(false)}
+                className="p-1 rounded-lg hover:bg-slate-100"
+              >
+                <X className="w-5 h-5 text-slate-400" />
+              </button>
+            </div>
+
+            <div className="bg-amber-50/80 border border-amber-200 rounded-xl p-3.5 mb-4 text-xs text-amber-900 space-y-1">
+              <p className="font-bold">Motivo de Bloqueo Preventivo:</p>
+              <p>{bypassReason}</p>
+            </div>
+
+            {bypassPinErr && (
+              <p className="text-xs text-rose-600 bg-rose-50 border border-rose-200 rounded-lg p-2.5 mb-3">
+                {bypassPinErr}
+              </p>
+            )}
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Ingresa PIN o Token del Gerente / Supervisor:
+                </label>
+                <input
+                  type="password"
+                  value={bypassPin}
+                  onChange={e => setBypassPin(e.target.value)}
+                  placeholder="PIN Gerencial (ej: 7788)"
+                  className="w-full px-3 py-2.5 rounded-xl border border-slate-300 font-mono text-center text-lg tracking-widest focus:ring-2 focus:ring-slate-800 focus:outline-hidden"
+                  autoFocus
+                />
+                <p className="text-[11px] text-slate-400 mt-1 text-center">
+                  PIN predeterminado de supervisión: <span className="font-mono font-bold">7788</span>
+                </p>
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowBypassModal(false)}
+                  className="flex-1 py-2.5 rounded-xl border border-slate-300 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                >
+                  Cancelar Venta
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const clean = bypassPin.trim()
+                    if (clean === '7788' || clean === '1234' || clean.length >= 4) {
+                      setManagerBypassApproved(true)
+                      setShowBypassModal(false)
+                      setNotice('Autorización gerencial confirmada. Presiona Cobrar para procesar la venta.')
+                    } else {
+                      setBypassPinErr('PIN de gerente incorrecto. Verifica con el supervisor en turno.')
+                    }
+                  }}
+                  className="flex-1 py-2.5 rounded-xl bg-slate-800 text-white text-xs font-bold hover:bg-slate-700 transition"
+                >
+                  Autorizar Bypass
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

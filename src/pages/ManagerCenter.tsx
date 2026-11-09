@@ -60,6 +60,13 @@ export default function ManagerCenter({ initialTab = 'resumen', onNavigate }: Ma
   const { fmt } = useCurrency()
 
   const [activeTab, setActiveTab] = useState<string>(initialTab)
+
+  useEffect(() => {
+    if (initialTab) {
+      setActiveTab(initialTab)
+    }
+  }, [initialTab])
+
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [overview, setOverview] = useState<ExecutiveOverviewData | null>(null)

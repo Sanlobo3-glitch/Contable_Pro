@@ -38,10 +38,11 @@ const day = (d: string | null) => (d ? new Date(d.length <= 10 ? d + 'T00:00:00'
 const isMissing = (m: string) => /cartera_|credit_|cxc_|does not exist|schema cache|registrar_abono/i.test(m || '')
 
 export default function Cartera() {
-  const { user } = useAuth()
+  const { user, masterRoleOverride } = useAuth()
   const { fmt: money } = useCurrency()
   const readOnly = isReadOnly(user)
-  const isManager = user?.role === 'dueno' || user?.role === 'admin'
+  const effectiveRole = masterRoleOverride || user?.role
+  const isManager = effectiveRole === 'dueno' || effectiveRole === 'admin' || effectiveRole === 'admin_empresa' || effectiveRole === 'gerente'
 
   const [data, setData] = useState<Portfolio | null>(null)
   const [loading, setLoading] = useState(false)

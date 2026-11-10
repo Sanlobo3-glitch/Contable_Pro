@@ -44,7 +44,6 @@ import type {
   ManagerActionPlan,
   ManagerEmployeeEvaluation,
   ApprovalRequestStatus,
-  ApprovalRequestType,
   ActionPlanStatus,
   ActionPlanPriority,
   ActionPlanArea,
@@ -57,39 +56,18 @@ interface ManagerCenterProps {
   onNavigate?: (page: string) => void
 }
 
-export const TAB_TO_PAGE_ID: Record<string, string> = {
-  resumen: 'manager_summary',
-  comercial: 'manager_commercial',
-  operaciones: 'manager_operations',
-  financiera: 'manager_financial',
-  talento: 'manager_hr',
-  autorizaciones: 'manager_authorizations',
-  planes: 'manager_action_plans',
-  inteligencia: 'manager_intelligence',
-  informes: 'manager_reports',
-  notificaciones: 'manager_notifications',
-}
-
-export const PAGE_ID_TO_TAB: Record<string, string> = {
-  manager_center: 'resumen',
-  manager_summary: 'resumen',
-  manager_commercial: 'comercial',
-  manager_operations: 'operaciones',
-  manager_financial: 'financiera',
-  manager_hr: 'talento',
-  manager_authorizations: 'autorizaciones',
-  manager_action_plans: 'planes',
-  manager_intelligence: 'inteligencia',
-  manager_reports: 'informes',
-  manager_notifications: 'notificaciones',
-}
-
-export default function ManagerCenter({ pageId, initialTab = 'resumen', onNavigate }: ManagerCenterProps) {
+export default function ManagerCenter({ initialTab = 'resumen', onNavigate }: ManagerCenterProps) {
   const { user, isDemo } = useAuth()
   const { fmt } = useCurrency()
 
-  const resolvedTab = pageId ? (PAGE_ID_TO_TAB[pageId] || initialTab) : initialTab
-  const [activeTab, setActiveTab] = useState<string>(resolvedTab)
+  const [activeTab, setActiveTab] = useState<string>(initialTab)
+
+  useEffect(() => {
+    if (initialTab) {
+      setActiveTab(initialTab)
+    }
+  }, [initialTab])
+
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [overview, setOverview] = useState<ExecutiveOverviewData | null>(null)
@@ -99,26 +77,6 @@ export default function ManagerCenter({ pageId, initialTab = 'resumen', onNaviga
   const [actionPlans, setActionPlans] = useState<ManagerActionPlan[]>([])
   const [evaluations, setEvaluations] = useState<ManagerEmployeeEvaluation[]>([])
 
-  // Filtros de Autorizaciones
-  const [approvalStatusFilter, setApprovalStatusFilter] = useState<'todas' | ApprovalRequestStatus>('todas')
-  const [approvalSearch, setApprovalSearch] = useState('')
-
-  // Filtros de Planes de Acción
-  const [planStatusFilter, setPlanStatusFilter] = useState<'todos' | ActionPlanStatus | 'atrasado'>('todos')
-  const [planAreaFilter, setPlanAreaFilter] = useState<string>('todas')
-  const [planSearch, setPlanSearch] = useState('')
-
-  // Filtros de Talento Humano
-  const [evalSearch, setEvalSearch] = useState('')
-  const [evalScoreFilter, setEvalScoreFilter] = useState<'todos' | 'alto' | 'medio' | 'atencion'>('todos')
-
-  // Filtros de Operaciones
-  const [stockFilter, setStockFilter] = useState<'todos' | 'agotados' | 'bajo_minimo' | 'inmovilizado'>('todos')
-  const [stockSearch, setStockSearch] = useState('')
-
-  // Filtros de Inteligencia
-  const [alertSeverityFilter, setAlertSeverityFilter] = useState<'todas' | 'alta' | 'media'>('todas')
-
   // Modales y formularios
   const [decisionModal, setDecisionModal] = useState<{
     id: string
@@ -126,16 +84,6 @@ export default function ManagerCenter({ pageId, initialTab = 'resumen', onNaviga
     title: string
   } | null>(null)
   const [decisionNotes, setDecisionNotes] = useState('')
-
-  const [newApprovalModal, setNewApprovalModal] = useState(false)
-  const [newApprovalData, setNewApprovalData] = useState({
-    title: '',
-    description: '',
-    request_type: 'compra' as ApprovalRequestType,
-    amount: 0,
-    justification: '',
-    document_reference: '',
-  })
 
   const [newPlanModal, setNewPlanModal] = useState(false)
   const [newPlanData, setNewPlanData] = useState({
@@ -192,19 +140,10 @@ export default function ManagerCenter({ pageId, initialTab = 'resumen', onNaviga
   }, [loadData])
 
   useEffect(() => {
-    const nextTab = pageId ? (PAGE_ID_TO_TAB[pageId] || initialTab) : initialTab
-    if (nextTab && nextTab !== activeTab) {
-      setActiveTab(nextTab)
+    if (initialTab && initialTab !== activeTab) {
+      setActiveTab(initialTab)
     }
-  }, [pageId, initialTab])
-
-  const handleTabChange = (newTabId: string) => {
-    setActiveTab(newTabId)
-    const pageTarget = TAB_TO_PAGE_ID[newTabId]
-    if (pageTarget && onNavigate) {
-      onNavigate(pageTarget)
-    }
-  }
+  }, [initialTab])
 
   // Contadores de badges
   const pendingApprovalsCount = useMemo(
@@ -234,40 +173,6 @@ export default function ManagerCenter({ pageId, initialTab = 'resumen', onNaviga
     setDecisionModal(null)
     setDecisionNotes('')
     showFeedback(`Solicitud ${decisionModal.action.toUpperCase()} correctamente`)
-  }
-
-  // Crear Solicitud de Autorización
-  const handleCreateApprovalRequest = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!newApprovalData.title.trim() || !newApprovalData.justification.trim()) {
-      showFeedback('Por favor completa el título y la justificación de la solicitud', false)
-      return
-    }
-
-    const created = await managerService.createApprovalRequest({
-      company_id: user?.company_id || 'default',
-      title: newApprovalData.title.trim(),
-      description: newApprovalData.description.trim() || newApprovalData.title.trim(),
-      request_type: newApprovalData.request_type,
-      amount: Number(newApprovalData.amount) || 0,
-      currency: 'COP',
-      justification: newApprovalData.justification.trim(),
-      document_reference: newApprovalData.document_reference.trim() || null,
-      requester_name: user?.full_name || 'Gerente Operativo',
-      requester_role: user?.role || 'gerente',
-    })
-
-    setApprovals(prev => [created, ...prev])
-    setNewApprovalModal(false)
-    setNewApprovalData({
-      title: '',
-      description: '',
-      request_type: 'compra',
-      amount: 0,
-      justification: '',
-      document_reference: '',
-    })
-    showFeedback('Solicitud de autorización registrada con éxito')
   }
 
   // Crear Plan de Acción
@@ -358,137 +263,6 @@ export default function ManagerCenter({ pageId, initialTab = 'resumen', onNaviga
     )
   }, [overview, reportType, user?.company_name])
 
-  // Listas filtradas para cada submódulo
-  const filteredApprovals = useMemo(() => {
-    return approvals.filter(req => {
-      const matchStatus = approvalStatusFilter === 'todas' || req.status === approvalStatusFilter
-      const term = approvalSearch.toLowerCase().trim()
-      const matchSearch =
-        !term ||
-        req.title.toLowerCase().includes(term) ||
-        req.requester_name.toLowerCase().includes(term) ||
-        (req.document_reference && req.document_reference.toLowerCase().includes(term))
-      return matchStatus && matchSearch
-    })
-  }, [approvals, approvalStatusFilter, approvalSearch])
-
-  const filteredPlans = useMemo(() => {
-    return actionPlans.filter(p => {
-      const isOverdue =
-        p.status !== 'completado' &&
-        p.status !== 'cancelado' &&
-        new Date(p.due_date).getTime() < Date.now()
-      const matchStatus =
-        planStatusFilter === 'todos' ||
-        (planStatusFilter === 'atrasado' ? isOverdue : p.status === planStatusFilter)
-      const matchArea = planAreaFilter === 'todas' || p.area === planAreaFilter
-      const term = planSearch.toLowerCase().trim()
-      const matchSearch =
-        !term ||
-        p.title.toLowerCase().includes(term) ||
-        p.assigned_to_name.toLowerCase().includes(term) ||
-        p.objective.toLowerCase().includes(term)
-      return matchStatus && matchArea && matchSearch
-    })
-  }, [actionPlans, planStatusFilter, planAreaFilter, planSearch])
-
-  const filteredEvaluations = useMemo(() => {
-    return evaluations.filter(ev => {
-      const matchScore =
-        evalScoreFilter === 'todos' ||
-        (evalScoreFilter === 'alto' && ev.score >= 4.5) ||
-        (evalScoreFilter === 'medio' && ev.score >= 3.5 && ev.score < 4.5) ||
-        (evalScoreFilter === 'atencion' && ev.score < 3.5)
-      const term = evalSearch.toLowerCase().trim()
-      const matchSearch =
-        !term ||
-        ev.employee_name.toLowerCase().includes(term) ||
-        ev.evaluator_name.toLowerCase().includes(term)
-      return matchScore && matchSearch
-    })
-  }, [evaluations, evalScoreFilter, evalSearch])
-
-  const filteredAlerts = useMemo(() => {
-    return (overview?.smartAlerts || []).filter(alt => {
-      return alertSeverityFilter === 'todas' || alt.severity === alertSeverityFilter
-    })
-  }, [overview?.smartAlerts, alertSeverityFilter])
-
-  const SCREEN_CONFIG: Record<
-    string,
-    {
-      title: string
-      subtitle: string
-      breadcrumb: string
-      icon: any
-      badgeCount?: number
-    }
-  > = {
-    resumen: {
-      title: 'CENTRO DE DIRECCIÓN GERENCIAL — RESUMEN EJECUTIVO',
-      subtitle: 'Dirección estratégica, supervisión empresarial y control integral de operaciones.',
-      breadcrumb: '1. Resumen Ejecutivo & Pulso General',
-      icon: Briefcase,
-    },
-    comercial: {
-      title: 'DIRECCIÓN COMERCIAL & FUERZA DE VENTAS',
-      subtitle: 'Monitoreo de ingresos comerciales, ranking de asesores, ticket promedio y mezcla de canales de recaudo.',
-      breadcrumb: '2. Dirección Comercial',
-      icon: TrendingUp,
-    },
-    operaciones: {
-      title: 'DIRECCIÓN DE OPERACIONES, LOGÍSTICA & STOCK',
-      subtitle: 'Supervisión de quiebres de inventario (Stock 0), alertas de stock bajo mínimo y valorización de stock inmovilizado.',
-      breadcrumb: '3. Operaciones & Stock',
-      icon: Package,
-    },
-    financiera: {
-      title: 'DIRECCIÓN FINANCIERA & CONTROL DE GESTIÓN',
-      subtitle: 'Estado de Resultados Gerencial (P&G), margen de contribución operativo y envejecimiento de cartera (Aging).',
-      breadcrumb: '4. Dirección Financiera',
-      icon: DollarSign,
-    },
-    talento: {
-      title: 'DIRECCIÓN DEL TALENTO HUMANO & PRODUCTIVIDAD',
-      subtitle: 'Expediente gerencial, evaluaciones periódicas de desempeño, matriz de competencias, fortalezas y planes de mejora.',
-      breadcrumb: '5. Talento Humano',
-      icon: Users,
-    },
-    autorizaciones: {
-      title: 'CENTRO DE AUTORIZACIONES & DICTAMEN GERENCIAL',
-      subtitle: 'Bandeja de decisiones: Compras excepcionales, gastos fuera de presupuesto, descuentos comerciales y bajas de inventario.',
-      breadcrumb: '6. Centro de Autorizaciones',
-      icon: CheckCircle2,
-      badgeCount: pendingApprovalsCount,
-    },
-    planes: {
-      title: 'PLANES DE ACCIÓN & OBJETIVOS ESTRATÉGICOS',
-      subtitle: 'Gestión por objetivos, asignación de responsables, metas KPI, seguimiento porcentual y control de atrasos.',
-      breadcrumb: '7. Planes de Acción',
-      icon: Layers,
-      badgeCount: activePlansCount,
-    },
-    inteligencia: {
-      title: 'INTELIGENCIA EMPRESARIAL & MATRIZ DE RIESGOS',
-      subtitle: 'Diagnóstico cuantitativo determinista en 4 fases: Hallazgo, Información numérica, Riesgo representado y Acción correctiva.',
-      breadcrumb: '8. Inteligencia & Riesgos',
-      icon: Sparkles,
-      badgeCount: activeAlertsCount,
-    },
-    informes: {
-      title: 'INFORMES EJECUTIVOS & REPORTES DE GESTIÓN',
-      subtitle: 'Generador de informes consolidados de gestión (diario, semanal, mensual, comercial, financiero, operativo) listos para exportar a PDF o imprimir.',
-      breadcrumb: '9. Informes Gerenciales',
-      icon: FileText,
-    },
-    notificaciones: {
-      title: 'NOTIFICACIONES & ALERTAS GERENCIALES',
-      subtitle: 'Centro consolidado de avisos operativos, vencimientos críticos y alertas preventivas de la empresa.',
-      breadcrumb: '10. Notificaciones',
-      icon: Bell,
-    },
-  }
-
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center py-20 text-slate-500">
@@ -500,256 +274,127 @@ export default function ManagerCenter({ pageId, initialTab = 'resumen', onNaviga
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto pb-16">
-      {/* HEADER DINÁMICO SEGÚN PANTALLA GERENCIAL ACTIVA */}
-      {(() => {
-        const currentTabConfig = SCREEN_CONFIG[activeTab] || SCREEN_CONFIG.resumen
-        const isOverview = activeTab === 'resumen'
-        const IconComponent = currentTabConfig.icon
-
-        return (
-          <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs">
-            {/* BREADCRUMB Y RETORNO RÁPIDO */}
-            <div className="flex items-center justify-between gap-2 pb-3 mb-4 border-b border-slate-100 text-xs">
-              <div className="flex items-center gap-1.5 text-slate-500">
-                <span className="font-semibold text-slate-700">Dirección Gerencial</span>
-                <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
-                <span className="font-bold text-slate-900">{currentTabConfig.breadcrumb}</span>
-              </div>
-
-              {!isOverview && (
-                <button
-                  onClick={() => handleTabChange('resumen')}
-                  className="inline-flex items-center gap-1 text-slate-600 hover:text-slate-900 font-semibold text-xs transition-colors bg-slate-100 hover:bg-slate-200 px-2.5 py-1 rounded-md"
-                >
-                  <span>← Volver al Tablero General</span>
-                </button>
-              )}
+      {/* HEADER PRINCIPAL */}
+      <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs">
+        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="p-2 rounded-xl bg-slate-900 text-white">
+                <Briefcase className="w-5 h-5" />
+              </span>
+              <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">
+                CENTRO DE DIRECCIÓN GERENCIAL
+              </h1>
             </div>
-
-            <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
-              <div className="flex items-start gap-3">
-                <span className="p-2.5 rounded-xl bg-slate-900 text-white shrink-0 mt-0.5 shadow-xs">
-                  <IconComponent className="w-5 h-5" />
-                </span>
-                <div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">
-                      {currentTabConfig.title}
-                    </h1>
-                    {typeof currentTabConfig.badgeCount === 'number' && currentTabConfig.badgeCount > 0 && (
-                      <span className="px-2 py-0.5 text-xs font-bold rounded-full bg-amber-100 text-amber-900 border border-amber-200">
-                        {currentTabConfig.badgeCount} pendientes
-                      </span>
-                    )}
-                  </div>
-                  <p className="text-xs sm:text-sm text-slate-600 mt-1 font-medium">
-                    {currentTabConfig.subtitle}
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2 shrink-0">
-                <button
-                  onClick={() => {
-                    setRefreshing(true)
-                    void loadData()
-                  }}
-                  disabled={refreshing}
-                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-medium text-slate-700 disabled:opacity-50"
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
-                  Actualizar datos
-                </button>
-
-                {activeTab === 'autorizaciones' && (
-                  <button
-                    onClick={() => setNewApprovalModal(true)}
-                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-xs font-semibold text-white shadow-xs"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    Nueva solicitud de autorización
-                  </button>
-                )}
-
-                {activeTab === 'planes' && (
-                  <button
-                    onClick={() => setNewPlanModal(true)}
-                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-xs font-semibold text-white shadow-xs"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    Nuevo plan de acción
-                  </button>
-                )}
-
-                {activeTab === 'talento' && (
-                  <button
-                    onClick={() => setNewEvalModal(true)}
-                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-xs font-semibold text-white shadow-xs"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    Registrar evaluación
-                  </button>
-                )}
-
-                {activeTab === 'informes' && (
-                  <button
-                    onClick={() => window.print()}
-                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-xs font-semibold text-white shadow-xs"
-                  >
-                    <Printer className="w-3.5 h-3.5" />
-                    Imprimir / PDF
-                  </button>
-                )}
-
-                {activeTab === 'comercial' && onNavigate && (
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => onNavigate('pos')}
-                      className="inline-flex items-center gap-1 px-3 py-2 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-medium text-slate-700"
-                    >
-                      Mostrador (POS)
-                    </button>
-                    <button
-                      onClick={() => onNavigate('sales')}
-                      className="inline-flex items-center gap-1 px-3 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-xs font-semibold text-white"
-                    >
-                      Historial de ventas
-                    </button>
-                  </div>
-                )}
-
-                {activeTab === 'operaciones' && onNavigate && (
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => onNavigate('products')}
-                      className="inline-flex items-center gap-1 px-3 py-2 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-medium text-slate-700"
-                    >
-                      Catálogo productos
-                    </button>
-                    <button
-                      onClick={() => onNavigate('purchases')}
-                      className="inline-flex items-center gap-1 px-3 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-xs font-semibold text-white"
-                    >
-                      Gestión compras
-                    </button>
-                  </div>
-                )}
-
-                {activeTab === 'financiera' && onNavigate && (
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => onNavigate('cartera')}
-                      className="inline-flex items-center gap-1 px-3 py-2 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-medium text-slate-700"
-                    >
-                      Cartera (CxC)
-                    </button>
-                    <button
-                      onClick={() => onNavigate('treasury')}
-                      className="inline-flex items-center gap-1 px-3 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-xs font-semibold text-white"
-                    >
-                      Tesorería & Flujo
-                    </button>
-                  </div>
-                )}
-
-                {isOverview && (
-                  <button
-                    onClick={() => setNewPlanModal(true)}
-                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-xs font-semibold text-white shadow-xs"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    Nuevo plan de acción
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {/* BARRA DE PULSO EJECUTIVO RÁPIDO (Se muestra en Resumen General) */}
-            {isOverview && (
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mt-6 pt-5 border-t border-slate-100">
-                <div>
-                  <p className="text-[11px] font-medium text-slate-500 uppercase tracking-wider">Ventas de Hoy</p>
-                  <p className="text-lg font-bold text-slate-900 mt-0.5 tabular-nums">
-                    {fmt(overview?.salesToday || 0)}
-                  </p>
-                  <p className="text-[10px] text-slate-500">{overview?.salesTodayCount || 0} operaciones</p>
-                </div>
-
-                <div>
-                  <p className="text-[11px] font-medium text-slate-500 uppercase tracking-wider">Ventas del Mes</p>
-                  <p className="text-lg font-bold text-slate-900 mt-0.5 tabular-nums">
-                    {fmt(overview?.salesThisMonth || 0)}
-                  </p>
-                  <p
-                    className={`text-[10px] font-semibold flex items-center gap-0.5 ${
-                      (overview?.monthGrowthPercent || 0) >= 0 ? 'text-emerald-700' : 'text-rose-700'
-                    }`}
-                  >
-                    {(overview?.monthGrowthPercent || 0) >= 0 ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownRight className="w-3 h-3" />}
-                    {overview?.monthGrowthPercent || 0}% vs mes ant.
-                  </p>
-                </div>
-
-                <div>
-                  <p className="text-[11px] font-medium text-slate-500 uppercase tracking-wider">Utilidad Bruta (Mes)</p>
-                  <p className="text-lg font-bold text-slate-900 mt-0.5 tabular-nums">
-                    {fmt(overview?.grossProfitMonth || 0)}
-                  </p>
-                  <p className="text-[10px] text-slate-500">Margen real ~{overview?.grossMarginPercent || 0}%</p>
-                </div>
-
-                <div>
-                  <p className="text-[11px] font-medium text-slate-500 uppercase tracking-wider">Caja Cobrada</p>
-                  <p className="text-lg font-bold text-slate-900 mt-0.5 tabular-nums">
-                    {fmt(overview?.cashCollectedMonth || 0)}
-                  </p>
-                  <p className="text-[10px] text-slate-500">Efectivo / Transferencias</p>
-                </div>
-
-                <div>
-                  <p className="text-[11px] font-medium text-slate-500 uppercase tracking-wider">Cartera Total</p>
-                  <p className="text-lg font-bold text-slate-900 mt-0.5 tabular-nums">
-                    {fmt(overview?.pendingReceivables || 0)}
-                  </p>
-                  <p
-                    className={`text-[10px] font-semibold ${
-                      (overview?.overdueReceivables || 0) > 0 ? 'text-amber-700' : 'text-slate-500'
-                    }`}
-                  >
-                    Vencida: {fmt(overview?.overdueReceivables || 0)}
-                  </p>
-                </div>
-
-                <div>
-                  <p className="text-[11px] font-medium text-slate-500 uppercase tracking-wider">Autorizaciones</p>
-                  <p className="text-lg font-bold text-slate-900 mt-0.5 tabular-nums">
-                    {pendingApprovalsCount} pendientes
-                  </p>
-                  <p className="text-[10px] text-slate-500">
-                    {activePlansCount} planes activos
-                  </p>
-                </div>
-              </div>
-            )}
+            <p className="text-xs sm:text-sm text-slate-600 mt-1 font-medium">
+              Dirección estratégica, supervisión empresarial y control integral de operaciones.
+            </p>
           </div>
-        )
-      })()}
 
-      {/* FEEDBACK BANNER */}
-      {feedback && (
-        <div
-          className={`p-3 rounded-lg text-xs font-medium flex items-center gap-2 ${
-            feedback.ok
-              ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
-              : 'bg-red-50 text-red-800 border border-red-200'
-          }`}
-        >
-          {feedback.ok ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <AlertTriangle className="w-4 h-4 shrink-0" />}
-          <span>{feedback.text}</span>
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <button
+              onClick={() => {
+                setRefreshing(true)
+                void loadData()
+              }}
+              disabled={refreshing}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-medium text-slate-700 disabled:opacity-50"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
+              Actualizar datos
+            </button>
+            <button
+              onClick={() => setNewPlanModal(true)}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-xs font-semibold text-white shadow-xs"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              Nuevo plan de acción
+            </button>
+          </div>
         </div>
-      )}
 
-      {/* BARRA DE NAVEGACIÓN ENTRE PANTALLAS (10 MÓDULOS GERENCIALES) */}
+        {/* FEEDBACK BANNER */}
+        {feedback && (
+          <div
+            className={`mt-4 p-3 rounded-lg text-xs font-medium flex items-center gap-2 ${
+              feedback.ok
+                ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                : 'bg-red-50 text-red-800 border border-red-200'
+            }`}
+          >
+            {feedback.ok ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <AlertTriangle className="w-4 h-4 shrink-0" />}
+            <span>{feedback.text}</span>
+          </div>
+        )}
+
+        {/* BARRA DE PULSO EJECUTIVO RÁPIDO */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mt-6 pt-5 border-t border-slate-100">
+          <div>
+            <p className="text-[11px] font-medium text-slate-500 uppercase tracking-wider">Ventas de Hoy</p>
+            <p className="text-lg font-bold text-slate-900 mt-0.5 tabular-nums">
+              {fmt(overview?.salesToday || 0)}
+            </p>
+            <p className="text-[10px] text-slate-500">{overview?.salesTodayCount || 0} operaciones</p>
+          </div>
+
+          <div>
+            <p className="text-[11px] font-medium text-slate-500 uppercase tracking-wider">Ventas del Mes</p>
+            <p className="text-lg font-bold text-slate-900 mt-0.5 tabular-nums">
+              {fmt(overview?.salesThisMonth || 0)}
+            </p>
+            <p
+              className={`text-[10px] font-semibold flex items-center gap-0.5 ${
+                (overview?.monthGrowthPercent || 0) >= 0 ? 'text-emerald-700' : 'text-rose-700'
+              }`}
+            >
+              {(overview?.monthGrowthPercent || 0) >= 0 ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownRight className="w-3 h-3" />}
+              {overview?.monthGrowthPercent || 0}% vs mes ant.
+            </p>
+          </div>
+
+          <div>
+            <p className="text-[11px] font-medium text-slate-500 uppercase tracking-wider">Utilidad Bruta (Mes)</p>
+            <p className="text-lg font-bold text-slate-900 mt-0.5 tabular-nums">
+              {fmt(overview?.grossProfitMonth || 0)}
+            </p>
+            <p className="text-[10px] text-slate-500">Margen real ~{overview?.grossMarginPercent || 0}%</p>
+          </div>
+
+          <div>
+            <p className="text-[11px] font-medium text-slate-500 uppercase tracking-wider">Caja Cobrada</p>
+            <p className="text-lg font-bold text-slate-900 mt-0.5 tabular-nums">
+              {fmt(overview?.cashCollectedMonth || 0)}
+            </p>
+            <p className="text-[10px] text-slate-500">Efectivo / Transferencias</p>
+          </div>
+
+          <div>
+            <p className="text-[11px] font-medium text-slate-500 uppercase tracking-wider">Cartera Total</p>
+            <p className="text-lg font-bold text-slate-900 mt-0.5 tabular-nums">
+              {fmt(overview?.pendingReceivables || 0)}
+            </p>
+            <p
+              className={`text-[10px] font-semibold ${
+                (overview?.overdueReceivables || 0) > 0 ? 'text-amber-700' : 'text-slate-500'
+              }`}
+            >
+              Vencida: {fmt(overview?.overdueReceivables || 0)}
+            </p>
+          </div>
+
+          <div>
+            <p className="text-[11px] font-medium text-slate-500 uppercase tracking-wider">Autorizaciones</p>
+            <p className="text-lg font-bold text-slate-900 mt-0.5 tabular-nums">
+              {pendingApprovalsCount} pendientes
+            </p>
+            <p className="text-[10px] text-slate-500">
+              {activePlansCount} planes activos
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* TABS DE LOS 10 MÓDULOS GERENCIALES */}
       <div className="flex items-center gap-1.5 overflow-x-auto pb-2 border-b border-slate-200">
         {[
           { id: 'resumen', label: '1. Resumen Ejecutivo' },
@@ -779,7 +424,7 @@ export default function ManagerCenter({ pageId, initialTab = 'resumen', onNaviga
           return (
             <button
               key={t.id}
-              onClick={() => handleTabChange(t.id)}
+              onClick={() => setActiveTab(t.id)}
               className={`px-3 py-2 text-xs font-semibold rounded-lg whitespace-nowrap transition-colors flex items-center gap-1.5 ${
                 active
                   ? 'bg-slate-900 text-white shadow-xs'
@@ -947,232 +592,6 @@ export default function ManagerCenter({ pageId, initialTab = 'resumen', onNaviga
                 <p className="text-slate-600 mt-1">
                   {pendingApprovalsCount} autorizaciones pendientes y {activePlansCount} planes de acción activos.
                 </p>
-              </div>
-            </div>
-          </div>
-
-          {/* DIRECTORIO OPERATIVO DE DIRECCIÓN — 9 PANTALLAS ESPECIALIZADAS */}
-          <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs">
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                  <Briefcase className="w-4 h-4 text-slate-800" />
-                  Directorio de Dirección y Supervisión — 9 Pantallas Especializadas
-                </h3>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  Haz clic en cualquier tarjeta para abrir su pantalla con todas las herramientas y lógica operativa.
-                </p>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
-              {/* 2. Comercial */}
-              <div
-                onClick={() => handleTabChange('comercial')}
-                className="p-4 rounded-xl border border-slate-200 hover:border-slate-400 bg-white hover:bg-slate-50/60 transition cursor-pointer flex flex-col justify-between"
-              >
-                <div>
-                  <div className="flex items-center justify-between">
-                    <span className="p-2 rounded-lg bg-blue-50 text-blue-700">
-                      <TrendingUp className="w-4 h-4" />
-                    </span>
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Módulo 2</span>
-                  </div>
-                  <h4 className="text-sm font-bold text-slate-900 mt-2.5">2. Dirección Comercial</h4>
-                  <p className="text-xs text-slate-500 mt-0.5">Ventas, ranking de asesores y radar de clientes.</p>
-                </div>
-                <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
-                  <span className="font-semibold text-slate-800">{fmt(overview?.salesThisMonth || 0)}</span>
-                  <span className="text-blue-600 font-semibold inline-flex items-center gap-0.5">
-                    Abrir pantalla <ArrowRight className="w-3 h-3" />
-                  </span>
-                </div>
-              </div>
-
-              {/* 3. Operaciones */}
-              <div
-                onClick={() => handleTabChange('operaciones')}
-                className="p-4 rounded-xl border border-slate-200 hover:border-slate-400 bg-white hover:bg-slate-50/60 transition cursor-pointer flex flex-col justify-between"
-              >
-                <div>
-                  <div className="flex items-center justify-between">
-                    <span className="p-2 rounded-lg bg-amber-50 text-amber-700">
-                      <Package className="w-4 h-4" />
-                    </span>
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Módulo 3</span>
-                  </div>
-                  <h4 className="text-sm font-bold text-slate-900 mt-2.5">3. Dirección de Operaciones</h4>
-                  <p className="text-xs text-slate-500 mt-0.5">Quiebres de stock, reposición y mercancía inmovilizada.</p>
-                </div>
-                <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
-                  <span className={`font-semibold ${overview?.outOfStockCount ? 'text-rose-600' : 'text-slate-800'}`}>
-                    {overview?.outOfStockCount || 0} en quiebre
-                  </span>
-                  <span className="text-amber-600 font-semibold inline-flex items-center gap-0.5">
-                    Abrir pantalla <ArrowRight className="w-3 h-3" />
-                  </span>
-                </div>
-              </div>
-
-              {/* 4. Financiera */}
-              <div
-                onClick={() => handleTabChange('financiera')}
-                className="p-4 rounded-xl border border-slate-200 hover:border-slate-400 bg-white hover:bg-slate-50/60 transition cursor-pointer flex flex-col justify-between"
-              >
-                <div>
-                  <div className="flex items-center justify-between">
-                    <span className="p-2 rounded-lg bg-emerald-50 text-emerald-700">
-                      <DollarSign className="w-4 h-4" />
-                    </span>
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Módulo 4</span>
-                  </div>
-                  <h4 className="text-sm font-bold text-slate-900 mt-2.5">4. Dirección Financiera</h4>
-                  <p className="text-xs text-slate-500 mt-0.5">Estado de Resultados (P&G), margen y cartera vencida.</p>
-                </div>
-                <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
-                  <span className="font-semibold text-emerald-700">Utilidad: {fmt(overview?.grossProfitMonth || 0)}</span>
-                  <span className="text-emerald-600 font-semibold inline-flex items-center gap-0.5">
-                    Abrir pantalla <ArrowRight className="w-3 h-3" />
-                  </span>
-                </div>
-              </div>
-
-              {/* 5. Talento Humano */}
-              <div
-                onClick={() => handleTabChange('talento')}
-                className="p-4 rounded-xl border border-slate-200 hover:border-slate-400 bg-white hover:bg-slate-50/60 transition cursor-pointer flex flex-col justify-between"
-              >
-                <div>
-                  <div className="flex items-center justify-between">
-                    <span className="p-2 rounded-lg bg-purple-50 text-purple-700">
-                      <Users className="w-4 h-4" />
-                    </span>
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Módulo 5</span>
-                  </div>
-                  <h4 className="text-sm font-bold text-slate-900 mt-2.5">5. Talento Humano</h4>
-                  <p className="text-xs text-slate-500 mt-0.5">Evaluaciones de desempeño, fortalezas y compromisos.</p>
-                </div>
-                <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
-                  <span className="font-semibold text-slate-800">{evaluations.length} evaluados</span>
-                  <span className="text-purple-600 font-semibold inline-flex items-center gap-0.5">
-                    Abrir pantalla <ArrowRight className="w-3 h-3" />
-                  </span>
-                </div>
-              </div>
-
-              {/* 6. Autorizaciones */}
-              <div
-                onClick={() => handleTabChange('autorizaciones')}
-                className="p-4 rounded-xl border border-slate-200 hover:border-slate-400 bg-white hover:bg-slate-50/60 transition cursor-pointer flex flex-col justify-between"
-              >
-                <div>
-                  <div className="flex items-center justify-between">
-                    <span className="p-2 rounded-lg bg-rose-50 text-rose-700">
-                      <CheckCircle2 className="w-4 h-4" />
-                    </span>
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Módulo 6</span>
-                  </div>
-                  <h4 className="text-sm font-bold text-slate-900 mt-2.5">6. Centro de Autorizaciones</h4>
-                  <p className="text-xs text-slate-500 mt-0.5">Dictamen de compras, gastos y excepciones comerciales.</p>
-                </div>
-                <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
-                  <span className="font-semibold text-amber-700">{pendingApprovalsCount} por dictaminar</span>
-                  <span className="text-rose-600 font-semibold inline-flex items-center gap-0.5">
-                    Abrir pantalla <ArrowRight className="w-3 h-3" />
-                  </span>
-                </div>
-              </div>
-
-              {/* 7. Planes de Acción */}
-              <div
-                onClick={() => handleTabChange('planes')}
-                className="p-4 rounded-xl border border-slate-200 hover:border-slate-400 bg-white hover:bg-slate-50/60 transition cursor-pointer flex flex-col justify-between"
-              >
-                <div>
-                  <div className="flex items-center justify-between">
-                    <span className="p-2 rounded-lg bg-indigo-50 text-indigo-700">
-                      <Layers className="w-4 h-4" />
-                    </span>
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Módulo 7</span>
-                  </div>
-                  <h4 className="text-sm font-bold text-slate-900 mt-2.5">7. Planes de Acción</h4>
-                  <p className="text-xs text-slate-500 mt-0.5">Metas estratégicas, responsables y control de atrasos.</p>
-                </div>
-                <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
-                  <span className="font-semibold text-slate-800">{activePlansCount} en ejecución</span>
-                  <span className="text-indigo-600 font-semibold inline-flex items-center gap-0.5">
-                    Abrir pantalla <ArrowRight className="w-3 h-3" />
-                  </span>
-                </div>
-              </div>
-
-              {/* 8. Inteligencia & Riesgos */}
-              <div
-                onClick={() => handleTabChange('inteligencia')}
-                className="p-4 rounded-xl border border-slate-200 hover:border-slate-400 bg-white hover:bg-slate-50/60 transition cursor-pointer flex flex-col justify-between"
-              >
-                <div>
-                  <div className="flex items-center justify-between">
-                    <span className="p-2 rounded-lg bg-teal-50 text-teal-700">
-                      <Sparkles className="w-4 h-4" />
-                    </span>
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Módulo 8</span>
-                  </div>
-                  <h4 className="text-sm font-bold text-slate-900 mt-2.5">8. Inteligencia & Riesgos</h4>
-                  <p className="text-xs text-slate-500 mt-0.5">Diagnósticos cuantitativos y mitigación de anomalías.</p>
-                </div>
-                <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
-                  <span className="font-semibold text-slate-800">{activeAlertsCount} alertas activas</span>
-                  <span className="text-teal-600 font-semibold inline-flex items-center gap-0.5">
-                    Abrir pantalla <ArrowRight className="w-3 h-3" />
-                  </span>
-                </div>
-              </div>
-
-              {/* 9. Informes Gerenciales */}
-              <div
-                onClick={() => handleTabChange('informes')}
-                className="p-4 rounded-xl border border-slate-200 hover:border-slate-400 bg-white hover:bg-slate-50/60 transition cursor-pointer flex flex-col justify-between"
-              >
-                <div>
-                  <div className="flex items-center justify-between">
-                    <span className="p-2 rounded-lg bg-slate-100 text-slate-700">
-                      <FileText className="w-4 h-4" />
-                    </span>
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Módulo 9</span>
-                  </div>
-                  <h4 className="text-sm font-bold text-slate-900 mt-2.5">9. Informes Gerenciales</h4>
-                  <p className="text-xs text-slate-500 mt-0.5">Emisión de informes consolidados para exportar a PDF.</p>
-                </div>
-                <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
-                  <span className="font-semibold text-slate-800">6 formatos listos</span>
-                  <span className="text-slate-700 font-semibold inline-flex items-center gap-0.5">
-                    Abrir pantalla <ArrowRight className="w-3 h-3" />
-                  </span>
-                </div>
-              </div>
-
-              {/* 10. Notificaciones */}
-              <div
-                onClick={() => handleTabChange('notificaciones')}
-                className="p-4 rounded-xl border border-slate-200 hover:border-slate-400 bg-white hover:bg-slate-50/60 transition cursor-pointer flex flex-col justify-between"
-              >
-                <div>
-                  <div className="flex items-center justify-between">
-                    <span className="p-2 rounded-lg bg-amber-50 text-amber-700">
-                      <Bell className="w-4 h-4" />
-                    </span>
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Módulo 10</span>
-                  </div>
-                  <h4 className="text-sm font-bold text-slate-900 mt-2.5">10. Notificaciones</h4>
-                  <p className="text-xs text-slate-500 mt-0.5">Alertas críticas, vencimientos y avisos de prevención.</p>
-                </div>
-                <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
-                  <span className="font-semibold text-slate-800">Consolidado general</span>
-                  <span className="text-amber-600 font-semibold inline-flex items-center gap-0.5">
-                    Abrir pantalla <ArrowRight className="w-3 h-3" />
-                  </span>
-                </div>
               </div>
             </div>
           </div>
@@ -1416,40 +835,8 @@ export default function ManagerCenter({ pageId, initialTab = 'resumen', onNaviga
       {/* ===================================================================== */}
       {activeTab === 'talento' && (
         <div className="space-y-6">
-          {/* TARJETAS RESUMEN DE TALENTO */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs">
-              <p className="text-[11px] font-medium text-slate-500 uppercase tracking-wider">Colaboradores Evaluados</p>
-              <p className="text-xl font-bold text-slate-900 mt-1">{evaluations.length}</p>
-              <p className="text-[10px] text-slate-500">Expedientes registrados</p>
-            </div>
-            <div className="bg-purple-50 border border-purple-200 rounded-xl p-4 shadow-xs">
-              <p className="text-[11px] font-medium text-purple-800 uppercase tracking-wider">Promedio de Equipo</p>
-              <p className="text-xl font-bold text-purple-900 mt-1">
-                {evaluations.length > 0
-                  ? (evaluations.reduce((acc, ev) => acc + ev.score, 0) / evaluations.length).toFixed(1)
-                  : '5.0'} / 5.0
-              </p>
-              <p className="text-[10px] text-purple-700">Escala de desempeño</p>
-            </div>
-            <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 shadow-xs">
-              <p className="text-[11px] font-medium text-emerald-800 uppercase tracking-wider">Sobresalientes</p>
-              <p className="text-xl font-bold text-emerald-900 mt-1">
-                {evaluations.filter(ev => ev.score >= 4.5).length}
-              </p>
-              <p className="text-[10px] text-emerald-700">Calificación &ge; 4.5</p>
-            </div>
-            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 shadow-xs">
-              <p className="text-[11px] font-medium text-amber-800 uppercase tracking-wider">En Mejora Continua</p>
-              <p className="text-xl font-bold text-amber-900 mt-1">
-                {evaluations.filter(ev => ev.score < 4.5).length}
-              </p>
-              <p className="text-[10px] text-amber-700">Con compromisos fijados</p>
-            </div>
-          </div>
-
           <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+            <div className="flex items-center justify-between mb-4">
               <div>
                 <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
                   <Users className="w-4 h-4 text-indigo-600" />
@@ -1461,51 +848,16 @@ export default function ManagerCenter({ pageId, initialTab = 'resumen', onNaviga
               </div>
               <button
                 onClick={() => setNewEvalModal(true)}
-                className="px-3.5 py-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold rounded-lg flex items-center gap-1.5 shrink-0"
+                className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold rounded-lg flex items-center gap-1.5"
               >
                 <Plus className="w-3.5 h-3.5" />
                 Registrar evaluación
               </button>
             </div>
 
-            {/* BARRA DE BÚSQUEDA Y FILTROS */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-5 pt-3 border-t border-slate-100">
-              <div className="relative flex-1 max-w-sm">
-                <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
-                <input
-                  type="text"
-                  value={evalSearch}
-                  onChange={e => setEvalSearch(e.target.value)}
-                  placeholder="Buscar por colaborador o evaluador..."
-                  className="w-full pl-9 pr-3 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900"
-                />
-              </div>
-
-              <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
-                {[
-                  { id: 'todos', label: 'Todos' },
-                  { id: 'alto', label: 'Sobresalientes (≥4.5)' },
-                  { id: 'medio', label: 'Satisfactorios (3.5 - 4.4)' },
-                  { id: 'atencion', label: 'Requiere Atención (<3.5)' },
-                ].map(flt => (
-                  <button
-                    key={flt.id}
-                    onClick={() => setEvalScoreFilter(flt.id as any)}
-                    className={`px-2.5 py-1 text-xs font-medium rounded-lg whitespace-nowrap transition ${
-                      evalScoreFilter === flt.id
-                        ? 'bg-slate-900 text-white'
-                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                    }`}
-                  >
-                    {flt.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {filteredEvaluations.length > 0 ? (
+            {evaluations.length > 0 ? (
               <div className="divide-y divide-slate-100">
-                {filteredEvaluations.map(ev => (
+                {evaluations.map(ev => (
                   <div key={ev.id} className="py-4 space-y-2">
                     <div className="flex items-center justify-between">
                       <div>
@@ -1538,7 +890,7 @@ export default function ManagerCenter({ pageId, initialTab = 'resumen', onNaviga
               </div>
             ) : (
               <p className="text-xs text-slate-500 py-6 text-center">
-                No hay evaluaciones registradas con los filtros seleccionados.
+                No hay evaluaciones registradas aún. Pulsa «Registrar evaluación» para añadir la primera.
               </p>
             )}
           </div>
@@ -1550,88 +902,22 @@ export default function ManagerCenter({ pageId, initialTab = 'resumen', onNaviga
       {/* ===================================================================== */}
       {activeTab === 'autorizaciones' && (
         <div className="space-y-6">
-          {/* TARJETAS RESUMEN DE AUTORIZACIONES */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs">
-              <p className="text-[11px] font-medium text-slate-500 uppercase tracking-wider">Total Solicitudes</p>
-              <p className="text-xl font-bold text-slate-900 mt-1">{approvals.length}</p>
-              <p className="text-[10px] text-slate-500">Historial acumulado</p>
-            </div>
-            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 shadow-xs">
-              <p className="text-[11px] font-medium text-amber-800 uppercase tracking-wider">Pendientes de Dictamen</p>
-              <p className="text-xl font-bold text-amber-900 mt-1">{pendingApprovalsCount}</p>
-              <p className="text-[10px] text-amber-700">Requieren tu decisión</p>
-            </div>
-            <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 shadow-xs">
-              <p className="text-[11px] font-medium text-emerald-800 uppercase tracking-wider">Aprobadas</p>
-              <p className="text-xl font-bold text-emerald-900 mt-1">
-                {approvals.filter(a => a.status === 'aprobada').length}
-              </p>
-              <p className="text-[10px] text-emerald-700">Autorizadas por gerencia</p>
-            </div>
-            <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 shadow-xs">
-              <p className="text-[11px] font-medium text-rose-800 uppercase tracking-wider">Rechazadas / Revisión</p>
-              <p className="text-xl font-bold text-rose-900 mt-1">
-                {approvals.filter(a => a.status === 'rechazada' || a.status === 'en_revision' || a.status === 'en_correccion').length}
-              </p>
-              <p className="text-[10px] text-rose-700">Con observaciones</p>
-            </div>
-          </div>
-
           <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+            <div className="flex items-center justify-between mb-4">
               <div>
                 <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
                   <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                  Bandeja de Solicitudes y Dictámenes Gerenciales
+                  Bandeja de Solicitudes Pendientes de Autorización Gerencial
                 </h3>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  Compras excepcionales, gastos fuera de presupuesto, descuentos comerciales y bajas de inventario.
+                  Compras excepcionales, gastos fuera de presupuesto, descuentos comerciales y ajustes de inventario.
                 </p>
               </div>
-
-              <button
-                onClick={() => setNewApprovalModal(true)}
-                className="px-3.5 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold flex items-center gap-1.5 shrink-0"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                Nueva Solicitud
-              </button>
             </div>
 
-            {/* BARRA DE BÚSQUEDA Y FILTROS */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-5 pt-3 border-t border-slate-100">
-              <div className="relative flex-1 max-w-sm">
-                <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
-                <input
-                  type="text"
-                  value={approvalSearch}
-                  onChange={e => setApprovalSearch(e.target.value)}
-                  placeholder="Buscar por título, solicitante o referencia..."
-                  className="w-full pl-9 pr-3 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900"
-                />
-              </div>
-
-              <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
-                {(['todas', 'pendiente', 'aprobada', 'rechazada', 'en_correccion', 'en_revision'] as const).map(st => (
-                  <button
-                    key={st}
-                    onClick={() => setApprovalStatusFilter(st)}
-                    className={`px-2.5 py-1 text-xs font-medium rounded-lg capitalize whitespace-nowrap transition ${
-                      approvalStatusFilter === st
-                        ? 'bg-slate-900 text-white'
-                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                    }`}
-                  >
-                    {st === 'todas' ? 'Todas' : st.replace('_', ' ')}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {filteredApprovals.length > 0 ? (
+            {approvals.length > 0 ? (
               <div className="space-y-4">
-                {filteredApprovals.map(req => {
+                {approvals.map(req => {
                   const isPending = req.status === 'pendiente'
                   return (
                     <div
@@ -1772,38 +1058,8 @@ export default function ManagerCenter({ pageId, initialTab = 'resumen', onNaviga
       {/* ===================================================================== */}
       {activeTab === 'planes' && (
         <div className="space-y-6">
-          {/* TARJETAS RESUMEN DE PLANES DE ACCIÓN */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs">
-              <p className="text-[11px] font-medium text-slate-500 uppercase tracking-wider">Total Planes</p>
-              <p className="text-xl font-bold text-slate-900 mt-1">{actionPlans.length}</p>
-              <p className="text-[10px] text-slate-500">Objetivos registrados</p>
-            </div>
-            <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-4 shadow-xs">
-              <p className="text-[11px] font-medium text-indigo-800 uppercase tracking-wider">En Ejecución</p>
-              <p className="text-xl font-bold text-indigo-900 mt-1">
-                {actionPlans.filter(p => p.status === 'en_ejecucion' || p.status === 'pendiente').length}
-              </p>
-              <p className="text-[10px] text-indigo-700">En avance activo</p>
-            </div>
-            <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 shadow-xs">
-              <p className="text-[11px] font-medium text-emerald-800 uppercase tracking-wider">Completados</p>
-              <p className="text-xl font-bold text-emerald-900 mt-1">
-                {actionPlans.filter(p => p.status === 'completado').length}
-              </p>
-              <p className="text-[10px] text-emerald-700">Objetivo 100% alcanzado</p>
-            </div>
-            <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 shadow-xs">
-              <p className="text-[11px] font-medium text-rose-800 uppercase tracking-wider">Atrasados</p>
-              <p className="text-xl font-bold text-rose-900 mt-1">
-                {actionPlans.filter(p => p.status !== 'completado' && p.status !== 'cancelado' && new Date(p.due_date).getTime() < Date.now()).length}
-              </p>
-              <p className="text-[10px] text-rose-700">Superaron fecha límite</p>
-            </div>
-          </div>
-
           <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+            <div className="flex items-center justify-between mb-4">
               <div>
                 <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
                   <Layers className="w-4 h-4 text-indigo-600" />
@@ -1815,63 +1071,15 @@ export default function ManagerCenter({ pageId, initialTab = 'resumen', onNaviga
               </div>
               <button
                 onClick={() => setNewPlanModal(true)}
-                className="px-3.5 py-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold rounded-lg flex items-center gap-1.5 shrink-0"
+                className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold rounded-lg flex items-center gap-1.5"
               >
                 <Plus className="w-3.5 h-3.5" />
                 Crear plan de acción
               </button>
             </div>
 
-            {/* BARRA DE BÚSQUEDA Y FILTROS */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-5 pt-3 border-t border-slate-100">
-              <div className="relative flex-1 max-w-sm">
-                <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
-                <input
-                  type="text"
-                  value={planSearch}
-                  onChange={e => setPlanSearch(e.target.value)}
-                  placeholder="Buscar objetivo, título o responsable..."
-                  className="w-full pl-9 pr-3 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-slate-900"
-                />
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2">
-                <select
-                  value={planAreaFilter}
-                  onChange={e => setPlanAreaFilter(e.target.value)}
-                  className="px-2.5 py-1 text-xs border border-slate-200 rounded-lg bg-white focus:outline-none"
-                >
-                  <option value="todas">Todas las áreas</option>
-                  <option value="operaciones">Operaciones</option>
-                  <option value="comercial">Comercial</option>
-                  <option value="financiera">Financiera</option>
-                  <option value="inventario">Inventario</option>
-                  <option value="talento_humano">Talento Humano</option>
-                  <option value="calidad">Calidad</option>
-                  <option value="estrategica">Estratégica</option>
-                </select>
-
-                <div className="flex items-center gap-1 overflow-x-auto">
-                  {(['todos', 'en_ejecucion', 'pendiente', 'atrasado', 'completado'] as const).map(st => (
-                    <button
-                      key={st}
-                      onClick={() => setPlanStatusFilter(st)}
-                      className={`px-2.5 py-1 text-xs font-medium rounded-lg capitalize whitespace-nowrap transition ${
-                        planStatusFilter === st
-                          ? 'bg-slate-900 text-white'
-                          : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                      }`}
-                    >
-                      {st === 'todos' ? 'Todos' : st.replace('_', ' ')}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-
             <div className="space-y-4">
-              {filteredPlans.length > 0 ? (
-                filteredPlans.map(plan => {
+              {actionPlans.map(plan => {
                 const isOverdue =
                   plan.status !== 'completado' &&
                   plan.status !== 'cancelado' &&
@@ -1970,12 +1178,7 @@ export default function ManagerCenter({ pageId, initialTab = 'resumen', onNaviga
                     </div>
                   </div>
                 )
-              })
-            ) : (
-              <p className="text-xs text-slate-500 py-6 text-center">
-                No se encontraron planes de acción con los filtros seleccionados.
-              </p>
-            )}
+              })}
             </div>
           </div>
         </div>
@@ -1987,41 +1190,17 @@ export default function ManagerCenter({ pageId, initialTab = 'resumen', onNaviga
       {activeTab === 'inteligencia' && (
         <div className="space-y-6">
           <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
-              <div>
-                <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                  <Sparkles className="w-4 h-4 text-purple-600" />
-                  Alertas Inteligentes & Diagnósticos Estratégicos
-                </h3>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  Análisis determinista fundamentado en datos reales de ventas, márgenes, almacén y cobranzas.
-                </p>
-              </div>
-
-              <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
-                {[
-                  { id: 'todas', label: 'Todas' },
-                  { id: 'alta', label: 'Alta (Crítica)' },
-                  { id: 'media', label: 'Media' },
-                ].map(flt => (
-                  <button
-                    key={flt.id}
-                    onClick={() => setAlertSeverityFilter(flt.id as any)}
-                    className={`px-2.5 py-1 text-xs font-medium rounded-lg whitespace-nowrap transition ${
-                      alertSeverityFilter === flt.id
-                        ? 'bg-slate-900 text-white'
-                        : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-                    }`}
-                  >
-                    {flt.label}
-                  </button>
-                ))}
-              </div>
-            </div>
+            <h3 className="text-sm font-bold text-slate-900 mb-1 flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-purple-600" />
+              Alertas Inteligentes & Diagnósticos Estratégicos
+            </h3>
+            <p className="text-xs text-slate-500 mb-5">
+              Análisis determinista fundamentado en datos reales de ventas, márgenes, almacén y cobranzas.
+            </p>
 
             <div className="space-y-4">
-              {filteredAlerts.length > 0 ? (
-                filteredAlerts.map(alt => (
+              {overview?.smartAlerts && overview.smartAlerts.length > 0 ? (
+                overview.smartAlerts.map(alt => (
                   <div key={alt.id} className="p-4 rounded-xl border border-slate-200 bg-white space-y-3">
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">

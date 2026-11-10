@@ -88,6 +88,7 @@ interface Receipt {
   tax: number
   total: number
   payment: string
+  paymentChannel?: string | null
   received: number | null
   change: number
   fx: FxResult | null
@@ -141,7 +142,7 @@ ${rows}
 ${r.discount > 0 ? `<div class="row"><span>Subtotal</span><span>${m(r.sum)}</span></div><div class="row"><span>Descuento</span><span>-${m(r.discount)}</span></div>` : ''}
 ${r.tax > 0 ? `<div class="row"><span>Impuesto${r.taxRate ? ` (${esc(r.taxRate)}%)` : ''}</span><span>${m(r.tax)}</span></div>` : ''}
 <div class="row t"><span>TOTAL</span><span>${m(r.total)}</span></div>
-<div class="row"><span>Pago</span><span>${esc(PAYMENT_LABEL[r.payment] ?? r.payment)}</span></div>
+<div class="row"><span>Pago</span><span>${esc(PAYMENT_LABEL[r.payment] ?? r.payment)}${r.paymentChannel ? ` (${esc(r.paymentChannel)})` : ''}</span></div>
 ${r.fx ? `<div class="row"><span>Pagó en ${esc(r.fx.currency)}</span><span>${esc(formatMoney(r.fx.amount, r.fx.currency))}</span></div><div class="row"><span>Tasa</span><span>1 ${esc(r.fx.currency)} = ${m(r.fx.rate)}</span></div>${r.fx.baseAmount > 0 ? `<div class="row"><span>Además recibió</span><span>${m(r.fx.baseAmount)}</span></div>` : ''}` : ''}
 ${r.received != null ? `<div class="row"><span>Recibido</span><span>${m(r.received)}</span></div><div class="row"><span>Cambio</span><span>${m(r.change)}</span></div>` : ''}
 <hr>
@@ -161,7 +162,7 @@ function shareText(r: Receipt, cfg: CompanyConfig | null): string {
   L.push('')
   if (r.discount > 0) L.push(`Descuento: -${m(r.discount)}`)
   if (r.tax > 0) L.push(`Impuesto: ${m(r.tax)}`)
-  L.push(`*Total: ${m(r.total)}*`, `Pago: ${PAYMENT_LABEL[r.payment] ?? r.payment}`)
+  L.push(`*Total: ${m(r.total)}*`, `Pago: ${PAYMENT_LABEL[r.payment] ?? r.payment}${r.paymentChannel ? ` (${r.paymentChannel})` : ''}`)
   if (r.fx) L.push(`Pagó en ${r.fx.currency}: ${formatMoney(r.fx.amount, r.fx.currency)} (tasa: 1 ${r.fx.currency} = ${m(r.fx.rate)})`)
   if (r.fx && r.fx.baseAmount > 0) L.push(`Además recibió: ${m(r.fx.baseAmount)}`)
   if (r.fx && r.change > 0) L.push(`Cambio: ${m(r.change)}`)
@@ -232,6 +233,7 @@ export default function Mostrador({ onNavigate }: { onNavigate?: (page: string) 
   const [discMode, setDiscMode] = useState<'monto' | 'pct'>('monto')
   const [discValue, setDiscValue] = useState('')
   const [payment, setPayment] = useState('efectivo')
+  const [paymentChannel, setPaymentChannel] = useState<string>('')
   const [received, setReceived] = useState('')
   const [fx, setFx] = useState<FxState | null>(null)
   const [saving, setSaving] = useState(false)
@@ -561,6 +563,7 @@ export default function Mostrador({ onNavigate }: { onNavigate?: (page: string) 
     setDiscValue('')
     setDiscMode('monto')
     setPayment('efectivo')
+    setPaymentChannel('')
     setReceived('')
     setFx(null)
     setSearch('')
@@ -719,6 +722,7 @@ export default function Mostrador({ onNavigate }: { onNavigate?: (page: string) 
       tax: tx.tax,
       total,
       payment,
+      paymentChannel: paymentChannel || null,
       received: recv,
       change: recv != null ? round2(recv - total) : 0,
       fx: fxRes,
@@ -1519,6 +1523,60 @@ export default function Mostrador({ onNavigate }: { onNavigate?: (page: string) 
                     ? 'El cliente queda debiendo este valor y se cobra después con abonos.'
                     : 'Elige un cliente registrado para venderle a crédito.'}
                 </p>
+              )}
+
+              {payment === 'transferencia' && (
+                <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 space-y-1.5">
+                  <span className="text-[11px] font-bold text-slate-600 block">Canal rápido de transferencia:</span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {[
+                      { id: 'Nequi', label: '⚡ Nequi' },
+                      { id: 'Daviplata', label: '📲 Daviplata' },
+                      { id: 'Bancolombia', label: '🏦 Bancolombia' },
+                      { id: 'Transfiya', label: '⚡ Transfiya' },
+                    ].map(ch => (
+                      <button
+                        key={ch.id}
+                        type="button"
+                        onClick={() => setPaymentChannel(paymentChannel === ch.id ? '' : ch.id)}
+                        className={`px-2.5 py-1 rounded-md text-xs font-semibold border transition-colors ${
+                          paymentChannel === ch.id
+                            ? 'bg-purple-700 text-white border-purple-700 shadow-xs'
+                            : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
+                        }`}
+                      >
+                        {ch.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {payment === 'tarjeta' && (
+                <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 space-y-1.5">
+                  <span className="text-[11px] font-bold text-slate-600 block">Terminal / Datáfono:</span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {[
+                      { id: 'Datáfono Débito', label: '💳 Débito' },
+                      { id: 'Datáfono Crédito', label: '💳 Crédito' },
+                      { id: 'Bold', label: '📱 Bold Móvil' },
+                      { id: 'Redeban', label: '🏧 Redeban' },
+                    ].map(ch => (
+                      <button
+                        key={ch.id}
+                        type="button"
+                        onClick={() => setPaymentChannel(paymentChannel === ch.id ? '' : ch.id)}
+                        className={`px-2.5 py-1 rounded-md text-xs font-semibold border transition-colors ${
+                          paymentChannel === ch.id
+                            ? 'bg-indigo-700 text-white border-indigo-700 shadow-xs'
+                            : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
+                        }`}
+                      >
+                        {ch.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               )}
 
               {payment === 'efectivo' && !fx && (

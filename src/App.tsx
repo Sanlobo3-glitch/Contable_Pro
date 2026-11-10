@@ -624,7 +624,7 @@ function AppContent() {
     )
   }
 
-  if (user.role === 'dueno' && cur.confirmed === false && !isMasterAccount) {
+  if ((user.role === 'dueno' || user.role === 'admin_empresa') && cur.confirmed === false && !isMasterAccount) {
     return <OnboardingWizard onComplete={() => refreshCurrency()} />
   }
 

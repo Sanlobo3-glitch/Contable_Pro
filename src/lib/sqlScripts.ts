@@ -13,8 +13,12 @@ import sqlAutoBrandSync from '../../supabase/migrations/20261103000020_sincroniz
 import sqlCommercialSuite21 from '../../supabase/migrations/20261104000021_cinco_soluciones_comerciales_avanzadas.sql?raw'
 import sqlContableProPartidaDoble from '../../supabase/migrations/20261106000022_contable_pro_partida_doble_puc_niif.sql?raw'
 import sqlManagerCenter from '../../supabase/migrations/20261108000051_centro_direccion_gerencial_tablas_y_autorizaciones.sql?raw'
+import sqlDianReports from '../../supabase/migrations/20261109000052_reportes_dian_exogena_y_formularios.sql?raw'
+import sqlCashShifts from '../../supabase/migrations/20261110000053_consolidacion_ciclo_comercial_caja_turnos_y_contabilidad.sql?raw'
 
 export type SqlBundleId =
+  | 'cash_shifts'
+  | 'dian_reports'
   | 'manager_center'
   | 'contable_pro'
   | 'consolidated'
@@ -41,6 +45,35 @@ export interface SqlScriptBundle {
 }
 
 export const SQL_SCRIPT_BUNDLES: SqlScriptBundle[] = [
+  {
+    id: 'cash_shifts',
+    title: 'Consolidación Comercial: Turnos de Caja, Arqueos Ciegos y Contabilidad NIIF',
+    filename: '20261110000053_consolidacion_ciclo_comercial_caja_turnos_y_contabilidad.sql',
+    category: 'Recomendado',
+    summary:
+      'Crea las tablas multiempresa con RLS para Turnos/Sesiones de Caja (cash_shifts), Arqueo Ciego por Denominaciones COP (cash_shift_denominations) y Pagos Múltiples (sale_payments), con enlace automático a la contabilidad de partida doble NIIF (acc_entries y acc_lines).',
+    targetTables: [
+      'cash_shifts',
+      'cash_shift_denominations',
+      'sale_payments',
+    ],
+    sql: sqlCashShifts,
+  },
+  {
+    id: 'dian_reports',
+    title: 'Reportes e Impuestos DIAN: Exógena, Formularios 300/350 y Retenciones',
+    filename: '20261109000052_reportes_dian_exogena_y_formularios.sql',
+    category: 'Recomendado',
+    summary:
+      'Crea las tablas multiempresa con RLS para Información Exógena (dian_exogena_concepts), Mapeo PUC acc_* (dian_account_mappings), Reglas Tributarias de ReteFuente/ICA (dian_tax_rules) y Certificados Fiscales (dian_certificates_issued), con funciones RPC para cálculo de Formularios 300 y 350.',
+    targetTables: [
+      'dian_exogena_concepts',
+      'dian_account_mappings',
+      'dian_tax_rules',
+      'dian_certificates_issued',
+    ],
+    sql: sqlDianReports,
+  },
   {
     id: 'manager_center',
     title: 'Centro de Dirección Gerencial: Aprobaciones, Planes de Acción y Desempeño',

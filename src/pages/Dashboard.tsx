@@ -53,6 +53,7 @@ import {
   type SellerBarItem,
 } from '../components/PerformanceCharts'
 import type { TeamPayrollMember } from '../types'
+import OnboardingWizard from '../components/OnboardingWizard'
 
 interface DashStats {
   products_count: number
@@ -221,6 +222,34 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
       return { omni: 0, ai: 0, branch: 0, anomalies: 0, compliance: 0 }
     }
   }, [windowSales, lastUpdated])
+
+  const [showOnboarding, setShowOnboarding] = useState(false)
+  const [dismissOnboardingBanner, setDismissOnboardingBanner] = useState(() => {
+    try {
+      return localStorage.getItem('ip_dismiss_onboarding_banner') === 'true'
+    } catch {
+      return false
+    }
+  })
+
+  const onboardingSteps = useMemo(() => {
+    const isCurConfirmed = true
+    const hasProducts = stats.products_count > 0
+    const hasCustomers = stats.customers_count > 0
+    const hasSales = stats.sales_count > 0
+    const hasWarehouses = true
+
+    const items = [
+      { id: 'currency', title: 'Identidad y Moneda', done: isCurConfirmed, desc: 'Razón social y moneda de trabajo' },
+      { id: 'branches', title: 'Sedes y Bodegas', done: hasWarehouses, desc: 'Punto de venta y almacén' },
+      { id: 'products', title: 'Catálogo Inventario', done: hasProducts, desc: `${stats.products_count} producto(s) en catálogo` },
+      { id: 'customers', title: 'Clientes y DIAN', done: hasCustomers, desc: `${stats.customers_count} cliente(s) registrados` },
+      { id: 'first_sale', title: 'Primera Venta POS', done: hasSales, desc: hasSales ? `${stats.sales_count} venta(s) procesadas` : 'Facturación en vivo' },
+    ]
+    const completedCount = items.filter(i => i.done).length
+    const allDone = completedCount === items.length
+    return { items, completedCount, total: items.length, allDone }
+  }, [stats])
 
   const loadSalesAndStats = useCallback(async () => {
     const now = new Date()
@@ -990,6 +1019,94 @@ export default function Dashboard({ onNavigate }: { onNavigate?: (page: string) 
           )}
         </div>
       </div>
+
+      {/* Asistente Modal de Onboarding si el usuario lo solicita */}
+      {showOnboarding && (
+        <OnboardingWizard
+          isModal={true}
+          onDismiss={() => setShowOnboarding(false)}
+          onComplete={() => {
+            setShowOnboarding(false)
+            void refreshDashboard('all')
+          }}
+        />
+      )}
+
+      {/* Tarjeta de Ruta de Activación Onboarding (para dueños y gerentes) */}
+      {isManager && !dismissOnboardingBanner && (
+        <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white p-5 shadow-lg border border-indigo-900/40">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-amber-400 bg-amber-400/20 px-2.5 py-0.5 rounded-full border border-amber-400/30">
+                  Ruta de Activación Pyme · 8 Minutos
+                </span>
+                <span className="text-xs text-slate-300 font-semibold">
+                  {onboardingSteps.completedCount} de {onboardingSteps.total} hitos completados ({Math.round((onboardingSteps.completedCount / onboardingSteps.total) * 100)}%)
+                </span>
+              </div>
+              <h3 className="text-base sm:text-lg font-black text-white">
+                {onboardingSteps.allDone ? '¡Tu empresa está 100% configurada y lista!' : 'Completa la puesta en marcha de tu negocio'}
+              </h3>
+              <p className="text-xs text-slate-300 max-w-xl">
+                {onboardingSteps.allDone
+                  ? 'Todos los módulos base están operativos con trazabilidad contable de partida doble, inventario y facturación.'
+                  : 'Sigue el paso a paso guiado para configurar monedas, sedes, cargar tu primer inventario y emitir tu primera venta en mostrador.'}
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2.5 shrink-0">
+              <button
+                type="button"
+                onClick={() => setShowOnboarding(true)}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold text-xs shadow-md transition-all hover:scale-105"
+              >
+                <Sparkles className="w-4 h-4 text-slate-950" />
+                <span>{onboardingSteps.allDone ? 'Ver / Editar Paso a Paso' : 'Continuar Configuración'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setDismissOnboardingBanner(true)
+                  try {
+                    localStorage.setItem('ip_dismiss_onboarding_banner', 'true')
+                  } catch {}
+                }}
+                className="p-2 text-slate-400 hover:text-white rounded-lg hover:bg-white/10 text-xs transition-colors"
+                title="Ocultar recordatorio"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+
+          {/* Hitos horizontales con checks */}
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5 mt-4 pt-4 border-t border-white/10">
+            {onboardingSteps.items.map(it => (
+              <div
+                key={it.id}
+                className={`p-2.5 rounded-xl border transition-all ${
+                  it.done
+                    ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-300'
+                    : 'bg-white/5 border-white/10 text-slate-300'
+                }`}
+              >
+                <div className="flex items-center gap-1.5 mb-1">
+                  <div
+                    className={`w-4 h-4 rounded-full flex items-center justify-center text-[10px] font-bold ${
+                      it.done ? 'bg-emerald-500 text-white' : 'bg-slate-700 text-slate-400'
+                    }`}
+                  >
+                    {it.done ? '✓' : '•'}
+                  </div>
+                  <span className="text-xs font-bold truncate text-white">{it.title}</span>
+                </div>
+                <p className="text-[10px] opacity-75 truncate">{it.desc}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Acceso contextual rápido para Contador Público o Soporte Técnico */}
       {onNavigate && user?.role === 'contador' && (

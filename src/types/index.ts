@@ -1470,3 +1470,7 @@ export interface ExecutiveReportData {
   recommendedActions: string[]
   tableData?: { headers: string[]; rows: (string | number)[][] }
 }
+
+
+
+

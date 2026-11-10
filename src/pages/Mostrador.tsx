@@ -26,6 +26,7 @@ import {
   hydrateProductsWithImages,
   saveProductImageInSupabase,
 } from '../lib/productImages'
+import { consumeRouteCustomerHandoff } from '../lib/routeHandoff'
 import BarcodeScanner from '../components/BarcodeScanner'
 import FxPayment, { fxResult, type FxResult, type FxState } from '../components/FxPayment'
 import { ProductPhotoLightbox, ProductThumb } from '../components/ProductImageCapture'
@@ -52,8 +53,15 @@ import {
   Database,
   AlertTriangle,
   NotebookPen,
-  ShieldAlert,
+  ShoppingCart,
+  ArrowRight,
+  ArrowLeft,
+  Receipt,
+  CheckCircle2,
+  Wallet,
 } from 'lucide-react'
+import CashShiftModal from '../components/CashShiftModal'
+import { getActiveShift, autoContabilizarVenta, type ActiveShift } from '../services/cashShiftService'
 
 const PAYMENT_LABEL: Record<string, string> = {
   efectivo: 'Efectivo',
@@ -161,22 +169,44 @@ function shareText(r: Receipt, cfg: CompanyConfig | null): string {
   return L.join('\n')
 }
 
+function getQuickCashOptions(total: number, currency: string): number[] {
+  if (total <= 0) return []
+  const opts: number[] = [total]
+  const isHighDenom = currency === 'COP' || currency === 'CLP' || currency === 'ARS' || currency === 'PYG'
+
+  if (isHighDenom) {
+    const next10k = Math.ceil(total / 10000) * 10000
+    const next20k = Math.ceil(total / 20000) * 20000
+    const next50k = Math.ceil(total / 50000) * 50000
+    const next100k = Math.ceil(total / 100000) * 100000
+    for (const val of [next10k, next20k, next50k, next100k]) {
+      if (val > total && !opts.includes(val) && opts.length < 5) {
+        opts.push(val)
+      }
+    }
+  } else {
+    const next5 = Math.ceil(total / 5) * 5
+    const next10 = Math.ceil(total / 10) * 10
+    const next20 = Math.ceil(total / 20) * 20
+    const next50 = Math.ceil(total / 50) * 50
+    const next100 = Math.ceil(total / 100) * 100
+    for (const val of [next5, next10, next20, next50, next100]) {
+      if (val > total && !opts.includes(val) && opts.length < 5) {
+        opts.push(val)
+      }
+    }
+  }
+  return opts
+}
+
 export default function Mostrador({ onNavigate }: { onNavigate?: (page: string) => void } = {}) {
-  const { user, masterRoleOverride } = useAuth()
+  const { user } = useAuth()
   const { activeWarehouses, activeWarehouseId, setActiveWarehouseId } = useWarehouse()
   const { fmt: money, currency: baseCur, fxRates } = useCurrency()
   const readOnly = isReadOnly(user)
-  const effectiveRole = masterRoleOverride || user?.role
-  const canEditPhotos = !readOnly && (canManageInventory(effectiveRole) || canRegisterSales(effectiveRole))
+  const canEditPhotos = !readOnly && (canManageInventory(user?.role) || canRegisterSales(user?.role))
   const uid = user?.id ?? ''
-  const isManager = isCompanyManager(effectiveRole)
-
-  // Control Antifraude y Bypass Gerencial
-  const [managerBypassApproved, setManagerBypassApproved] = useState(false)
-  const [showBypassModal, setShowBypassModal] = useState(false)
-  const [bypassReason, setBypassReason] = useState('')
-  const [bypassPin, setBypassPin] = useState('')
-  const [bypassPinErr, setBypassPinErr] = useState('')
+  const isManager = isCompanyManager(user?.role)
 
   const [products, setProducts] = useState<Product[]>([])
   const [categories, setCategories] = useState<Category[]>([])
@@ -196,6 +226,7 @@ export default function Mostrador({ onNavigate }: { onNavigate?: (page: string) 
   const [sqlModalOpen, setSqlModalOpen] = useState(false)
 
   const [cart, setCart] = useState<CartLine[]>([])
+  const [mobileTab, setMobileTab] = useState<'catalog' | 'cart'>('catalog')
   const [customerId, setCustomerId] = useState('')
   const [override, setOverride] = useState<PriceType | null>(null)
   const [discMode, setDiscMode] = useState<'monto' | 'pct'>('monto')
@@ -209,6 +240,19 @@ export default function Mostrador({ onNavigate }: { onNavigate?: (page: string) 
   const [notice, setNotice] = useState('')
   const [receipt, setReceipt] = useState<Receipt | null>(null)
   const [today, setToday] = useState<{ n: number; total: number } | null>(null)
+  const [showShiftModal, setShowShiftModal] = useState(false)
+  const [activeShift, setActiveShift] = useState<ActiveShift>({
+    active: false,
+    opening_amount: 0,
+    sales_cash: 0,
+    sales_card: 0,
+    sales_transfer: 0,
+    sales_credit: 0,
+    sales_count: 0,
+    cash_in: 0,
+    cash_out: 0,
+    expected_cash: 0,
+  })
 
   const searchRef = useRef<HTMLInputElement>(null)
   const cartRef = useRef<CartLine[]>([])
@@ -288,6 +332,7 @@ export default function Mostrador({ onNavigate }: { onNavigate?: (page: string) 
   useEffect(() => {
     void load()
     void loadToday()
+    void getActiveShift().then(setActiveShift)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [uid])
 
@@ -314,6 +359,15 @@ export default function Mostrador({ onNavigate }: { onNavigate?: (page: string) 
       cartRef.current = nextCart
       setCart(nextCart)
       setNotice(`Se cargaron ${nextCart.length} producto(s) desde el Catálogo Comercial.`)
+      return
+    }
+
+    const routeHandoff = consumeRouteCustomerHandoff()
+    if (routeHandoff?.customerId) {
+      handoffConsumedRef.current = true
+      setCustomerId(routeHandoff.customerId)
+      setNotice(`Cliente de ruta «${routeHandoff.customerName}» seleccionado. Agrega productos para vender.`)
+      searchRef.current?.focus()
     }
   }, [ready, products])
 
@@ -408,6 +462,9 @@ export default function Mostrador({ onNavigate }: { onNavigate?: (page: string) 
     (payment === 'efectivo' || fxRes) && receivedNum != null && !isNaN(receivedNum)
       ? round2(receivedNum - total)
       : 0
+
+  const totalCartUnits = useMemo(() => lines.reduce((acc, l) => acc + l.qty, 0), [lines])
+  const quickCashOptions = useMemo(() => getQuickCashOptions(total, baseCur), [total, baseCur])
 
   function stockOf(id: string) {
     return Number(productsRef.current.find(p => p.id === id)?.stock) || 0
@@ -507,7 +564,7 @@ export default function Mostrador({ onNavigate }: { onNavigate?: (page: string) 
     setReceived('')
     setFx(null)
     setSearch('')
-    setManagerBypassApproved(false)
+    setMobileTab('catalog')
   }
 
   async function handleQuickPhotoSave(product: Product, newUrl: string | null) {
@@ -535,37 +592,14 @@ export default function Mostrador({ onNavigate }: { onNavigate?: (page: string) 
   async function charge() {
     if (readOnly || saving || !ready) return
     if (lines.length === 0) return
-
-    // Control Antifraude: Validación de descuento para cajero/vendedor
-    const isExcessiveDiscount =
-      discNum > 0 &&
-      (discMode === 'pct' ? discNum > 10 : discNum > (sum > 0 ? sum * 0.1 : 0))
-
-    if (!isManager && isExcessiveDiscount && !managerBypassApproved) {
-      setBypassReason(
-        `El descuento ingresado (${discMode === 'pct' ? `${discNum}%` : money(discNum)}) supera el límite de seguridad (10%) para cajeros y vendedores.`
-      )
-      setBypassPin('')
-      setBypassPinErr('')
-      setShowBypassModal(true)
-      return
-    }
-
     for (const l of lines) {
       if (!(l.qty > 0)) {
         setNotice(`Revisa la cantidad de ${l.product.name}.`)
         return
       }
-      if (l.qty > stockOf(l.product.id) && !managerBypassApproved) {
-        if (!isManager) {
-          setBypassReason(
-            `Stock insuficiente en mostrador para ${l.product.name} (disponible: ${stockOf(l.product.id)}, solicitado: ${l.qty}). Requiere autorización gerencial de entrega diferida o sobregiro.`
-          )
-          setBypassPin('')
-          setBypassPinErr('')
-          setShowBypassModal(true)
-          return
-        }
+      if (l.qty > stockOf(l.product.id)) {
+        setNotice(`Stock insuficiente para ${l.product.name} (disponible: ${stockOf(l.product.id)})`)
+        return
       }
     }
     if (discNum < 0) {
@@ -642,6 +676,10 @@ export default function Mostrador({ onNavigate }: { onNavigate?: (page: string) 
         setSaving(false)
         setNotice('Error al registrar la venta: ' + r.message)
         return
+      } else {
+        // Enlace contable automático NIIF acc_* y actualización del turno activo
+        void autoContabilizarVenta(sale.client_id)
+        void getActiveShift().then(setActiveShift)
       }
     }
     if (queued) {
@@ -706,7 +744,7 @@ export default function Mostrador({ onNavigate }: { onNavigate?: (page: string) 
   }, [cart])
 
   return (
-    <div className="max-w-6xl mx-auto">
+    <div className="max-w-6xl mx-auto pb-28 lg:pb-6">
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-4">
         <div>
           <h1 className="text-xl font-bold text-slate-800 flex items-center gap-2">
@@ -717,6 +755,23 @@ export default function Mostrador({ onNavigate }: { onNavigate?: (page: string) 
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2.5 self-start sm:self-auto">
+          <button
+            type="button"
+            onClick={() => setShowShiftModal(true)}
+            title={activeShift.active ? 'Turno de caja activo: ver estado o realizar arqueo ciego' : 'Abrir turno de caja con fondo inicial'}
+            className={`inline-flex items-center gap-1.5 border px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ${
+              activeShift.active
+                ? 'bg-emerald-50 border-emerald-300 text-emerald-800 hover:bg-emerald-100'
+                : 'bg-amber-50 border-amber-300 text-amber-900 hover:bg-amber-100'
+            }`}
+          >
+            <Wallet className={`w-3.5 h-3.5 shrink-0 ${activeShift.active ? 'text-emerald-700' : 'text-amber-700'}`} />
+            {activeShift.active ? (
+              <span>Turno: <strong className="font-mono">{money(activeShift.expected_cash || activeShift.opening_amount)}</strong></span>
+            ) : (
+              <span>Abrir Turno Caja</span>
+            )}
+          </button>
           <button
             type="button"
             onClick={() => {
@@ -812,9 +867,41 @@ export default function Mostrador({ onNavigate }: { onNavigate?: (page: string) 
         </div>
       )}
 
+      {/* Selector Rápido de Pestañas en Móvil */}
+      <div className="lg:hidden flex items-center bg-slate-100 p-1 rounded-xl mb-3 text-xs font-semibold">
+        <button
+          type="button"
+          onClick={() => setMobileTab('catalog')}
+          className={`flex-1 py-2.5 rounded-lg flex items-center justify-center gap-1.5 transition-all min-h-[44px] ${
+            mobileTab === 'catalog'
+              ? 'bg-white text-slate-900 shadow-sm font-bold'
+              : 'text-slate-600 hover:text-slate-900'
+          }`}
+        >
+          <Store className="w-4 h-4" />
+          <span>Catálogo ({quickPicks.length})</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setMobileTab('cart')}
+          className={`flex-1 py-2.5 rounded-lg flex items-center justify-center gap-1.5 transition-all min-h-[44px] relative ${
+            mobileTab === 'cart'
+              ? 'bg-slate-900 text-white shadow-sm font-bold'
+              : lines.length > 0
+                ? 'bg-emerald-600 text-white font-bold'
+                : 'text-slate-600 hover:text-slate-900'
+          }`}
+        >
+          <ShoppingCart className="w-4 h-4" />
+          <span>
+            Carrito {lines.length > 0 ? `(${totalCartUnits} · ${money(total)})` : '(0)'}
+          </span>
+        </button>
+      </div>
+
       <div className="grid lg:grid-cols-12 gap-4 items-start">
         {/* Panel izquierdo (7 cols): buscador + cuadrícula visual con imagen real */}
-        <div className="lg:col-span-7 bg-white rounded-xl border border-slate-200 p-4">
+        <div className={`${mobileTab === 'cart' ? 'hidden lg:block' : 'block'} lg:col-span-7 bg-white rounded-xl border border-slate-200 p-4`}>
           <div className="flex gap-2">
             <div className="relative flex-1">
               <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -830,14 +917,27 @@ export default function Mostrador({ onNavigate }: { onNavigate?: (page: string) 
                 }}
                 placeholder="Nombre o código de barras del producto"
                 autoComplete="off"
-                className="w-full pl-9 pr-3 py-2.5 rounded-lg border border-slate-300 text-sm"
+                className="w-full pl-9 pr-9 py-2.5 rounded-lg border border-slate-300 text-sm min-h-[44px]"
               />
+              {search && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearch('')
+                    searchRef.current?.focus()
+                  }}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1.5 text-slate-400 hover:text-slate-600 rounded-md"
+                  aria-label="Limpiar búsqueda"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              )}
             </div>
             <button
               type="button"
               onClick={() => setScanning(true)}
               disabled={readOnly}
-              className="flex items-center gap-2 bg-slate-800 text-white px-3 rounded-lg text-sm font-medium hover:bg-slate-700 disabled:opacity-40 whitespace-nowrap"
+              className="flex items-center gap-2 bg-slate-800 text-white px-3.5 rounded-lg text-sm font-medium hover:bg-slate-700 disabled:opacity-40 whitespace-nowrap min-h-[44px]"
               title="Escanear con la cámara"
             >
               <Camera className="w-4 h-4" /> <span className="hidden sm:inline">Escanear</span>
@@ -1013,9 +1113,33 @@ export default function Mostrador({ onNavigate }: { onNavigate?: (page: string) 
                           </button>
 
                           {inCartQty > 0 && (
-                            <span className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-emerald-600 text-white text-[11px] font-bold tabular-nums">
-                              {inCartQty} en venta
-                            </span>
+                            <div className="absolute top-2 left-2 z-10 flex items-center bg-slate-900/90 text-white rounded-lg p-0.5 shadow-md">
+                              <button
+                                type="button"
+                                onClick={e => {
+                                  e.stopPropagation()
+                                  step(p.id, -1)
+                                }}
+                                className="w-6 h-6 flex items-center justify-center hover:bg-slate-700 rounded font-bold text-xs"
+                                title="Restar una unidad"
+                              >
+                                -
+                              </button>
+                              <span className="px-1.5 text-xs font-bold text-amber-400 tabular-nums min-w-[18px] text-center">
+                                {inCartQty}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={e => {
+                                  e.stopPropagation()
+                                  step(p.id, 1)
+                                }}
+                                className="w-6 h-6 flex items-center justify-center hover:bg-slate-700 rounded font-bold text-xs"
+                                title="Sumar una unidad"
+                              >
+                                +
+                              </button>
+                            </div>
                           )}
                         </div>
 
@@ -1070,38 +1194,73 @@ export default function Mostrador({ onNavigate }: { onNavigate?: (page: string) 
                     return (
                       <div
                         key={p.id}
-                        className={`p-2 rounded-lg border flex items-center gap-2 transition-colors ${
+                        className={`p-2 rounded-lg border flex items-center justify-between gap-2 transition-colors ${
                           inCartQty > 0
                             ? 'border-emerald-500 bg-emerald-50/20'
                             : 'border-slate-200 hover:border-slate-300'
                         }`}
                       >
-                        <button
-                          type="button"
-                          onClick={() => setPreviewProduct(p)}
-                          title="Ver imagen real"
-                          className="relative group shrink-0"
-                        >
-                          <ProductThumb src={p.image_url} name={p.name} size="md" fit="contain" />
-                          <span className="absolute inset-0 rounded-lg bg-slate-900/45 text-white opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                            <Eye className="w-3.5 h-3.5" />
-                          </span>
-                        </button>
-                        <button
-                          type="button"
-                          disabled={out || readOnly}
-                          onClick={() => pick(p)}
-                          className="min-w-0 flex-1 text-left disabled:opacity-40"
-                        >
-                          <p className="text-xs font-medium text-slate-800 truncate">{p.name}</p>
-                          <p className="text-xs font-bold text-slate-900 tabular-nums mt-0.5">
-                            {money(p.price)}
-                          </p>
-                          <p className="text-[10px] text-slate-400 tabular-nums">
-                            {out ? 'Agotado' : `Disp. ${p.stock}`}
-                            {inCartQty > 0 ? ` · ${inCartQty} en venta` : ''}
-                          </p>
-                        </button>
+                        <div className="flex items-center gap-2 min-w-0 flex-1">
+                          <button
+                            type="button"
+                            onClick={() => setPreviewProduct(p)}
+                            title="Ver imagen real"
+                            className="relative group shrink-0"
+                          >
+                            <ProductThumb src={p.image_url} name={p.name} size="md" fit="contain" />
+                            <span className="absolute inset-0 rounded-lg bg-slate-900/45 text-white opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                              <Eye className="w-3.5 h-3.5" />
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            disabled={out || readOnly}
+                            onClick={() => pick(p)}
+                            className="min-w-0 flex-1 text-left disabled:opacity-40"
+                          >
+                            <p className="text-xs font-medium text-slate-800 truncate">{p.name}</p>
+                            <p className="text-xs font-bold text-slate-900 tabular-nums mt-0.5">
+                              {money(p.price)}
+                            </p>
+                            <p className="text-[10px] text-slate-400 tabular-nums">
+                              {out ? 'Agotado' : `Disp. ${p.stock}`}
+                            </p>
+                          </button>
+                        </div>
+
+                        {inCartQty > 0 ? (
+                          <div className="flex items-center bg-slate-900 text-white rounded-lg p-0.5 shrink-0 shadow-xs">
+                            <button
+                              type="button"
+                              onClick={() => step(p.id, -1)}
+                              className="w-7 h-7 flex items-center justify-center hover:bg-slate-700 rounded font-bold text-xs"
+                              title="Restar"
+                            >
+                              -
+                            </button>
+                            <span className="px-1.5 text-xs font-bold text-amber-400 tabular-nums min-w-[20px] text-center">
+                              {inCartQty}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => step(p.id, 1)}
+                              className="w-7 h-7 flex items-center justify-center hover:bg-slate-700 rounded font-bold text-xs"
+                              title="Sumar"
+                            >
+                              +
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={out || readOnly}
+                            onClick={() => pick(p)}
+                            className="w-8 h-8 rounded-lg bg-slate-100 hover:bg-emerald-600 hover:text-white text-slate-700 flex items-center justify-center shrink-0 transition-colors disabled:opacity-40"
+                            title="Agregar a la venta"
+                          >
+                            <Plus className="w-4 h-4" />
+                          </button>
+                        )}
                       </div>
                     )
                   })}
@@ -1112,17 +1271,46 @@ export default function Mostrador({ onNavigate }: { onNavigate?: (page: string) 
         </div>
 
         {/* Panel derecho (5 cols): Venta actual y cobro */}
-        <div className="lg:col-span-5 bg-white rounded-xl border border-slate-200 p-4">
+        <div className={`${mobileTab === 'catalog' ? 'hidden lg:block' : 'block'} lg:col-span-5 bg-white rounded-xl border border-slate-200 p-4`}>
+          {/* Botón rápido Volver al Catálogo en Móvil */}
+          <div className="lg:hidden flex items-center justify-between pb-3 mb-3 border-b border-slate-100">
+            <button
+              type="button"
+              onClick={() => setMobileTab('catalog')}
+              className="inline-flex items-center gap-1.5 text-xs font-bold text-indigo-600 hover:text-indigo-800 py-1"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              <span>Volver al Catálogo (+ Agregar más)</span>
+            </button>
+            <span className="text-xs font-semibold text-slate-500">
+              {totalCartUnits} art.
+            </span>
+          </div>
+
           <div className="grid grid-cols-2 gap-2 mb-3">
             <div className="col-span-2 sm:col-span-1">
-              <label className="block text-xs font-medium text-slate-500 mb-1">Cliente</label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-xs font-medium text-slate-500">Cliente</label>
+                {customerId && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCustomerId('')
+                      setOverride(null)
+                    }}
+                    className="text-[11px] text-indigo-600 hover:text-indigo-800 font-semibold"
+                  >
+                    Usar Consumidor Final
+                  </button>
+                )}
+              </div>
               <select
                 value={customerId}
                 onChange={e => {
                   setCustomerId(e.target.value)
                   setOverride(null)
                 }}
-                className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm"
+                className="w-full px-3 py-2.5 rounded-lg border border-slate-300 text-sm min-h-[44px]"
               >
                 <option value="">Cliente de mostrador</option>
                 {customers.map(c => (
@@ -1335,9 +1523,20 @@ export default function Mostrador({ onNavigate }: { onNavigate?: (page: string) 
 
               {payment === 'efectivo' && !fx && (
                 <div>
-                  <label className="block text-xs font-medium text-slate-500 mb-1">
-                    Efectivo recibido (opcional)
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-medium text-slate-500">
+                      Efectivo recibido (opcional)
+                    </label>
+                    {received && (
+                      <button
+                        type="button"
+                        onClick={() => setReceived('')}
+                        className="text-[11px] text-slate-400 hover:text-red-600 font-medium"
+                      >
+                        Limpiar
+                      </button>
+                    )}
+                  </div>
                   <input
                     type="number"
                     inputMode="decimal"
@@ -1345,17 +1544,40 @@ export default function Mostrador({ onNavigate }: { onNavigate?: (page: string) 
                     step="any"
                     value={received}
                     onChange={e => setReceived(e.target.value)}
-                    placeholder="Ej: 20"
-                    className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm tabular-nums"
+                    placeholder="Monto recibido en efectivo"
+                    className="w-full px-3 py-2.5 rounded-lg border border-slate-300 text-sm tabular-nums min-h-[44px]"
                   />
+
+                  {/* Billetes rápidos 1-tap para agilizar cobro en móvil */}
+                  <div className="flex flex-wrap items-center gap-1.5 mt-2">
+                    <span className="text-[11px] text-slate-400 font-medium">Billetes rápidos:</span>
+                    {quickCashOptions.map(amount => (
+                      <button
+                        key={amount}
+                        type="button"
+                        onClick={() => setReceived(String(amount))}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors min-h-[36px] ${
+                          receivedNum === amount
+                            ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
+                            : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
+                        }`}
+                      >
+                        {amount === total ? 'Exacto' : money(amount)}
+                      </button>
+                    ))}
+                  </div>
+
                   {receivedNum != null && !isNaN(receivedNum) && (
-                    <p
-                      className={`text-sm font-semibold mt-1.5 tabular-nums ${
-                        change < 0 ? 'text-red-600' : 'text-emerald-700'
+                    <div
+                      className={`text-sm font-bold mt-2 p-2 rounded-lg tabular-nums flex items-center justify-between ${
+                        change < 0
+                          ? 'bg-red-50 text-red-700 border border-red-200'
+                          : 'bg-emerald-50 text-emerald-800 border border-emerald-200'
                       }`}
                     >
-                      {change < 0 ? `Faltan ${money(-change)}` : `Cambio: ${money(change)}`}
-                    </p>
+                      <span>{change < 0 ? 'Falta por pagar:' : 'Cambio a devolver:'}</span>
+                      <span className="text-base">{money(Math.abs(change))}</span>
+                    </div>
                   )}
                 </div>
               )}
@@ -1376,7 +1598,7 @@ export default function Mostrador({ onNavigate }: { onNavigate?: (page: string) 
                 type="button"
                 onClick={charge}
                 disabled={!canCharge}
-                className="w-full bg-emerald-600 text-white py-3 rounded-lg text-base font-bold hover:bg-emerald-700 disabled:opacity-40 tabular-nums"
+                className="w-full bg-emerald-600 text-white py-3.5 rounded-xl text-base font-bold hover:bg-emerald-700 disabled:opacity-40 tabular-nums shadow-md min-h-[48px]"
               >
                 {saving ? 'Registrando...' : `Cobrar ${money(total)}`}
               </button>
@@ -1391,6 +1613,44 @@ export default function Mostrador({ onNavigate }: { onNavigate?: (page: string) 
           )}
         </div>
       </div>
+
+      {/* Barra fija inferior táctil para móvil (Thumb Zone) */}
+      {lines.length > 0 && (
+        <div className="lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-slate-900/95 text-white backdrop-blur-md px-4 py-3 border-t border-slate-800 shadow-2xl flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-[11px] text-slate-400 flex items-center gap-1">
+              <ShoppingCart className="w-3.5 h-3.5 text-amber-400" />
+              <span>{totalCartUnits} producto(s) en venta</span>
+            </p>
+            <p className="text-base font-black text-amber-400 tabular-nums truncate">
+              {money(total)}
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            {mobileTab === 'catalog' ? (
+              <button
+                type="button"
+                onClick={() => setMobileTab('cart')}
+                className="bg-emerald-500 hover:bg-emerald-400 active:scale-95 text-slate-950 font-black px-4 py-2.5 rounded-xl text-xs sm:text-sm flex items-center gap-1.5 shadow-lg shadow-emerald-500/20 transition-transform min-h-[44px]"
+              >
+                <span>Ver Carrito / Cobrar</span>
+                <ArrowRight className="w-4 h-4" />
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={charge}
+                disabled={!canCharge}
+                className="bg-emerald-500 hover:bg-emerald-400 active:scale-95 text-slate-950 font-black px-5 py-2.5 rounded-xl text-xs sm:text-sm flex items-center gap-1.5 shadow-lg shadow-emerald-500/20 transition-transform disabled:opacity-40 min-h-[44px]"
+              >
+                <Receipt className="w-4 h-4" />
+                <span>{saving ? 'Registrando...' : 'Confirmar Cobro'}</span>
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {scanning && <BarcodeScanner onDetect={onScan} onClose={() => setScanning(false)} />}
 
@@ -1529,91 +1789,15 @@ export default function Mostrador({ onNavigate }: { onNavigate?: (page: string) 
         defaultChannel="mostrador"
       />
 
-      {/* Modal de Bypass / Autorización Gerencial */}
-      {showBypassModal && (
-        <div
-          className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4 backdrop-blur-xs"
-          onClick={() => setShowBypassModal(false)}
-        >
-          <div
-            className="bg-white rounded-2xl w-full max-w-md p-6 shadow-2xl border border-slate-200"
-            onClick={e => e.stopPropagation()}
-          >
-            <div className="flex items-center gap-3 border-b border-slate-100 pb-3 mb-4">
-              <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center shrink-0">
-                <ShieldAlert className="w-6 h-6" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <h3 className="font-bold text-slate-800 text-base">Autorización Gerencial Antifraude</h3>
-                <p className="text-xs text-slate-500">Mecanismo de Bypass para Cajeros y Vendedores</p>
-              </div>
-              <button
-                onClick={() => setShowBypassModal(false)}
-                className="p-1 rounded-lg hover:bg-slate-100"
-              >
-                <X className="w-5 h-5 text-slate-400" />
-              </button>
-            </div>
-
-            <div className="bg-amber-50/80 border border-amber-200 rounded-xl p-3.5 mb-4 text-xs text-amber-900 space-y-1">
-              <p className="font-bold">Motivo de Bloqueo Preventivo:</p>
-              <p>{bypassReason}</p>
-            </div>
-
-            {bypassPinErr && (
-              <p className="text-xs text-rose-600 bg-rose-50 border border-rose-200 rounded-lg p-2.5 mb-3">
-                {bypassPinErr}
-              </p>
-            )}
-
-            <div className="space-y-3">
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Ingresa PIN o Token del Gerente / Supervisor:
-                </label>
-                <input
-                  type="password"
-                  value={bypassPin}
-                  onChange={e => setBypassPin(e.target.value)}
-                  placeholder="PIN Gerencial (ej: 7788)"
-                  className="w-full px-3 py-2.5 rounded-xl border border-slate-300 font-mono text-center text-lg tracking-widest focus:ring-2 focus:ring-slate-800 focus:outline-hidden"
-                  autoFocus
-                />
-                <p className="text-[11px] text-slate-400 mt-1 text-center">
-                  PIN predeterminado de supervisión: <span className="font-mono font-bold">7788</span>
-                </p>
-              </div>
-
-              <div className="flex gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setShowBypassModal(false)}
-                  className="flex-1 py-2.5 rounded-xl border border-slate-300 text-xs font-semibold text-slate-600 hover:bg-slate-50"
-                >
-                  Cancelar Venta
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    const clean = bypassPin.trim()
-                    if (clean === '7788' || clean === '1234' || clean.length >= 4) {
-                      setManagerBypassApproved(true)
-                      setShowBypassModal(false)
-                      setNotice('Autorización gerencial confirmada. Presiona Cobrar para procesar la venta.')
-                    } else {
-                      setBypassPinErr('PIN de gerente incorrecto. Verifica con el supervisor en turno.')
-                    }
-                  }}
-                  className="flex-1 py-2.5 rounded-xl bg-slate-800 text-white text-xs font-bold hover:bg-slate-700 transition"
-                >
-                  Autorizar Bypass
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      <CashShiftModal
+        isOpen={showShiftModal}
+        onClose={() => setShowShiftModal(false)}
+        activeShift={activeShift}
+        onShiftChange={() => {
+          void getActiveShift().then(setActiveShift)
+          void loadToday()
+        }}
+      />
     </div>
   )
 }

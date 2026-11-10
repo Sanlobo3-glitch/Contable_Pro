@@ -12,10 +12,10 @@ import { fmtDate } from '../lib/currency'
 import type { CompanySummary } from '../types'
 
 const PLANS = [
-  { id: 'emprendedor', label: 'Emprendedor' },
-  { id: 'profesional', label: 'Profesional' },
-  { id: 'empresarial', label: 'Empresarial' },
-  { id: 'corporativo', label: 'Corporativo' },
+  { id: 'comercio', label: 'Comercio (POS & Caja)' },
+  { id: 'profesional', label: 'Profesional (Multibodega & Rutas)' },
+  { id: 'empresarial', label: 'Empresarial (NIIF & DIAN)' },
+  { id: 'corporativo', label: 'Corporativo Multiempresa' },
 ]
 
 const COMPANY_MONTHS = [

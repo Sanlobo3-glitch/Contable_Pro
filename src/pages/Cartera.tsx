@@ -38,11 +38,10 @@ const day = (d: string | null) => (d ? new Date(d.length <= 10 ? d + 'T00:00:00'
 const isMissing = (m: string) => /cartera_|credit_|cxc_|does not exist|schema cache|registrar_abono/i.test(m || '')
 
 export default function Cartera() {
-  const { user, masterRoleOverride } = useAuth()
+  const { user } = useAuth()
   const { fmt: money } = useCurrency()
   const readOnly = isReadOnly(user)
-  const effectiveRole = masterRoleOverride || user?.role
-  const isManager = effectiveRole === 'dueno' || effectiveRole === 'admin' || effectiveRole === 'admin_empresa' || effectiveRole === 'gerente'
+  const isManager = user?.role === 'dueno' || user?.role === 'admin'
 
   const [data, setData] = useState<Portfolio | null>(null)
   const [loading, setLoading] = useState(false)
@@ -251,6 +250,44 @@ export default function Cartera() {
     printHtml(html)
   }
 
+  function printPaymentReceipt(p: Payment, cust: { name: string; document: string | null }) {
+    const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8" />
+        <title>Recibo de Caja - RC-${p.id.slice(0, 8).toUpperCase()}</title>
+        <style>
+          body { font-family: monospace; font-size: 13px; width: 280px; margin: 0 auto; padding: 10px; line-height: 1.4; color: #000; }
+          .center { text-align: center; }
+          .bold { font-weight: bold; }
+          .line { border-bottom: 1px dashed #000; margin: 8px 0; }
+          .row { display: flex; justify-content: space-between; }
+        </style>
+      </head>
+      <body>
+        <div class="center bold" style="font-size: 15px;">RECIBO DE CAJA / ABONO</div>
+        <div class="center">${config?.name || 'Contable Pro ERP'}</div>
+        <div class="line"></div>
+        <div class="row"><span>Recibo No:</span><span class="bold">RC-${p.id.slice(0, 8).toUpperCase()}</span></div>
+        <div class="row"><span>Fecha:</span><span>${new Date(p.created_at).toLocaleString()}</span></div>
+        <div class="row"><span>Cliente:</span><span class="bold">${cust.name}</span></div>
+        ${cust.document ? `<div class="row"><span>Doc / NIT:</span><span>${cust.document}</span></div>` : ''}
+        <div class="line"></div>
+        <div class="row"><span>Concepto:</span><span>Abono a cartera de clientes</span></div>
+        <div class="row"><span>Medio de pago:</span><span class="bold">${METHOD[p.method] || p.method}</span></div>
+        ${p.note ? `<div class="row"><span>Nota:</span><span>${p.note}</span></div>` : ''}
+        <div class="line"></div>
+        <div class="row bold" style="font-size: 16px;"><span>TOTAL RECIBIDO:</span><span>${money(p.amount)}</span></div>
+        <div class="line"></div>
+        <br/><br/>
+        <div class="center">__________________________<br/>Firma Autorizada / Sello</div>
+      </body>
+      </html>
+    `
+    printHtml(html)
+  }
+
   const list = useMemo(() => {
     const q = search.trim().toLowerCase()
     return (data?.customers || []).filter(c =>
@@ -368,9 +405,19 @@ export default function Cartera() {
                         <p className="text-slate-700"><span className={p.status === 'anulado' ? 'line-through' : ''}>{money(p.amount)}</span> · {METHOD[p.method] ?? p.method}{p.status === 'anulado' && <span className="ml-1.5 text-[10px] font-medium text-red-700 bg-red-50 px-1.5 py-0.5 rounded">Anulado</span>}</p>
                         <p className="text-[11px] text-slate-500">{day(p.created_at)}{p.by ? ` · ${p.by}` : ''}{p.note ? ` · ${p.note}` : ''}</p>
                       </div>
-                      {isManager && !readOnly && p.status === 'activo' && (
-                        <button onClick={() => setVoidTarget(p)} className="inline-flex items-center gap-1 text-xs text-red-600 hover:bg-red-50 px-2 py-1 rounded-lg shrink-0"><Ban className="w-3.5 h-3.5" /> Anular</button>
-                      )}
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => printPaymentReceipt(p, detail.customer)}
+                          title="Imprimir Recibo de Caja"
+                          className="inline-flex items-center gap-1 text-xs text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 px-2 py-1 rounded-lg"
+                        >
+                          <Printer className="w-3.5 h-3.5" /> Recibo
+                        </button>
+                        {isManager && !readOnly && p.status === 'activo' && (
+                          <button onClick={() => setVoidTarget(p)} className="inline-flex items-center gap-1 text-xs text-red-600 hover:bg-red-50 px-2 py-1 rounded-lg shrink-0"><Ban className="w-3.5 h-3.5" /> Anular</button>
+                        )}
+                      </div>
                     </li>
                   ))}
                 </ul>

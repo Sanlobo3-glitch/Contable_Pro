@@ -4420,6 +4420,88 @@ function createMockSupabase(silent = false): SupabaseClient {
         }
         return { data: closing, error: null }
       }
+      case 'caja_abrir_turno': {
+        const opening = Math.round((Number(args.p_opening_amount) || 0) * 100) / 100
+        const shiftId = genId()
+        const shift = {
+          id: shiftId,
+          opening_amount: opening,
+          expected_cash: opening,
+          status: 'open',
+          opened_at: nowIso(),
+          cashier_name: 'Richard Lobo (Demo)',
+          notes: args.p_notes || null,
+        }
+        getTable('cash_shifts').unshift(shift)
+        return {
+          data: {
+            ok: true,
+            shift_id: shiftId,
+            already_open: false,
+            message: 'Turno de caja abierto correctamente',
+          },
+          error: null,
+        }
+      }
+      case 'caja_obtener_turno_activo': {
+        const shifts = getTable('cash_shifts') || []
+        const active = shifts.find(s => s.status === 'open')
+        if (!active) return { data: { active: false }, error: null }
+        return {
+          data: {
+            active: true,
+            shift_id: active.id,
+            opened_at: active.opened_at,
+            cashier_name: active.cashier_name || 'Cajero Demo',
+            opening_amount: Number(active.opening_amount) || 100000,
+            sales_cash: 250000,
+            sales_card: 120000,
+            sales_transfer: 80000,
+            sales_credit: 45000,
+            sales_count: 5,
+            cash_in: 0,
+            cash_out: 0,
+            expected_cash: (Number(active.opening_amount) || 100000) + 250000,
+          },
+          error: null,
+        }
+      }
+      case 'caja_arqueo_ciego': {
+        const counted = Math.round((Number(args.p_counted_cash) || 0) * 100) / 100
+        const expected = 350000
+        const diff = Math.round((counted - expected) * 100) / 100
+        const isFinal = args.p_is_final !== false
+        const shifts = getTable('cash_shifts') || []
+        const s = shifts.find(x => x.id === args.p_shift_id) || shifts[0]
+        if (s && isFinal) s.status = 'closed'
+        return {
+          data: {
+            ok: true,
+            stage: isFinal ? 'cierre_z' : 'cierre_x',
+            expected_cash: expected,
+            counted_cash: counted,
+            difference: diff,
+            status: isFinal ? 'closed' : 'open',
+            sales_cash: 250000,
+            sales_card: 120000,
+            sales_transfer: 80000,
+            sales_credit: 45000,
+            sales_count: 5,
+            message: isFinal ? 'Cierre Z guardado' : 'Arqueo parcial X guardado',
+          },
+          error: null,
+        }
+      }
+      case 'contabilizar_venta_automatica': {
+        return {
+          data: {
+            ok: true,
+            entry_id: genId(),
+            number: 'V-' + nowIso().slice(0, 10).replace(/-/g, '') + '-DEMO',
+          },
+          error: null,
+        }
+      }
       case 'anular_venta': {
         const s = getTable('sales').find(x => x.id === args.p_sale_id)
         if (!s) return { data: null, error: { message: 'La venta no existe' } }

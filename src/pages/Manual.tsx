@@ -205,8 +205,55 @@ export default function Manual({ standalone = false, role, onNavigate }: {
         </section>
       )}
 
+      {/* Diferenciadores Clave vs Software Tradicional (Siigo, Alegra, etc.) */}
+      <section className="manual-card mt-6 bg-gradient-to-br from-slate-900 to-indigo-950 text-white rounded-2xl p-6 shadow-xl">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-4">
+          <div>
+            <span className="text-xs uppercase tracking-widest font-bold text-amber-400">Ventajas Competitivas</span>
+            <h2 className="text-lg font-bold text-white mt-0.5">¿Por qué Contable Pro vs Siigo, Alegra o Software Tradicional?</h2>
+          </div>
+          <span className="text-[11px] bg-emerald-500/20 text-emerald-300 font-semibold px-2.5 py-1 rounded-full border border-emerald-500/30 self-start sm:self-auto">
+            100% Especializado en Colombia
+          </span>
+        </div>
+
+        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 mt-5">
+          <div className="bg-slate-800/80 border border-slate-700/80 rounded-xl p-4 space-y-1.5">
+            <div className="text-2xl">⚡</div>
+            <h3 className="text-sm font-bold text-white">POS Ultra Rápido y Offline</h3>
+            <p className="text-xs text-slate-300 leading-relaxed">
+              Factura en segundos en mostrador y ruta sin pantallas lentas ni caídas de internet. Sincroniza en background tan pronto recupera red.
+            </p>
+          </div>
+
+          <div className="bg-slate-800/80 border border-slate-700/80 rounded-xl p-4 space-y-1.5">
+            <div className="text-2xl">🛡️</div>
+            <h3 className="text-sm font-bold text-white">Arqueo Ciego Antifraude</h3>
+            <p className="text-xs text-slate-300 leading-relaxed">
+              El cajero no ve el esperado de caja al cerrar turno; cuenta dinero real. El sistema calcula diferencias y alerta inmediatamente al gerente.
+            </p>
+          </div>
+
+          <div className="bg-slate-800/80 border border-slate-700/80 rounded-xl p-4 space-y-1.5">
+            <div className="text-2xl">🤝</div>
+            <h3 className="text-sm font-bold text-white">Contador Externo Gratis</h3>
+            <p className="text-xs text-slate-300 leading-relaxed">
+              Tu contador o revisor fiscal no paga licencia adicional para entrar, auditar, descargar balances NIIF o preparar la DIAN exógena y Formulario 300.
+            </p>
+          </div>
+
+          <div className="bg-slate-800/80 border border-slate-700/80 rounded-xl p-4 space-y-1.5">
+            <div className="text-2xl">📦</div>
+            <h3 className="text-sm font-bold text-white">Multi-Bodega & Rutas Reales</h3>
+            <p className="text-xs text-slate-300 leading-relaxed">
+              Manejo de traslados en tránsito, stock por sede física y módulo de fuerza de ventas «Mi ruta de hoy» con WhatsApp integrado en 1 clic.
+            </p>
+          </div>
+        </div>
+      </section>
+
       <p className="text-center text-xs text-slate-400 mt-8">
-        ¿Algo no quedó claro? Escríbele a tu administrador o al soporte de InventarioPro.
+        ¿Algo no quedó claro? Escríbele a tu administrador o al soporte de Contable Pro.
       </p>
     </div>
   )

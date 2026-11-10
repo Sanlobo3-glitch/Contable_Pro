@@ -37,6 +37,7 @@ export default function AccountingStatements({
   const [balanceData, setBalanceData] = useState<TrialBalanceRow[]>([]);
   const [sheetRows, setSheetRows] = useState<StatementRow[]>([]);
   const [incomeRows, setIncomeRows] = useState<StatementRow[]>([]);
+  const [activeTab, setActiveTab] = useState<'trial_balance' | 'balance_sheet' | 'income_statement'>('trial_balance');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -215,20 +216,62 @@ export default function AccountingStatements({
         </div>
       </div>
 
+      {/* Selector de Estado Financiero */}
+      <div className="flex border-b border-slate-200 gap-2">
+        <button
+          onClick={() => setActiveTab('trial_balance')}
+          className={`px-4 py-2 text-xs font-bold uppercase tracking-wider border-b-2 transition-colors cursor-pointer ${
+            activeTab === 'trial_balance'
+              ? 'border-indigo-600 text-indigo-600'
+              : 'border-transparent text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          1. Balance de Comprobación (PUC)
+        </button>
+        <button
+          onClick={() => setActiveTab('balance_sheet')}
+          className={`px-4 py-2 text-xs font-bold uppercase tracking-wider border-b-2 transition-colors cursor-pointer ${
+            activeTab === 'balance_sheet'
+              ? 'border-indigo-600 text-indigo-600'
+              : 'border-transparent text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          2. Balance General Clasificado
+        </button>
+        <button
+          onClick={() => setActiveTab('income_statement')}
+          className={`px-4 py-2 text-xs font-bold uppercase tracking-wider border-b-2 transition-colors cursor-pointer ${
+            activeTab === 'income_statement'
+              ? 'border-indigo-600 text-indigo-600'
+              : 'border-transparent text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          3. Estado de Resultados (PyG)
+        </button>
+      </div>
+
       <div className="bg-white rounded-xl shadow-md border border-slate-100 overflow-hidden">
         <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
-          <h2 className="font-bold text-slate-800 text-sm uppercase tracking-wider">Balance de Comprobación por Subcuentas</h2>
-          <span className="text-xs font-mono text-slate-500">Registros procesados: {balanceData ? balanceData.length : 0}</span>
+          <h2 className="font-bold text-slate-800 text-sm uppercase tracking-wider">
+            {activeTab === 'trial_balance' && 'Balance de Comprobación por Subcuentas'}
+            {activeTab === 'balance_sheet' && 'Balance General Clasificado (Activo, Pasivo, Patrimonio)'}
+            {activeTab === 'income_statement' && 'Estado de Resultados Integral (Ingresos, Costos y Gastos)'}
+          </h2>
+          <span className="text-xs font-mono text-slate-500">
+            {activeTab === 'trial_balance' && `Cuentas con movimiento: ${balanceData.length}`}
+            {activeTab === 'balance_sheet' && `Líneas de balance: ${sheetRows.length}`}
+            {activeTab === 'income_statement' && `Líneas operacionales: ${incomeRows.length}`}
+          </span>
         </div>
 
         {loading ? (
           <div className="p-12 flex flex-col items-center justify-center">
             <div className="h-8 w-8 animate-spin rounded-full border-4 border-slate-800 border-t-transparent"></div>
-            <p className="text-sm text-slate-500 font-medium mt-2">Calculando saldos financieros...</p>
+            <p className="text-sm text-slate-500 font-medium mt-2">Calculando saldos contables oficiales...</p>
           </div>
         ) : error ? (
           <div className="p-6 text-red-600 font-medium text-sm text-center">{error}</div>
-        ) : (
+        ) : activeTab === 'trial_balance' ? (
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse">
               <thead>
@@ -241,7 +284,7 @@ export default function AccountingStatements({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-sm">
-                {balanceData && balanceData.map((row) => (
+                {balanceData.map((row) => (
                   <tr key={row.account_id} className="hover:bg-slate-50/60 transition-colors">
                     <td className="p-3 pl-6 font-mono font-semibold text-slate-500">{row.code}</td>
                     <td className="p-3 text-slate-700 font-medium">{row.name}</td>
@@ -258,6 +301,98 @@ export default function AccountingStatements({
                   <td className="p-4 text-right">${totalCredits.toFixed(2)}</td>
                   <td className="p-4 text-right pr-6 text-emerald-400">
                     ${(totalDebits - totalCredits).toFixed(2)}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        ) : activeTab === 'balance_sheet' ? (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="bg-slate-100/70 text-slate-600 font-mono text-[11px] uppercase border-b border-slate-200">
+                  <th className="p-3 pl-6">Código</th>
+                  <th className="p-3">Cuenta de Balance</th>
+                  <th className="p-3">Clasificación NIIF</th>
+                  <th className="p-3 text-right pr-6">Saldo Acumulado</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 text-sm">
+                {sheetRows.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="p-6 text-center text-slate-400">No hay movimientos en cuentas de balance para este corte.</td>
+                  </tr>
+                ) : (
+                  sheetRows.map((r, i) => (
+                    <tr key={i} className="hover:bg-slate-50/60 transition-colors">
+                      <td className="p-3 pl-6 font-mono font-semibold text-slate-500">{r.code}</td>
+                      <td className="p-3 text-slate-800 font-medium">{r.name}</td>
+                      <td className="p-3 text-xs uppercase font-semibold text-slate-500">{r.type}</td>
+                      <td className="p-3 text-right font-mono pr-6 font-bold text-slate-900">
+                        ${Number(r.amount).toLocaleString('es-CO', { minimumFractionDigits: 2 })}
+                      </td>
+                    </tr>
+                  ))
+                )}
+                <tr className="bg-slate-900 text-white font-semibold font-mono text-sm">
+                  <td className="p-4 pl-6" colSpan={3}>TOTAL ACTIVOS NETOS</td>
+                  <td className="p-4 text-right pr-6 text-emerald-400 font-bold">
+                    ${totalAssets.toLocaleString('es-CO', { minimumFractionDigits: 2 })}
+                  </td>
+                </tr>
+                <tr className="bg-slate-800 text-white font-semibold font-mono text-sm">
+                  <td className="p-4 pl-6" colSpan={3}>TOTAL PASIVOS + PATRIMONIO</td>
+                  <td className="p-4 text-right pr-6 text-amber-300 font-bold">
+                    ${(totalLiabilities + netUtility).toLocaleString('es-CO', { minimumFractionDigits: 2 })}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="bg-slate-100/70 text-slate-600 font-mono text-[11px] uppercase border-b border-slate-200">
+                  <th className="p-3 pl-6">Código</th>
+                  <th className="p-3">Cuenta de Resultado</th>
+                  <th className="p-3">Tipo</th>
+                  <th className="p-3 text-right pr-6">Monto Periodo</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 text-sm">
+                {incomeRows.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="p-6 text-center text-slate-400">No hay movimientos de resultados en el rango seleccionado.</td>
+                  </tr>
+                ) : (
+                  incomeRows.map((r, i) => (
+                    <tr key={i} className="hover:bg-slate-50/60 transition-colors">
+                      <td className="p-3 pl-6 font-mono font-semibold text-slate-500">{r.code}</td>
+                      <td className="p-3 text-slate-800 font-medium">{r.name}</td>
+                      <td className="p-3 text-xs uppercase font-semibold text-slate-500">{r.type}</td>
+                      <td className={`p-3 text-right font-mono pr-6 font-bold ${r.type === 'ingreso' ? 'text-emerald-600' : 'text-slate-800'}`}>
+                        ${Number(r.amount).toLocaleString('es-CO', { minimumFractionDigits: 2 })}
+                      </td>
+                    </tr>
+                  ))
+                )}
+                <tr className="bg-emerald-950 text-white font-semibold font-mono text-sm">
+                  <td className="p-4 pl-6" colSpan={3}>TOTAL INGRESOS OPERACIONALES</td>
+                  <td className="p-4 text-right pr-6 text-emerald-300 font-bold">
+                    ${totalIncome.toLocaleString('es-CO', { minimumFractionDigits: 2 })}
+                  </td>
+                </tr>
+                <tr className="bg-rose-950 text-white font-semibold font-mono text-sm">
+                  <td className="p-4 pl-6" colSpan={3}>TOTAL COSTOS Y GASTOS</td>
+                  <td className="p-4 text-right pr-6 text-rose-300 font-bold">
+                    ${totalExpenses.toLocaleString('es-CO', { minimumFractionDigits: 2 })}
+                  </td>
+                </tr>
+                <tr className="bg-slate-900 text-white font-semibold font-mono text-sm">
+                  <td className="p-4 pl-6" colSpan={3}>UTILIDAD / PÉRDIDA NETA RESULTANTE</td>
+                  <td className={`p-4 text-right pr-6 font-bold ${netUtility >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                    ${netUtility.toLocaleString('es-CO', { minimumFractionDigits: 2 })}
                   </td>
                 </tr>
               </tbody>

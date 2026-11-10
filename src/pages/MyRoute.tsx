@@ -175,6 +175,16 @@ export default function MyRoute({ onNavigate }: { onNavigate?: (page: string) =>
                 )}
                 {s.phone && (
                   <a
+                    href={`https://wa.me/${s.phone.replace(/\D/g, '')}?text=${encodeURIComponent(`Hola ${s.name}, te saludo de Contable Pro. Estoy en ruta hacia tu negocio.`)}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-800 text-xs font-medium hover:bg-emerald-100"
+                  >
+                    💬 WhatsApp
+                  </a>
+                )}
+                {s.phone && (
+                  <a
                     href={`tel:${s.phone}`}
                     className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-700 text-xs font-medium hover:bg-slate-50"
                   >
@@ -186,18 +196,26 @@ export default function MyRoute({ onNavigate }: { onNavigate?: (page: string) =>
                     <button
                       type="button"
                       disabled={busy === s.stop_id}
-                      onClick={() => goToCustomerAction(s, 'sale')}
-                      className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-medium hover:bg-slate-800"
+                      onClick={() => {
+                        setRouteCustomerHandoff({
+                          customerId: s.customer_id,
+                          customerName: s.name,
+                          action: 'sale',
+                          stopId: s.stop_id,
+                        })
+                        onNavigate?.('pos')
+                      }}
+                      className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-bold hover:bg-emerald-700 shadow-sm"
                     >
-                      <ShoppingCart className="w-3.5 h-3.5" /> Vender aquí
+                      <ShoppingCart className="w-3.5 h-3.5" /> Vender en POS
                     </button>
                     <button
                       type="button"
                       disabled={busy === s.stop_id}
-                      onClick={() => goToCustomerAction(s, 'visit')}
-                      className="px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-700 text-xs font-medium hover:bg-slate-50"
+                      onClick={() => goToCustomerAction(s, 'sale')}
+                      className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-medium hover:bg-slate-800"
                     >
-                      Registrar visita
+                      Factura Completa
                     </button>
                     <button
                       type="button"

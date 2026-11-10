@@ -24,7 +24,7 @@ type Rule = (role?: Role) => boolean
 
 /** Reglas de los roles de alcance ESTRICTO (solo ven estas páginas). */
 const STRICT_ROLE_PAGES: Partial<Record<Role, string[]>> = {
-  contador: ['accounting', 'accounting_puc', 'journal_entry', 'accstate'],
+  contador: ['accounting', 'accounting_puc', 'journal_entry', 'accstate', 'dian_compliance'],
   // Vendedor (tienda o ruta): vende, consulta sus ventas, su ruta asignada, clientes, metas e inventario. NO maneja caja.
   vendedor: [
     'pos',
@@ -37,66 +37,6 @@ const STRICT_ROLE_PAGES: Partial<Record<Role, string[]>> = {
     'goals',
     'employee_portal',
     'products',
-  ],
-  gerente: [
-    // Centro de Dirección Gerencial (1 al 10)
-    'manager_center',
-    'manager_summary',
-    'manager_commercial',
-    'manager_operations',
-    'manager_financial',
-    'manager_hr',
-    'manager_authorizations',
-    'manager_action_plans',
-    'manager_intelligence',
-    'manager_reports',
-    'manager_notifications',
-    // Control Gerencial y Analíticas
-    'dashboard',
-    'command',
-    'stats',
-    'profit',
-    'reports',
-    'ai_actions',
-    'copilot',
-    'ask',
-    // Ciclo Comercial, Ventas y Cartera
-    'sales',
-    'pos',
-    'cartera',
-    'customers',
-    'quotations',
-    'catorders',
-    'omnichannel',
-    'sellers',
-    'goals',
-    'devolutions',
-    'exchanges',
-    'dispatch_history',
-    // Caja, Tesorería y Control Antifraude
-    'cash',
-    'expenses',
-    'anomaly_detector',
-    'treasury',
-    'accstate',
-    // Inventario y Cadena de Suministro
-    'products',
-    'kardex',
-    'blindcount',
-    'warehouses',
-    'branch_balance',
-    'purchaseorders',
-    'purchases',
-    'payables',
-    'suppliers',
-    'supplier_intel',
-    'map',
-    // Auditoría y Cumplimiento
-    'compliance',
-    'compliance_monitor',
-    'history',
-    'support',
-    'manual',
   ],
   transportador: ['warehouses', 'map', 'dispatch', 'routeplan', 'dispatch_history', 'equipment_assets'],
 }
@@ -174,6 +114,7 @@ const GENERIC_RULES: Record<string, Rule> = {
   accsetup: role => canViewAccounting(role),
   accclose: role => canViewAccounting(role),
   taxes: role => canViewAccounting(role),
+  dian_compliance: role => canViewAccounting(role) || isCompanyManager(role),
   erpbridge: role => isCompanyManager(role) || canViewAccounting(role),
   support: role => true,
   api_ecosystem: role => canManageSettings(role) || isCompanyManager(role),

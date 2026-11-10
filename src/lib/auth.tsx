@@ -273,6 +273,11 @@ export function canManageTechSupport(role: Role | undefined): boolean {
   return role === 'admin' || role === 'tecnico'
 }
 
+export function canViewDashboard(role: Role | undefined): boolean {
+  if (!role) return false
+  return isCompanyManager(role) || !['contador', 'vendedor', 'cajero', 'almacen', 'transportador', 'tecnico'].includes(role)
+}
+
 export function isCompanyManager(role: Role | undefined): boolean {
   return (
     role === 'admin' ||
@@ -349,40 +354,6 @@ export function canViewAccounting(role: Role | undefined): boolean {
     role === 'contador' ||
     role === 'gerente'
   )
-}
-
-/**
- * El «Panel ejecutivo» (indicadores de ventas, cartera, deudas, etc.) NO se muestra a los roles de
- * caja/ventas (cajero, vendedor) ni a los roles de alcance estricto (contador, gerente, transporte):
- * ellos trabajan en su propia pantalla de inicio (ver getDefaultPageForRole).
- */
-export function canViewDashboard(role: Role | string | undefined): boolean {
-  return (
-    role !== 'cajero' &&
-    role !== 'vendedor' &&
-    role !== 'contador' &&
-    role !== 'gerente' &&
-    role !== 'transportador'
-  )
-}
-
-/** Pantalla de inicio de cada rol. Fuente ÚNICA: la usan App, el menú y la simulación del Paso Maestro. */
-export function getDefaultPageForRole(role: Role | string | undefined): string {
-  switch (role) {
-    case 'tecnico':
-      return 'support'
-    case 'contador':
-      return 'accounting'
-    case 'vendedor':
-    case 'cajero':
-      return 'pos'
-    case 'gerente':
-      return 'manager_center'
-    case 'transportador':
-      return 'warehouses'
-    default:
-      return 'dashboard'
-  }
 }
 
 export function canManageTransport(role: Role | undefined): boolean {

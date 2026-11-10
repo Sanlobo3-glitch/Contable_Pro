@@ -86,6 +86,7 @@
 | Contabilidad | Config. contable | `accsetup` | ✓ | ✓ | ✓ | · | · | · | · | · | · | · | · |
 | Contabilidad | Cierre de libros | `accclose` | ✓ | ✓ | ✓ | · | · | · | · | · | · | · | · |
 | Contabilidad | Impuestos | `taxes` | ✓ | ✓ | ✓ | · | · | · | · | · | · | · | · |
+| Contabilidad | Centro Tributario DIAN | `dian_compliance` | ✓ | ✓ | ✓ | ✓ | ✓ | · | · | · | · | · | · |
 | Contabilidad | Migración Siigo / Loggro | `erpbridge` | ✓ | ✓ | ✓ | · | · | · | · | · | · | · | · |
 | — | support | `support` | ✓ | ✓ | ✓ | · | · | · | ✓ | ✓ | ✓ | · | ✓ |
 | Administración | API y Webhooks | `api_ecosystem` | ✓ | ✓ | ✓ | · | · | · | · | · | · | · | · |

@@ -1,6 +1,6 @@
 # MIGRACIONES Y ESTADO DE LA BASE DE DATOS — fuente única de verdad
 
-> Actualizado: **2026-11-10**. Proyecto Supabase **Contable_pro** (`bcwtopujsjefaskoqlhr`, us-west-2). Producción: `contable-pro-zeta.vercel.app`.
+> Actualizado: **2026-11-11**. Proyecto Supabase **Contable_pro** (`bcwtopujsjefaskoqlhr`, us-west-2). Producción: `contable-pro-zeta.vercel.app`.
 > Si algo de otro documento contradice este archivo, **este archivo y la tabla `public.sql_migration_log` mandan**.
 
 ## 1. Lee esto primero (reglas para cualquier IA o persona)
@@ -128,6 +128,7 @@ Resultado de la verificación contra la base (2026-11-07): **todas las migracion
 | 79 | `20261108000051_centro_direccion_gerencial_tablas_y_autorizaciones.sql` | ✅ Aplicada | Aplicada en la base viva (2026-11-09 13:54 UTC). Tablas multiempresa para Solicitudes de Autorización Gerencial (`manager_approval_requests`), Planes de Acción (`manager_action_plans`), Evaluaciones de Desempeño (`manager_employee_evaluations`) y Alertas Gerenciales (`manager_alert_statuses`) con RLS y permisos del rol gerente. |
 | 80 | `20261109000052_reportes_dian_exogena_y_formularios.sql` | ✅ Aplicada | Aplicada en la base viva (2026-11-10 13:08:06 UTC, fuente: sql_editor_manual). Reportes DIAN: Medios Magnéticos Exógena (`dian_exogena_concepts`), Mapeo PUC (`dian_account_mappings`), Retenciones e ICA (`dian_tax_rules`), Certificados (`dian_certificates_issued`) y cálculo de Formularios Muisca 300 y 350. |
 | 81 | `20261110000053_consolidacion_ciclo_comercial_caja_turnos_y_contabilidad.sql` | ✅ Aplicada | Aplicada en la base viva (2026-11-10 13:05:57 UTC, fuente: sql_editor_manual). Consolidación del ciclo comercial: turnos y sesiones de caja (`cash_shifts`), desglose y arqueo ciego por denominaciones (`cash_shift_denominations`), pagos múltiples en mostrador (`sale_payments`), cierres de caja (`cash_closings`, `cash_entries`) y contabilización automática NIIF en `acc_entries`/`acc_lines`. |
+| 82 | `20261111000054_autorizacion_escritura_contable.sql` | ✅ Aplicada | Aplicada en la base viva (2026-11-11 10:38:00 UTC, fuente: sql_editor_manual). Autorización controlada de escritura contable para el rol 'contador': crea la función `can_write_accounting()` (dueno, admin_empresa, gerente, contador) y actualiza `acc_create_entry` y `acc_post_entry`. Mantiene `acc_reverse_entry` y `acc_close_period` restringidos exclusivamente a la gerencia (`is_manager()`). |
 
 **Reemplazadas, NO ejecutar** (`supabase/migrations_superseded/`): `20261106000022_contable_pro_partida_doble_puc_niif.sql`, `20261106000046_sistema_contable_partida_doble.sql`, `20261106000047_reportes_financieros_contables.sql`.
 Crean un libro contable paralelo (`accounts`, `journal_entries`, `journal_lines`, `fn_*`) que nunca se aplicó.

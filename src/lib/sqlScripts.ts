@@ -11,7 +11,6 @@ import sqlCatalogCommerce from '../../supabase/migrations/20261103000018_ventas_
 import sqlWhatsappStoreLink from '../../supabase/migrations/20261103000019_enlace_tienda_og_y_estudio_whatsapp.sql?raw'
 import sqlAutoBrandSync from '../../supabase/migrations/20261103000020_sincronizacion_automatica_marca_y_cache_whatsapp.sql?raw'
 import sqlCommercialSuite21 from '../../supabase/migrations/20261104000021_cinco_soluciones_comerciales_avanzadas.sql?raw'
-import sqlContableProPartidaDoble from '../../supabase/migrations/20261106000022_contable_pro_partida_doble_puc_niif.sql?raw'
 import sqlManagerCenter from '../../supabase/migrations/20261108000051_centro_direccion_gerencial_tablas_y_autorizaciones.sql?raw'
 import sqlDianReports from '../../supabase/migrations/20261109000052_reportes_dian_exogena_y_formularios.sql?raw'
 import sqlCashShifts from '../../supabase/migrations/20261110000053_consolidacion_ciclo_comercial_caja_turnos_y_contabilidad.sql?raw'
@@ -20,7 +19,6 @@ export type SqlBundleId =
   | 'cash_shifts'
   | 'dian_reports'
   | 'manager_center'
-  | 'contable_pro'
   | 'consolidated'
   | 'commercial_suite_21'
   | 'whatsapp_store_link'
@@ -88,16 +86,6 @@ export const SQL_SCRIPT_BUNDLES: SqlScriptBundle[] = [
       'manager_alert_statuses',
     ],
     sql: sqlManagerCenter,
-  },
-  {
-    id: 'contable_pro',
-    title: 'Contable_Pro: PUC NIIF, Partida Doble e Inmutabilidad',
-    filename: '20261106000022_contable_pro_partida_doble_puc_niif.sql',
-    category: 'Recomendado',
-    summary:
-      'Fase 1 Contable_Pro: Tablas accounts, journal_entries, journal_lines, trigger verify_journal_entry_posting (Luca Pacioli: débitos = créditos) y enforce_journal_immutability para bloquear cambios en asientos posteados.',
-    targetTables: ['accounts', 'journal_entries', 'journal_lines'],
-    sql: sqlContableProPartidaDoble,
   },
   {
     id: 'consolidated',

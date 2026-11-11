@@ -149,7 +149,7 @@ export const CHAPTERS: Chapter[] = [
       'Entra a «Centro de Scripts SQL y Supabase» (módulo exclusivo de Administrador Central).',
       'Revisa el catálogo de migraciones estructuradas (incluyendo la migración 0045, partida doble y reglas de inmutabilidad).',
       'Pulsa «Copiar SQL» o utiliza el botón de ejecución para aplicar políticas RLS, funciones PL/pgSQL y triggers de auditoría.',
-      'Verifica el semáforo de integridad: confirma que las tablas accounts, journal_entries, journal_lines y companies existan con sus índices correspondientes.',
+      'Verifica el semáforo de integridad: confirma que las tablas acc_accounts, acc_entries, acc_lines y companies existan con sus índices correspondientes.',
     ],
     tips: [
       'Este centro está restringido exclusivamente a la cuenta maestra y Administrador Central; ningún usuario de empresa cliente tiene acceso.',

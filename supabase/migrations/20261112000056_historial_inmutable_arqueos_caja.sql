@@ -10,7 +10,7 @@ begin;
 
 create table public.cash_shift_arqueos (
   id uuid primary key default gen_random_uuid(),
-  company_id uuid not null references public.companies(id) on delete cascade,
+  company_id uuid not null references public.companies(id) on delete restrict,
   shift_id uuid not null references public.cash_shifts(id) on delete restrict,
 
   event_type text not null
@@ -72,6 +72,7 @@ using (
       and (
         s.cashier_id = (select auth.uid())
         or public.is_manager()
+        or public.is_platform_admin()
       )
   )
 );

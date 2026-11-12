@@ -39,31 +39,29 @@ begin
 end
 $migration$;
 
--- 2. Cada cajero ve y modifica su turno.
--- Los supervisores reconocidos por is_manager() conservan supervisión.
+-- 2. Lectura limitada al cajero titular o a supervisores.
+-- Las escrituras se realizan exclusivamente mediante las RPC SECURITY DEFINER.
 
 drop policy if exists cash_shifts_company_isolate on public.cash_shifts;
 drop policy if exists cash_shifts_owner_or_manager on public.cash_shifts;
+drop policy if exists cash_shifts_read_owner_or_manager on public.cash_shifts;
 
-create policy cash_shifts_owner_or_manager
+create policy cash_shifts_read_owner_or_manager
 on public.cash_shifts
-for all
+for select
 to authenticated
 using (
   company_id = public._ctx(null)
-  and (cashier_id = (select auth.uid()) or public.is_manager())
-)
-with check (
-  company_id = public._ctx(null)
-  and (cashier_id = (select auth.uid()) or public.is_manager())
+  and (cashier_id = (select auth.uid()) or public.is_manager() or public.is_platform_admin())
 );
 
 drop policy if exists cash_shift_denoms_company_isolate on public.cash_shift_denominations;
 drop policy if exists cash_shift_denoms_owner_or_manager on public.cash_shift_denominations;
+drop policy if exists cash_shift_denoms_read_owner_or_manager on public.cash_shift_denominations;
 
-create policy cash_shift_denoms_owner_or_manager
+create policy cash_shift_denoms_read_owner_or_manager
 on public.cash_shift_denominations
-for all
+for select
 to authenticated
 using (
   company_id = public._ctx(null)
@@ -71,20 +69,22 @@ using (
     select 1
     from public.cash_shifts s
     where s.id = cash_shift_denominations.shift_id
-      and s.company_id = public._ctx(null)
-      and (s.cashier_id = (select auth.uid()) or public.is_manager())
-  )
-)
-with check (
-  company_id = public._ctx(null)
-  and exists (
-    select 1
-    from public.cash_shifts s
-    where s.id = cash_shift_denominations.shift_id
-      and s.company_id = public._ctx(null)
-      and (s.cashier_id = (select auth.uid()) or public.is_manager())
+      and s.company_id = cash_shift_denominations.company_id
+      and (s.cashier_id = (select auth.uid()) or public.is_manager() or public.is_platform_admin())
   )
 );
+
+-- El cliente autenticado conserva lectura, pero no puede escribir directamente.
+-- Las RPC SECURITY DEFINER realizan las escrituras autorizadas.
+revoke all privileges on table
+  public.cash_shifts,
+  public.cash_shift_denominations
+from authenticated;
+
+grant select on table
+  public.cash_shifts,
+  public.cash_shift_denominations
+to authenticated;
 
 -- 3. Retirar privilegios directos del rol anon y PUBLIC.
 -- Se conservan los privilegios de authenticated.
@@ -132,6 +132,28 @@ alter function public.caja_obtener_turno_activo()
 
 alter function public.caja_arqueo_ciego(uuid, numeric, text, jsonb, boolean)
   set search_path = pg_catalog, public, pg_temp;
+
+
+-- PATCH_ADMIN_PLATAFORMA_ARQUEO
+-- El administrador de plataforma solo opera dentro de su empresa activa.
+do $migration$
+declare
+  v_definition text;
+  v_old text := $old$if v_shift.cashier_id <> v_user and not public.is_manager() then$old$;
+  v_new text := $new$if v_shift.cashier_id <> v_user and not (public.is_manager() or public.is_platform_admin()) then$new$;
+begin
+  select pg_get_functiondef(
+    'public.caja_arqueo_ciego(uuid,numeric,text,jsonb,boolean)'::regprocedure
+  ) into v_definition;
+
+  if position(v_old in v_definition) = 0 then
+    raise exception 'No se encontró la autorización original de caja_arqueo_ciego';
+  end if;
+
+  v_definition := replace(v_definition, v_old, v_new);
+  execute v_definition;
+end
+$migration$;
 
 commit;
 

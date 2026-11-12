@@ -1,3 +1,4 @@
+
 import { supabase } from '../lib/supabase'
 
 export interface DenominationItem {
@@ -58,69 +59,12 @@ export interface ShiftRecord {
   notes: string | null
 }
 
-const SHIFT_STORAGE_KEY = 'cp_local_active_shift'
-
 /**
- * Obtiene el turno de caja actualmente activo para el usuario en sesión.
+ * Consulta el turno activo exclusivamente mediante la RPC autorizada.
+ * No usa localStorage ni consultas directas como fuente alternativa de verdad.
  */
 export async function getActiveShift(): Promise<ActiveShift> {
-  try {
-    const { data, error } = await supabase.rpc('caja_obtener_turno_activo')
-    if (!error && data && typeof data === 'object') {
-      const res = data as ActiveShift
-      if (res.active) {
-        localStorage.setItem(SHIFT_STORAGE_KEY, JSON.stringify(res))
-        return res
-      }
-    }
-  } catch {
-    // Si la RPC falla por estar en demo o antes de aplicar migración, comprobar tabla o fallback
-  }
-
-  // Fallback a consulta directa sobre tabla cash_shifts
-  try {
-    const { data: shifts } = await supabase
-      .from('cash_shifts')
-      .select('*')
-      .eq('status', 'open')
-      .order('opened_at', { ascending: false })
-      .limit(1)
-
-    if (shifts && shifts.length > 0) {
-      const s = shifts[0]
-      const active: ActiveShift = {
-        active: true,
-        shift_id: s.id,
-        opened_at: s.opened_at,
-        cashier_name: s.cashier_name || 'Cajero',
-        opening_amount: Number(s.opening_amount) || 0,
-        sales_cash: Number(s.total_sales_cash) || 0,
-        sales_card: Number(s.total_sales_card) || 0,
-        sales_transfer: Number(s.total_sales_transfer) || 0,
-        sales_credit: Number(s.total_sales_credit) || 0,
-        sales_count: Number(s.total_sales_count) || 0,
-        cash_in: Number(s.total_cash_in) || 0,
-        cash_out: Number(s.total_cash_out) || 0,
-        expected_cash: Number(s.expected_cash) || Number(s.opening_amount) || 0,
-      }
-      localStorage.setItem(SHIFT_STORAGE_KEY, JSON.stringify(active))
-      return active
-    }
-  } catch {
-    // Fallback a localStorage
-  }
-
-  const cached = localStorage.getItem(SHIFT_STORAGE_KEY)
-  if (cached) {
-    try {
-      const parsed = JSON.parse(cached) as ActiveShift
-      if (parsed.active) return parsed
-    } catch {
-      localStorage.removeItem(SHIFT_STORAGE_KEY)
-    }
-  }
-
-  return {
+  const empty: ActiveShift = {
     active: false,
     opening_amount: 0,
     sales_cash: 0,
@@ -132,10 +76,23 @@ export async function getActiveShift(): Promise<ActiveShift> {
     cash_out: 0,
     expected_cash: 0,
   }
+
+  try {
+    const { data, error } = await supabase.rpc('caja_obtener_turno_activo')
+    if (error) throw error
+    if (!data || typeof data !== 'object') return empty
+
+    const result = data as ActiveShift
+    return result.active === true && result.shift_id ? result : empty
+  } catch (error) {
+    console.error('[cashShiftService] No se pudo confirmar el turno activo:', error)
+    return empty
+  }
 }
 
 /**
- * Abre un nuevo turno de caja con fondo inicial.
+ * Abre un turno únicamente mediante la RPC transaccional de Supabase.
+ * Nunca crea turnos directos ni turnos locales que aparenten estar abiertos.
  */
 export async function openCashShift(
   openingAmount: number,
@@ -143,6 +100,10 @@ export async function openCashShift(
   notes?: string | null,
   denominations: DenominationItem[] = []
 ): Promise<{ ok: boolean; shift_id?: string; message?: string }> {
+  if (!Number.isFinite(openingAmount) || openingAmount < 0) {
+    return { ok: false, message: 'El monto de apertura no es válido.' }
+  }
+
   try {
     const { data, error } = await supabase.rpc('caja_abrir_turno', {
       p_opening_amount: openingAmount,
@@ -151,66 +112,35 @@ export async function openCashShift(
       p_denominations: denominations,
     })
 
-    if (!error && data) {
-      const res = data as { ok: boolean; shift_id: string; message: string }
-      await getActiveShift() // actualizar cache
-      return res
+    if (error) throw error
+
+    const result = data as { ok?: boolean; shift_id?: string; message?: string } | null
+    if (result?.ok !== true || !result.shift_id) {
+      return {
+        ok: false,
+        message: result?.message || 'La base de datos no confirmó la apertura del turno.',
+      }
     }
-  } catch {
-    // Continuar a fallback
-  }
 
-  // Fallback directo a insert
-  try {
-    const shiftId = crypto.randomUUID()
-    const { error: insErr } = await supabase.from('cash_shifts').insert({
-      id: shiftId,
-      opening_amount: openingAmount,
-      expected_cash: openingAmount,
-      warehouse_id: warehouseId || null,
-      notes: notes || null,
-      status: 'open',
-    })
-
-    if (!insErr) {
-      // Guardar en cash_entries
-      await supabase.from('cash_entries').insert({
-        type: 'ingreso',
-        amount: openingAmount,
-        description: `Base inicial de caja - Turno ${shiftId.slice(0, 8)}`,
-        reference_type: 'caja_apertura',
-        reference_id: shiftId,
-        shift_id: shiftId,
-      })
-
-      await getActiveShift()
-      return { ok: true, shift_id: shiftId, message: 'Turno de caja abierto correctamente' }
+    return {
+      ok: true,
+      shift_id: result.shift_id,
+      message: result.message || 'Turno de caja abierto correctamente.',
     }
-  } catch {
-    // Modo offline / almacenamiento local
+  } catch (error) {
+    console.error('[cashShiftService] Error al abrir turno:', error)
+    return {
+      ok: false,
+      message: error instanceof Error
+        ? error.message
+        : 'No se pudo confirmar la apertura en el servidor.',
+    }
   }
-
-  const localShift: ActiveShift = {
-    active: true,
-    shift_id: 'local-' + Date.now(),
-    opened_at: new Date().toISOString(),
-    cashier_name: 'Cajero Local',
-    opening_amount: openingAmount,
-    sales_cash: 0,
-    sales_card: 0,
-    sales_transfer: 0,
-    sales_credit: 0,
-    sales_count: 0,
-    cash_in: 0,
-    cash_out: 0,
-    expected_cash: openingAmount,
-  }
-  localStorage.setItem(SHIFT_STORAGE_KEY, JSON.stringify(localShift))
-  return { ok: true, shift_id: localShift.shift_id, message: 'Turno abierto localmente' }
 }
 
 /**
- * Realiza un arqueo ciego o cierre Z final.
+ * Realiza un arqueo ciego o cierre Z exclusivamente mediante la RPC oficial.
+ * Un error de red nunca se transforma en un cierre exitoso local.
  */
 export async function submitBlindArqueo(
   shiftId: string,
@@ -227,6 +157,24 @@ export async function submitBlindArqueo(
   status: string
   message: string
 }> {
+  const failure = (message: string) => ({
+    ok: false,
+    stage: isFinal ? 'cierre_z' : 'cierre_x',
+    expected_cash: 0,
+    counted_cash: countedCash,
+    difference: 0,
+    status: 'error',
+    message,
+  })
+
+  if (!shiftId || shiftId === 'active' || shiftId.startsWith('local-')) {
+    return failure('El turno no tiene un identificador confirmado por el servidor. Actualiza la caja.')
+  }
+
+  if (!Number.isFinite(countedCash) || countedCash < 0) {
+    return failure('El efectivo contado no es válido.')
+  }
+
   try {
     const { data, error } = await supabase.rpc('caja_arqueo_ciego', {
       p_shift_id: shiftId,
@@ -236,48 +184,38 @@ export async function submitBlindArqueo(
       p_is_final: isFinal,
     })
 
-    if (!error && data) {
-      if (isFinal) {
-        localStorage.removeItem(SHIFT_STORAGE_KEY)
-      }
-      return data as any
-    }
-  } catch {
-    // Fallback a cerrar_caja existente
-  }
+    if (error) throw error
 
-  // Fallback con la función de cierre tradicional si existe
-  try {
-    const { data: oldData, error: oldErr } = await supabase.rpc('cerrar_caja', {
-      p_counted: countedCash,
-      p_expected_seen: countedCash,
-      p_notes: notes,
-    })
-    if (!oldErr && oldData) {
-      localStorage.removeItem(SHIFT_STORAGE_KEY)
-      return {
-        ok: true,
-        stage: isFinal ? 'cierre_z' : 'cierre_x',
-        expected_cash: Number((oldData as any).expected) || countedCash,
-        counted_cash: countedCash,
-        difference: Number((oldData as any).difference) || 0,
-        status: isFinal ? 'closed' : 'open',
-        message: 'Cierre completado',
-      }
-    }
-  } catch {
-    // Local fallback
-  }
+    const result = data as {
+      ok?: boolean
+      stage?: string
+      expected_cash?: number
+      counted_cash?: number
+      difference?: number
+      status?: string
+      message?: string
+    } | null
 
-  localStorage.removeItem(SHIFT_STORAGE_KEY)
-  return {
-    ok: true,
-    stage: isFinal ? 'cierre_z' : 'cierre_x',
-    expected_cash: countedCash,
-    counted_cash: countedCash,
-    difference: 0,
-    status: isFinal ? 'closed' : 'open',
-    message: isFinal ? 'Turno cerrado localmente' : 'Corte parcial X registrado',
+    if (result?.ok !== true) {
+      return failure(result?.message || 'La base de datos no confirmó el arqueo.')
+    }
+
+    return {
+      ok: true,
+      stage: result.stage || (isFinal ? 'cierre_z' : 'cierre_x'),
+      expected_cash: Number(result.expected_cash) || 0,
+      counted_cash: Number(result.counted_cash) || countedCash,
+      difference: Number(result.difference) || 0,
+      status: result.status || (isFinal ? 'closed' : 'open'),
+      message: result.message || 'Arqueo registrado correctamente.',
+    }
+  } catch (error) {
+    console.error('[cashShiftService] Error al registrar arqueo:', error)
+    return failure(
+      error instanceof Error
+        ? error.message
+        : 'No se pudo confirmar el arqueo en el servidor.'
+    )
   }
 }
 
@@ -292,8 +230,13 @@ export async function autoContabilizarVenta(saleId: string): Promise<{ ok: boole
     if (!error && data) {
       return data as { ok: boolean; reason?: string }
     }
-  } catch {
-    // Si no está disponible en la base, no bloquea el flujo comercial
+    if (error) {
+      console.error('[cashShiftService] Error al contabilizar venta:', error)
+      return { ok: false, reason: error.message }
+    }
+  } catch (error) {
+    console.error('[cashShiftService] No se pudo solicitar la contabilización:', error)
   }
-  return { ok: false, reason: 'Función no disponible o ya contabilizada' }
+
+  return { ok: false, reason: 'Función no disponible o venta aún no contabilizada' }
 }

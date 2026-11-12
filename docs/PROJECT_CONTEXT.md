@@ -124,7 +124,7 @@ La fuente única de verdad para permisos en la aplicación es `src/lib/pagePermi
 | **Fase 1** | `b8e7c34` | Conexión del formulario oficial `JournalEntryForm.tsx` a cuentas reales desde `acc_accounts` (UUIDs) y a la RPC `acc_create_entry`. Eliminación total de cuentas ficticias en frontend. |
 | **Fase 2A** | `6de2f54` | Limpieza controlada del legado contable: eliminación de `accountingService.ts`, `useAccounting.ts`, formulario legacy `accounting/JournalEntryForm.tsx` y limpieza de scripts SQL legacy. |
 | **Fase 2B-1** | `4f88ee7` | Autorización controlada de escritura contable para el rol `contador`: creación de `public.can_write_accounting()` y actualización de `acc_create_entry` y `acc_post_entry` en Supabase (Migración `20261111000054`). |
-| **Fase 2B-2** | `[Actual]` | Corrección funcional en `JournalEntryForm.tsx`: restricción de selección exclusivamente a cuentas con `is_postable = true`, identificación y bloqueo de cuentas no imputables en modal PUC, y restricción de `sourceModule` exclusivamente a `'manual'` y `'ajuste'`. |
+| **Fase 2B-2** | `12ec46c` | Corrección funcional en `JournalEntryForm.tsx`: restricción de selección exclusivamente a cuentas con `is_postable = true`, identificación y bloqueo de cuentas no imputables en modal PUC, y restricción de `sourceModule` exclusivamente a `'manual'` y `'ajuste'`. |
 
 ---
 

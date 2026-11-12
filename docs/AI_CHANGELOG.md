@@ -31,7 +31,7 @@
     - Validación pre-envío en `handleSubmit` impide registrar cualquier línea con cuenta no imputable.
     - Selector de origen restringido exclusivamente a `'manual'` (Asiento Manual General) y `'ajuste'` (Ajuste / Reclasificación Contable).
 - **Limitaciones o pruebas pendientes:** Ninguna.
-- **Commit y hash:** `[Pendiente de commit al finalizar sesión]`
+- **Commit y hash:** `12ec46c` (`12ec46c8a7e459345819bff7c648876e7e1f3ee6`)
 - **Estado final:** ✅ Completada y verificada.
 
 ---

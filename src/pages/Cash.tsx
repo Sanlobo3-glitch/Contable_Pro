@@ -21,6 +21,33 @@ interface CashClosing {
   notes: string | null
 }
 
+interface CashShiftArqueo {
+  id: string
+  shift_id: string
+  event_type: 'cierre_x' | 'cierre_z'
+  performed_by_name: string
+  shift_cashier_name: string | null
+  opening_amount: number
+  sales_cash: number
+  sales_card: number
+  sales_transfer: number
+  sales_credit: number
+  sales_count: number
+  cash_in: number
+  cash_out: number
+  expected_cash: number
+  counted_cash: number
+  difference: number
+  notes: string | null
+  denominations: Array<{
+    denomination: number
+    kind: string
+    quantity: number
+    subtotal: number
+  }>
+  created_at: string
+}
+
 type Period = 'hoy' | '7d' | 'mes' | 'todo'
 const PERIODS: { id: Period; label: string }[] = [
   { id: 'hoy', label: 'Hoy' }, { id: '7d', label: '7 días' }, { id: 'mes', label: 'Este mes' }, { id: 'todo', label: 'Todo' },
@@ -54,7 +81,9 @@ export default function Cash({ onNavigate }: { onNavigate?: (page: string) => vo
   const readOnly = isReadOnly(user)
   const [entries, setEntries] = useState<CashEntry[]>([])
   const [closings, setClosings] = useState<CashClosing[]>([])
-  const [tab, setTab] = useState<'movimientos' | 'cierres'>('movimientos')
+  const [arqueos, setArqueos] = useState<CashShiftArqueo[]>([])
+  const [arqueosError, setArqueosError] = useState('')
+  const [tab, setTab] = useState<'movimientos' | 'cierres' | 'arqueos'>('movimientos')
   const [period, setPeriod] = useState<Period>('hoy')
   const [showForm, setShowForm] = useState(false)
   const [showClose, setShowClose] = useState(false)
@@ -80,13 +109,16 @@ export default function Cash({ onNavigate }: { onNavigate?: (page: string) => vo
 
   useEffect(() => { load() }, [])
   async function load() {
-    const [{ data: e }, { data: c }, shift] = await Promise.all([
+    const [{ data: e }, { data: c }, { data: a, error: aError }, shift] = await Promise.all([
       supabase.from('cash_entries').select('*').order('created_at', { ascending: false }),
       supabase.from('cash_closings').select('*').order('closed_at', { ascending: false }),
+      supabase.from('cash_shift_arqueos').select('*').order('created_at', { ascending: false }),
       getActiveShift(),
     ])
     setEntries((e || []) as CashEntry[])
     setClosings((c || []) as CashClosing[])
+    setArqueos((a || []) as CashShiftArqueo[])
+    setArqueosError(aError ? 'No se pudo cargar el historial de arqueos: ' + aError.message : '')
     setActiveShift(shift)
   }
 
@@ -150,6 +182,31 @@ export default function Cash({ onNavigate }: { onNavigate?: (page: string) => vo
 
   function exportExcel() {
     const todayStr = new Date().toLocaleDateString('sv-SE')
+    if (tab === 'arqueos') {
+      downloadCsv(
+        `historial_arqueos_${todayStr}.csv`,
+        ['Fecha', 'Tipo', 'Cajero del turno', 'Registrado por', 'Fondo inicial', 'Ventas efectivo', 'Ventas tarjeta', 'Ventas transferencia', 'Ventas crédito', 'N.º ventas', 'Entradas', 'Salidas', 'Esperado', 'Contado', 'Diferencia', 'Notas'],
+        arqueos.map(a => [
+          fmtDateTime(a.created_at),
+          a.event_type === 'cierre_x' ? 'Corte X' : 'Cierre Z',
+          a.shift_cashier_name || '',
+          a.performed_by_name,
+          a.opening_amount,
+          a.sales_cash,
+          a.sales_card,
+          a.sales_transfer,
+          a.sales_credit,
+          a.sales_count,
+          a.cash_in,
+          a.cash_out,
+          a.expected_cash,
+          a.counted_cash,
+          a.difference,
+          a.notes || '',
+        ])
+      )
+      return
+    }
     if (tab === 'cierres') {
       downloadCsv(
         `cierres_caja_${todayStr}.csv`,
@@ -283,7 +340,7 @@ export default function Cash({ onNavigate }: { onNavigate?: (page: string) => vo
       </div>
 
       <div className="flex gap-2 mb-4">
-        {(['movimientos', 'cierres'] as const).map(t => (
+        {(['movimientos', 'cierres', 'arqueos'] as const).map(t => (
           <button key={t} onClick={() => setTab(t)} className={`px-4 py-1.5 rounded-lg text-sm font-medium capitalize ${tab === t ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>{t}</button>
         ))}
       </div>
@@ -337,6 +394,110 @@ export default function Cash({ onNavigate }: { onNavigate?: (page: string) => vo
             </table>
           </div>
         </>
+      )}
+
+      {tab === 'arqueos' && (
+        <section className="space-y-3">
+          {arqueosError && (
+            <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+              {arqueosError}
+            </div>
+          )}
+
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div>
+              <h2 className="text-sm font-bold text-slate-800">
+                Historial de cortes X y cierres Z
+              </h2>
+              <p className="text-xs text-slate-500">
+                Registro histórico de solo lectura. Los eventos permanecen guardados aunque el turno se cierre.
+              </p>
+            </div>
+            <span className="text-xs text-slate-500">{arqueos.length} eventos</span>
+          </div>
+
+          {arqueos.map(a => (
+            <article key={a.id} className="bg-white rounded-xl border border-slate-200 p-4">
+              <div className="flex items-start justify-between gap-3 flex-wrap">
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className={`text-xs font-bold px-2 py-1 rounded ${
+                      a.event_type === 'cierre_z'
+                        ? 'bg-emerald-100 text-emerald-800'
+                        : 'bg-sky-100 text-sky-800'
+                    }`}>
+                      {a.event_type === 'cierre_z' ? 'CIERRE Z' : 'CORTE X'}
+                    </span>
+                    <span className="text-sm font-semibold text-slate-800">
+                      {fmtDateTime(a.created_at)}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Cajero: <strong className="text-slate-700">{a.shift_cashier_name || 'No indicado'}</strong>
+                    {' · '}Registrado por: <strong className="text-slate-700">{a.performed_by_name}</strong>
+                  </p>
+                  <p className="text-[11px] text-slate-400 mt-0.5">
+                    Turno: <span className="font-mono">{a.shift_id}</span>
+                  </p>
+                </div>
+
+                <span className={`text-xs font-semibold px-2 py-1 rounded whitespace-nowrap ${
+                  a.difference === 0
+                    ? 'bg-emerald-50 text-emerald-700'
+                    : a.difference > 0
+                      ? 'bg-amber-50 text-amber-700'
+                      : 'bg-red-50 text-red-700'
+                }`}>
+                  {a.difference === 0
+                    ? 'Cuadra'
+                    : a.difference > 0
+                      ? `Sobrante ${money(a.difference)}`
+                      : `Faltante ${money(Math.abs(a.difference))}`}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mt-4 text-sm">
+                <div><p className="text-[10px] text-slate-400 uppercase">Fondo inicial</p><p className="font-medium text-slate-700">{money(a.opening_amount)}</p></div>
+                <div><p className="text-[10px] text-slate-400 uppercase">Ventas efectivo</p><p className="text-emerald-700">{money(a.sales_cash)}</p></div>
+                <div><p className="text-[10px] text-slate-400 uppercase">Tarjeta</p><p className="text-slate-700">{money(a.sales_card)}</p></div>
+                <div><p className="text-[10px] text-slate-400 uppercase">Transferencias</p><p className="text-slate-700">{money(a.sales_transfer)}</p></div>
+                <div><p className="text-[10px] text-slate-400 uppercase">Crédito</p><p className="text-slate-700">{money(a.sales_credit)}</p></div>
+                <div><p className="text-[10px] text-slate-400 uppercase">Ventas</p><p className="text-slate-700">{a.sales_count}</p></div>
+                <div><p className="text-[10px] text-slate-400 uppercase">Entradas</p><p className="text-emerald-700">{money(a.cash_in)}</p></div>
+                <div><p className="text-[10px] text-slate-400 uppercase">Salidas</p><p className="text-red-600">{money(a.cash_out)}</p></div>
+                <div><p className="text-[10px] text-slate-400 uppercase">Esperado</p><p className="font-semibold text-slate-800">{money(a.expected_cash)}</p></div>
+                <div><p className="text-[10px] text-slate-400 uppercase">Contado</p><p className="font-bold text-slate-900">{money(a.counted_cash)}</p></div>
+              </div>
+
+              {a.denominations?.length > 0 && (
+                <div className="mt-3 border-t border-slate-100 pt-3">
+                  <p className="text-[10px] font-bold text-slate-500 uppercase mb-2">
+                    Detalle de denominaciones
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {a.denominations.map((d, i) => (
+                      <span key={i} className="text-[11px] bg-slate-50 border border-slate-200 rounded px-2 py-1 text-slate-600">
+                        {d.kind} · {money(d.denomination)} × {d.quantity} = <strong>{money(d.subtotal)}</strong>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {a.notes && (
+                <p className="text-xs text-slate-600 mt-3 border-t border-slate-100 pt-2">
+                  Nota: {a.notes}
+                </p>
+              )}
+            </article>
+          ))}
+
+          {!arqueosError && arqueos.length === 0 && (
+            <p className="text-center text-sm text-slate-400 py-8">
+              Todavía no hay cortes X ni cierres Z registrados en este historial.
+            </p>
+          )}
+        </section>
       )}
 
       {tab === 'cierres' && (

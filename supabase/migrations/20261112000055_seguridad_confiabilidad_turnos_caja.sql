@@ -9,12 +9,8 @@ begin;
 do $migration$
 declare
   v_definition text;
-  v_old text := $old$
-    and (shift_id = v_shift.id or (created_at >= v_shift.opened_at and (reference_type is null or reference_type <> 'arqueo')));
-  $old$;
-  v_new text := $new$
-    and shift_id = v_shift.id;
-  $new$;
+  v_old text := $old$and (shift_id = v_shift.id or (created_at >= v_shift.opened_at and (reference_type is null or reference_type <> 'arqueo')));$old$;
+  v_new text := $new$and shift_id = v_shift.id;$new$;
   v_function regprocedure;
 begin
   foreach v_function in array array[

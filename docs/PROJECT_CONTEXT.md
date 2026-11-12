@@ -87,7 +87,7 @@ La fuente única de verdad para permisos en la aplicación es `src/lib/pagePermi
 | `vendedor` | Ventas en mostrador y ruta asignada, cotizaciones, consulta de clientes y catálogo. Historial restringido exclusivamente a sus propias ventas. Sin acceso a caja. |
 | `almacen` | Jefe de bodegas: inventario, traslados, lotes, kardex, toma física y recepción de órdenes de compra. Sin acceso a ventas ni contabilidad. |
 | `compras` | Gestión de compras, órdenes de compra y evaluación de proveedores. |
-| `transporte` | Logística, despacho de rutas y entrega de pedidos. |
+| `transportador` | Logística, despacho de rutas y entrega de pedidos. |
 
 ---
 

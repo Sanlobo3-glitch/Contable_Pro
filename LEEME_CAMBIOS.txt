@@ -1,26 +1,98 @@
-CAMBIOS (consolidación contable en el modelo acc_*)
+INVENTARIOPRO / CONTABLE_PRO
+NOTA HISTÓRICA DE CONSOLIDACIÓN CONTABLE
+Última corrección: 12 de noviembre de 2026
 
-SUBIR / REEMPLAZAR en GitHub (misma ruta):
-  src/pages/Accounting.tsx
-  src/pages/AccountingStatements.tsx
-  src/pages/SqlAdminCenter.tsx
-  src/lib/sqlScripts.ts
-  api/admin-sql.ts
-  supabase/migrations/20261107000048_consolidar_contabilidad_acc_y_rendimiento.sql   (nuevo; ya aplicada en Supabase)
-  supabase/migrations_superseded/README.md                                            (nuevo)
-  supabase/migrations_superseded/20261106000022_contable_pro_partida_doble_puc_niif.sql  (mover aquí)
-  supabase/migrations_superseded/20261106000046_sistema_contable_partida_doble.sql       (mover aquí)
-  supabase/migrations_superseded/20261106000047_reportes_financieros_contables.sql       (mover aquí)
+PROPÓSITO
 
-BORRAR en GitHub (código muerto que apuntaba a tablas inexistentes):
-  src/services/accountingService.ts
-  src/hooks/useAccounting.ts
-  src/components/accounting/JournalEntryForm.tsx
-  src/components/JournalEntryForm.tsx
-  supabase/migrations/20261106000022_contable_pro_partida_doble_puc_niif.sql
-  supabase/migrations/20261106000046_sistema_contable_partida_doble.sql
-  supabase/migrations/20261106000047_reportes_financieros_contables.sql
+Este archivo documenta la consolidación del sistema contable en el modelo oficial acc_*.
 
-IMPORTANTE: borra primero src/lib/sqlScripts.ts viejo reemplazándolo; si dejas el
-sqlScripts.ts anterior y borras la migración 000022, el build falla.
+No es una lista de tareas pendientes ni una autorización para borrar componentes actuales.
 
+Consultar primero:
+
+- docs/PROJECT_CONTEXT.md
+- docs/AI_CHANGELOG.md
+- docs/ACCOUNTING_ARCHITECTURE.md
+- docs/RPC_CATALOG.md
+- supabase/MIGRATIONS.md
+
+MODELO CONTABLE OFICIAL
+
+La contabilidad vigente utiliza exclusivamente:
+
+- acc_accounts
+- acc_entries
+- acc_lines
+- acc_periods
+- acc_closings
+- acc_settings
+- acc_counters
+
+No crear ni reintroducir un segundo libro contable basado en:
+
+- accounts
+- journal_entries
+- journal_lines
+- accounting_accounts
+- accounting_journal_entries
+- accounting_journal_items
+- funciones fn_* de la arquitectura antigua.
+
+MIGRACIONES LEGACY ARCHIVADAS
+
+Las siguientes migraciones fueron retiradas de supabase/migrations/ y conservadas en supabase/migrations_superseded/:
+
+- 20261106000022_contable_pro_partida_doble_puc_niif.sql
+- 20261106000046_sistema_contable_partida_doble.sql
+- 20261106000047_reportes_financieros_contables.sql
+
+NO ejecutar los archivos archivados como migraciones activas ni devolverlos a supabase/migrations/ sin auditoría y autorización explícitas.
+
+ACLARACIÓN CRÍTICA SOBRE COMPONENTES FRONTEND
+
+Las instrucciones anteriores que indicaban borrar:
+
+src/components/JournalEntryForm.tsx
+
+QUEDAN ANULADAS POR OBSOLETAS.
+
+Este archivo es el formulario contable oficial conectado a la RPC acc_create_entry y al modelo acc_*.
+
+DEBE CONSERVARSE. NO BORRARLO.
+
+No reemplazarlo por el componente legacy ni modificar su integración sin una tarea específica, revisión de dependencias y autorización.
+
+Distinguir:
+
+- src/components/JournalEntryForm.tsx: formulario oficial vigente.
+- src/components/accounting/JournalEntryForm.tsx: componente legacy retirado.
+- src/services/accountingService.ts y src/hooks/useAccounting.ts: implementaciones legacy retiradas durante la consolidación.
+
+HISTORIAL DE CONSOLIDACIÓN
+
+Durante la consolidación se actualizaron, entre otros:
+
+- src/pages/Accounting.tsx
+- src/pages/AccountingStatements.tsx
+- src/pages/SqlAdminCenter.tsx
+- src/lib/sqlScripts.ts
+- api/admin-sql.ts
+- supabase/migrations/20261107000048_consolidar_contabilidad_acc_y_rendimiento.sql
+
+Esta lista es histórica. No es una instrucción para sobrescribir esos archivos.
+
+REGLAS OBLIGATORIAS PARA FUTURAS IAs
+
+1. Leer la documentación técnica vigente antes de modificar contabilidad.
+2. Verificar GitHub y Supabase antes de asumir el estado de una migración.
+3. No borrar componentes por coincidencia de nombres.
+4. Comprobar imports, rutas, dependencias y uso real antes de retirar código.
+5. No ejecutar migraciones archivadas.
+6. No modificar migraciones históricas ya aplicadas para corregir el estado actual. Crear migraciones nuevas cuando corresponda.
+7. No afirmar que una migración fue aplicada sin comprobarlo en Supabase.
+8. Mantener el aislamiento multiempresa.
+9. Mantener exclusivamente la arquitectura contable oficial acc_*.
+10. No eliminar ni reemplazar funcionalidades oficiales sin autorización explícita.
+11. Actualizar docs/PROJECT_CONTEXT.md y docs/AI_CHANGELOG.md después de cada cambio, registrando commit, archivos, pruebas y resultados reales.
+
+FIN DE LA NOTA HISTÓRICA.

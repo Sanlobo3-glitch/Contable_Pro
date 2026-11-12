@@ -11,7 +11,7 @@ begin;
 create table public.cash_shift_arqueos (
   id uuid primary key default gen_random_uuid(),
   company_id uuid not null references public.companies(id) on delete cascade,
-  shift_id uuid not null references public.cash_shifts(id) on delete cascade,
+  shift_id uuid not null references public.cash_shifts(id) on delete restrict,
 
   event_type text not null
     check (event_type in ('cierre_x', 'cierre_z')),
@@ -113,6 +113,7 @@ declare
 
   v_insert_block text :=
     $insert$
+  -- HISTORIAL_ARQUEO_INSERT
   -- Registro histórico independiente del arqueo X o Z.
   insert into public.cash_shift_arqueos (
     company_id,

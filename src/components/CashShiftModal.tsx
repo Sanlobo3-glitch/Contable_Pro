@@ -67,7 +67,7 @@ export default function CashShiftModal({ isOpen, onClose, activeShift, onShiftCh
       setCounts({})
       setMode(activeShift.active ? 'arqueo_ciego' : 'apertura')
     }
-  }, [isOpen, activeShift.active])
+  }, [isOpen])
 
   const totalDenominations = useMemo(() => {
     return COLOMBIAN_DENOMINATIONS.reduce((sum, d) => {

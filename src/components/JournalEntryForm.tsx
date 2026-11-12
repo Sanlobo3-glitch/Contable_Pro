@@ -22,6 +22,7 @@ export interface RealAccountItem {
   nature: string
   type?: string
   is_postable?: boolean
+  active?: boolean
 }
 
 export interface JournalLineItem {
@@ -34,6 +35,8 @@ export interface JournalLineItem {
   memo: string
 }
 
+export type EntrySourceType = 'manual' | 'ajuste'
+
 interface JournalEntryFormProps {
   onSuccess?: (entry: any) => void
   onCancel?: () => void
@@ -44,9 +47,15 @@ export default function JournalEntryForm({ onSuccess, onCancel }: JournalEntryFo
   const [entryNumber, setEntryNumber] = useState(
     () => `AS-${new Date().getFullYear()}-${Math.floor(100 + Math.random() * 900)}`
   )
-  const [entryDate, setEntryDate] = useState(() => new Date().toISOString().split('T')[0])
+  const [entryDate, setEntryDate] = useState(() => {
+    const d = new Date()
+    const year = d.getFullYear()
+    const month = String(d.getMonth() + 1).padStart(2, '0')
+    const day = String(d.getDate()).padStart(2, '0')
+    return `${year}-${month}-${day}`
+  })
   const [concept, setConcept] = useState('')
-  const [sourceModule, setSourceModule] = useState('manual')
+  const [sourceModule, setSourceModule] = useState<EntrySourceType>('manual')
   const [status, setStatus] = useState<'borrador' | 'posteado'>('posteado')
   const [saving, setSaving] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
@@ -91,7 +100,7 @@ export default function JournalEntryForm({ onSuccess, onCancel }: JournalEntryFo
         setLoadingAccounts(true)
         const { data, error } = await supabase
           .from('acc_accounts')
-          .select('id, code, name, nature, type, is_postable')
+          .select('id, code, name, nature, type, is_postable, active')
           .eq('active', true)
           .order('code', { ascending: true })
 
@@ -120,6 +129,11 @@ export default function JournalEntryForm({ onSuccess, onCancel }: JournalEntryFo
       isMounted = false
     }
   }, [user?.company_id])
+
+  // Cuentas imputables activas habilitadas para selección directa en líneas
+  const postableAccounts = useMemo(() => {
+    return realAccounts.filter((a) => a.is_postable === true)
+  }, [realAccounts])
 
   // Cálculos en tiempo real de partida doble
   const { totalDebit, totalCredit, difference, isBalanced } = useMemo(() => {
@@ -194,7 +208,8 @@ export default function JournalEntryForm({ onSuccess, onCancel }: JournalEntryFo
 
         // Si se cambia la cuenta seleccionada por ID
         if (field === 'account_id') {
-          const acc = realAccounts.find((a) => a.id === value)
+          // Solo permitir asignar cuentas activas e imputables (is_postable = true)
+          const acc = postableAccounts.find((a) => a.id === value)
           if (acc) {
             updated.account_id = acc.id
             updated.account_code = acc.code
@@ -234,6 +249,10 @@ export default function JournalEntryForm({ onSuccess, onCancel }: JournalEntryFo
 
   // Seleccionar cuenta desde el modal PUC
   function handleSelectAccount(account: RealAccountItem) {
+    // Validación estricta H-02: solo cuentas activas e imputables pueden seleccionarse
+    if (!account.is_postable) {
+      return
+    }
     if (activeLineIdForPuc) {
       setLines((prev) =>
         prev.map((l) =>
@@ -270,10 +289,17 @@ export default function JournalEntryForm({ onSuccess, onCancel }: JournalEntryFo
       return
     }
 
-    // Validar líneas válidas
+    // Validar líneas válidas e imputables
     for (const [idx, l] of lines.entries()) {
       if (!l.account_id) {
         setErrorMessage(`La línea #${idx + 1} no tiene asignada una cuenta contable válida.`)
+        return
+      }
+      const accFound = realAccounts.find((a) => a.id === l.account_id)
+      if (!accFound || !accFound.is_postable) {
+        setErrorMessage(
+          `La línea #${idx + 1} contiene la cuenta ${l.account_code || l.account_id} que no es imputable o no admite movimientos directos.`
+        )
         return
       }
       const deb = Number(l.debit) || 0
@@ -307,12 +333,15 @@ export default function JournalEntryForm({ onSuccess, onCancel }: JournalEntryFo
       }))
 
       // Parámetros reglamentarios de acc_create_entry(date,text,jsonb,boolean,text,uuid,text)
+      // Restricción H-03: p_source_type únicamente acepta 'manual' o 'ajuste'
+      const sanitizedSourceType = sourceModule === 'ajuste' ? 'ajuste' : 'manual'
+
       const { data: createdEntryId, error: rpcError } = await supabase.rpc('acc_create_entry', {
         p_date: entryDate,
         p_description: concept.trim(),
         p_lines: rpcLines,
         p_post: status === 'posteado',
-        p_source_type: sourceModule || 'manual',
+        p_source_type: sanitizedSourceType,
         p_source_id: null,
         p_event: 'registro',
       })
@@ -443,19 +472,15 @@ export default function JournalEntryForm({ onSuccess, onCancel }: JournalEntryFo
 
         <div>
           <label className="block text-xs font-semibold text-slate-700 mb-1">
-            Módulo de Origen
+            Tipo de Origen (NIIF)
           </label>
           <select
             value={sourceModule}
-            onChange={(e) => setSourceModule(e.target.value)}
-            className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            onChange={(e) => setSourceModule(e.target.value as EntrySourceType)}
+            className="w-full px-3 py-2 text-xs rounded-xl border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
           >
-            <option value="manual">Asiento Manual</option>
-            <option value="apertura">Constitución / Apertura</option>
-            <option value="ventas">Ventas e Ingresos</option>
-            <option value="compras">Compras y Proveedores</option>
-            <option value="gastos">Gastos Operativos</option>
-            <option value="ajustes">Ajustes y Reclasificaciones</option>
+            <option value="manual">manual — Asiento Manual General</option>
+            <option value="ajuste">ajuste — Ajuste / Reclasificación Contable</option>
           </select>
         </div>
 
@@ -536,8 +561,8 @@ export default function JournalEntryForm({ onSuccess, onCancel }: JournalEntryFo
                           onChange={(e) => updateLine(line.id, 'account_id', e.target.value)}
                           className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-300 bg-white font-mono focus:ring-1 focus:ring-indigo-500"
                         >
-                          <option value="">-- Seleccione Cuenta Real --</option>
-                          {realAccounts.map((a) => (
+                          <option value="">-- Seleccione Cuenta Imputable --</option>
+                          {postableAccounts.map((a) => (
                             <option key={a.id} value={a.id}>
                               {a.code} - {a.name} ({a.nature})
                             </option>
@@ -753,39 +778,74 @@ export default function JournalEntryForm({ onSuccess, onCancel }: JournalEntryFo
                   No se encontraron cuentas activas que coincidan con la búsqueda.
                 </div>
               ) : (
-                filteredAccounts.map((acc) => (
-                  <div
-                    key={acc.id}
-                    onClick={() => handleSelectAccount(acc)}
-                    className="p-2.5 sm:px-3.5 hover:bg-indigo-50/60 cursor-pointer flex items-center justify-between gap-3 text-xs transition-colors"
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className="font-mono font-bold text-slate-900">
-                        {acc.code}
-                      </span>
-                      <span className="text-slate-700 font-medium">
-                        {acc.name}
-                      </span>
-                    </div>
-
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      {acc.type && (
-                        <span className="text-[10px] font-semibold uppercase px-2 py-0.5 rounded-md bg-slate-100 text-slate-600">
-                          {acc.type}
+                filteredAccounts.map((acc) => {
+                  const isPostable = acc.is_postable === true
+                  return (
+                    <div
+                      key={acc.id}
+                      onClick={() => {
+                        if (isPostable) {
+                          handleSelectAccount(acc)
+                        }
+                      }}
+                      className={`p-2.5 sm:px-3.5 flex items-center justify-between gap-3 text-xs transition-colors ${
+                        isPostable
+                          ? 'hover:bg-indigo-50/60 cursor-pointer'
+                          : 'bg-slate-50/70 opacity-60 cursor-not-allowed select-none'
+                      }`}
+                      title={
+                        isPostable
+                          ? `Seleccionar cuenta ${acc.code} para esta línea`
+                          : `Cuenta de grupo o mayor (${acc.code}): No admite movimientos contables directos`
+                      }
+                    >
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={`font-mono font-bold ${
+                            isPostable ? 'text-slate-900' : 'text-slate-500'
+                          }`}
+                        >
+                          {acc.code}
                         </span>
-                      )}
-                      <span
-                        className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${
-                          acc.nature?.toLowerCase().includes('deb')
-                            ? 'bg-blue-50 text-blue-700'
-                            : 'bg-purple-50 text-purple-700'
-                        }`}
-                      >
-                        {acc.nature}
-                      </span>
+                        <span
+                          className={`font-medium ${
+                            isPostable ? 'text-slate-700' : 'text-slate-500'
+                          }`}
+                        >
+                          {acc.name}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {/* Indicador H-02 de Imputable vs No imputable */}
+                        {isPostable ? (
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200">
+                            Imputable
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-md bg-amber-50 text-amber-700 border border-amber-200">
+                            No imputable
+                          </span>
+                        )}
+
+                        {acc.type && (
+                          <span className="text-[10px] font-semibold uppercase px-2 py-0.5 rounded-md bg-slate-100 text-slate-600">
+                            {acc.type}
+                          </span>
+                        )}
+                        <span
+                          className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${
+                            acc.nature?.toLowerCase().includes('deb')
+                              ? 'bg-blue-50 text-blue-700'
+                              : 'bg-purple-50 text-purple-700'
+                          }`}
+                        >
+                          {acc.nature}
+                        </span>
+                      </div>
                     </div>
-                  </div>
-                ))
+                  )
+                })
               )}
             </div>
 

@@ -6,9 +6,8 @@
 -- No reconstruye la lógica de cálculo ni duplica cash_closings.
 -- ============================================================================
 
-begin;
 
-create table public.cash_shift_arqueos (
+create table if not exists public.cash_shift_arqueos (
   id uuid primary key default gen_random_uuid(),
   company_id uuid not null references public.companies(id) on delete restrict,
   shift_id uuid not null references public.cash_shifts(id) on delete restrict,
@@ -44,13 +43,13 @@ create table public.cash_shift_arqueos (
   created_at timestamptz not null default now()
 );
 
-create index idx_cash_shift_arqueos_company_created
+create index if not exists idx_cash_shift_arqueos_company_created
 on public.cash_shift_arqueos(company_id, created_at desc);
 
-create index idx_cash_shift_arqueos_shift_created
+create index if not exists idx_cash_shift_arqueos_shift_created
 on public.cash_shift_arqueos(shift_id, created_at desc);
 
-create index idx_cash_shift_arqueos_cashier_created
+create index if not exists idx_cash_shift_arqueos_cashier_created
 on public.cash_shift_arqueos(shift_cashier_id, created_at desc);
 
 -- Seguridad: lectura limitada a la empresa, al cajero titular
@@ -58,6 +57,7 @@ on public.cash_shift_arqueos(shift_cashier_id, created_at desc);
 
 alter table public.cash_shift_arqueos enable row level security;
 
+drop policy if exists cash_shift_arqueos_read_authorized on public.cash_shift_arqueos;
 create policy cash_shift_arqueos_read_authorized
 on public.cash_shift_arqueos
 for select
@@ -255,4 +255,9 @@ begin
 end
 $migration$;
 
-commit;
+
+select public.sql_registrar_migracion(
+  '20261112000056_historial_inmutable_arqueos_caja',
+  'Historial inmutable de arqueos X y cierres Z',
+  '20261112000056_historial_inmutable_arqueos_caja.sql'
+);

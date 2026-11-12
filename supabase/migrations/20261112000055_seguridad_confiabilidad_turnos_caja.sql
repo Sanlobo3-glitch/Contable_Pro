@@ -3,7 +3,6 @@
 -- Fase 3A: seguridad y confiabilidad del ciclo de caja.
 -- No modifica ventas, cartera ni el libro contable acc_*.
 
-begin;
 
 -- 1. Solo contar movimientos de caja asociados explícitamente al turno.
 do $migration$
@@ -155,7 +154,6 @@ begin
 end
 $migration$;
 
-commit;
 
 -- Verificación posterior:
 -- select has_table_privilege('anon','public.cash_shifts','select');
@@ -166,3 +164,9 @@ commit;
 -- from pg_policies
 -- where schemaname='public'
 --   and tablename in ('cash_shifts','cash_shift_denominations');
+
+select public.sql_registrar_migracion(
+  '20261112000055_seguridad_confiabilidad_turnos_caja',
+  'Seguridad y confiabilidad del ciclo de caja',
+  '20261112000055_seguridad_confiabilidad_turnos_caja.sql'
+);

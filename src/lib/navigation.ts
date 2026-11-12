@@ -85,6 +85,7 @@ export const PAGE_LABELS: Record<string, string> = {
   accsetup: 'Config. contable',
   accclose: 'Cierre de libros',
   taxes: 'Impuestos',
+  dian_compliance: 'Centro DIAN',
   erpbridge: 'Migración Siigo y Loggro',
   support: 'Soporte y autorización',
   sqlcenter: 'Scripts SQL y Supabase',

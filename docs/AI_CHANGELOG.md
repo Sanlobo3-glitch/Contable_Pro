@@ -5,6 +5,43 @@
 
 ---
 
+## [2026-11-13] — Fase 3: Blindaje del Ciclo Comercial, Caja, Multipagos y Contabilización Automática NIIF
+
+- **Fase o tarea:** Fase 3 (Blindaje transaccional de turnos de caja, multipagos atómicos en mostrador, compatibilidad con cartera y contabilización automática NIIF en `acc_*`).
+- **Problema original:**
+  1. `caja_abrir_turno` consultaba `warehouses.is_active` cuando la columna real de `public.warehouses` es `active`, y varias RPCs críticas carecían de `search_path` seguro fijado.
+  2. El POS (`Mostrador.tsx`) no permitía dividir una venta en múltiples medios de pago en una sola transacción ACID ni enviar los desgloses antes del trigger contable `acc_post_sale`.
+  3. Cartera (`_sale_balance`, `_customer_owed`, `cartera_clientes`, `cartera_cliente`, `registrar_abono`) y `acc_post_sale` solo contemplaban `sales.payment_method`, sin calcular el saldo fiado parcial cuando una venta incluía pagos mixtos en `sale_payments`, y los abonos/ventas no estampaban `shift_id` de forma consistente.
+  4. `CashShiftModal.tsx` no priorizaba los totales autoritativos devueltos por `caja_arqueo_ciego`, y `Cartera.tsx` mostraba un error como notificación neutra (`flash`) en lugar de alerta de error (`flashError`).
+- **Diagnóstico confirmado:**
+  - Verificación directa en PostgreSQL (`bcwtopujsjefaskoqlhr`) confirmó `warehouses.active`, restricción `sales_valores_chk` en `sales.payment_method`, orden de disparo del trigger `acc_sales_after_update -> acc_post_sale` al actualizar `sales.items`, y presencia de las migraciones concurrentes `055`–`060` en `origin/main` (`6b7a957`).
+- **Archivos creados, modificados o eliminados:**
+  - Creado: `supabase/migrations/20261113000061_consolidar_blindaje_caja_multipagos_contabilidad.sql`
+  - Modificado: `src/pages/Mostrador.tsx` (selector y líneas dinámicas de Multipago, validaciones de suma/cupo/vuelto, desglose en recibo, ticket HTML y WhatsApp)
+  - Modificado: `src/services/cashShiftService.ts` (`SalePaymentInput`, `registrarPagosVenta` y retorno autoritativo completo de `submitBlindArqueo`)
+  - Modificado: `src/components/CashShiftModal.tsx` (uso prioritario de totales autoritativos `res.sales_*`)
+  - Modificado: `src/lib/offlineQueue.ts` (enrutamiento de ventas multipago hacia `registrar_venta_multipago` con `shift_id`)
+  - Modificado: `src/lib/supabase.ts` (soporte demo local para `registrar_pagos_venta` y `registrar_venta_multipago`)
+  - Modificado: `src/pages/Cartera.tsx` (`flashError` en fallo de carga de detalle de cliente)
+  - Modificado: `supabase/MIGRATIONS.md`, `docs/RPC_CATALOG.md`, `docs/PROJECT_CONTEXT.md`, `docs/AI_CHANGELOG.md`
+- **Migraciones SQL creadas y estado de aplicación:**
+  - Migración `20261113000061_consolidar_blindaje_caja_multipagos_contabilidad.sql` **✅ Aplicada** en la base viva Supabase (`bcwtopujsjefaskoqlhr`) el 2026-11-13 (ID en `public.sql_migration_log`: `ba93ab62-fc88-4563-bb76-f6ce8fdde13e`).
+- **Cambios realizados en Supabase:**
+  - Corregido `caja_abrir_turno` (`warehouses.active = true`) y fijado `search_path = 'pg_catalog', 'public', 'pg_temp'`.
+  - Consolidadas `contabilizar_venta_automatica` y `registrar_pagos_venta` con `search_path` seguro y privilegios `anon`/`public` revocados.
+  - Actualizada `acc_post_sale` para generar débitos contables desglosados desde `sale_payments` (`efectivo`→Caja, `tarjeta`/`transferencia`→Bancos, `fiado`→CxC).
+  - Actualizadas `_sale_balance`, `_customer_owed`, `cartera_clientes`, `cartera_cliente`, `registrar_abono` y `registrar_venta` para soportar fiado parcial en `sale_payments` y registrar `shift_id` activo en `sales` y `cash_entries`.
+  - Creada RPC atómica `registrar_venta_multipago` con validación de bodega/stock/cupo, inserción previa en `sale_payments` e ingreso a `cash_entries` solo por la porción en efectivo.
+- **Pruebas ejecutadas y sus resultados:**
+  - Suite E2E en PostgreSQL (`DO $test$ ... ROLLBACK`): apertura de turno (`caja_abrir_turno`), venta multipago (4.000 efectivo + 3.500 transferencia + 2.500 fiado = 10.000), verificación de `sale_payments` (3 filas), `cash_entries` (4.000 con `shift_id`), `_sale_balance` (2.500), asiento NIIF balanceado (`status = 'contabilizado'`), abono en efectivo (1.000), totales en `caja_obtener_turno_activo` y cierre ciego idempotente en `caja_arqueo_ciego` con registro en `cash_shift_arqueos` (**Aprobado**).
+  - `npx tsc --noEmit`: 0 errores.
+  - `npm run build` (`vite build`): Compilación de producción exitosa sin errores.
+- **Limitaciones o pruebas pendientes:** Ninguna en el alcance de Fase 3.
+- **Commit y hash:** `af6ff8a` (`af6ff8aef465eea91a0ca65df552a038c9e2f0a6`)
+- **Estado final:** ✅ Completada y verificada.
+
+---
+
 ## [2026-11-12] — Fase 2B-2: Corrección Funcional del Formulario Contable Oficial (H-02 y H-03)
 
 - **Fase o tarea:** Fase 2B-2 (Correcciones H-02 Cuentas Imputables y H-03 Tipos de Origen en `JournalEntryForm.tsx`).

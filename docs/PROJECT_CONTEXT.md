@@ -3,7 +3,7 @@
 > **Documento Oficial de Memoria Técnica y Continuidad**  
 > **Repositorio:** `Sanlobo3-glitch/Contable_Pro`  
 > **Rama Oficial:** `main`  
-> **Última actualización:** 2026-11-12  
+> **Última actualización:** 2026-11-13  
 > **Estado:** Activo y en producción.
 
 ---
@@ -125,6 +125,7 @@ La fuente única de verdad para permisos en la aplicación es `src/lib/pagePermi
 | **Fase 2A** | `6de2f54` | Limpieza controlada del legado contable: eliminación de `accountingService.ts`, `useAccounting.ts`, formulario legacy `accounting/JournalEntryForm.tsx` y limpieza de scripts SQL legacy. |
 | **Fase 2B-1** | `4f88ee7` | Autorización controlada de escritura contable para el rol `contador`: creación de `public.can_write_accounting()` y actualización de `acc_create_entry` y `acc_post_entry` en Supabase (Migración `20261111000054`). |
 | **Fase 2B-2** | `12ec46c` | Corrección funcional en `JournalEntryForm.tsx`: restricción de selección exclusivamente a cuentas con `is_postable = true`, identificación y bloqueo de cuentas no imputables en modal PUC, y restricción de `sourceModule` exclusivamente a `'manual'` y `'ajuste'`. |
+| **Fase 3** | `af6ff8a` | Blindaje del ciclo comercial, caja y contabilización automática NIIF (`20261113000061`): corrección `warehouses.active` en `caja_abrir_turno`, endurecimiento `search_path`/`anon` en RPCs de caja y contabilización, soporte de `sale_payments` en `acc_post_sale` y cartera (`_sale_balance`, `_customer_owed`, `cartera_*`, `registrar_abono`), creación de `registrar_venta_multipago` ACID, UI Multipago en `Mostrador.tsx`, cola offline y arqueo autoritativo en `CashShiftModal.tsx`. |
 
 ---
 

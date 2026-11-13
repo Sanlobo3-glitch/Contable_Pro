@@ -467,6 +467,11 @@ export default function DianComplianceCenter({ onNavigate }: Props = {}) {
                 </div>
 
                 {/* Resultado a Pagar / a Favor */}
+                {f300.casilla_74_iva_descontable_compras === 0 && (
+                  <div className="p-3 bg-amber-50 border border-amber-300 rounded-xl text-xs text-amber-900">
+                    <strong>IVA descontable no disponible.</strong> Las compras aún no registran IVA, por eso las casillas 66, 74 y 83 salen en 0 y el saldo a pagar queda sobreestimado. No declare con este saldo sin verificarlo.
+                  </div>
+                )}
                 <div className="p-4 bg-slate-900 text-white rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div>
                     <span className="text-[10px] font-mono uppercase tracking-widest text-amber-400 font-bold">

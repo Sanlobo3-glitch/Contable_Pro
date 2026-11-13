@@ -1,81 +1,193 @@
-# Segunda Revisión Técnica y Diseño Corregido — Fase A: IVA de Compras (Solo Lectura)
-**Estado verificado antes de diseñar:**
-- **Repositorio:** Sanlobo3-glitch/Contable\_Pro, rama main en commit 16fe88e (## main...origin/main, árbol limpio, sin cambios locales).
-- **Bitácora public.sql\_migration\_log:** última migración aplicada 20261113000061\_consolidar\_blindaje\_caja\_multipagos\_contabilidad (2026-11-13 08:50:37 UTC). Siguientes números disponibles: **000062** y **000063**.
-- **Base viva:** 1 de 5 empresas tiene plan acc\_accounts (27 cuentas) y acc\_settings.active = true (f58a80c2-3b6d-42ba-b5bc-62fe87fcc334). Existen 1.1.04 (Inventario), 1.1.05 (Impuestos por recuperar) y 2.1.02 (Impuestos por pagar); **no** existen cuentas 240810 ni 240802. Se detectó una cuenta previa 4.1.03 Otros ingresos con type = 'activo' (prueba de que validar type y nature en tiempo de configuración y posteo es imprescindible).
-- **Sin modificaciones ejecutadas:** no se corrió DDL/DML ni se editaron archivos del repositorio.
+Tercera Revisión Técnica — Fase A: IVA de Compras (Contabilidad NIIF)
 
-***
-## 1. Diagnóstico de cada una de las 12 correcciones obligatorias
-- **Helper estricto de cuentas IVA (sin 240810/240802 ni fallback):**
-  - El diseño previo buscaba códigos rígidos o caía silenciosamente de iva\_pendiente a iva\_descontable.
-  - **Corrección:** public.\_acc\_resolve\_purchase\_vat\_account(p\_company uuid, p\_role text) lee exclusivamente acc\_settings.map->>'iva\_descontable' o acc\_settings.map->>'iva\_pendiente', sin ningún fallback cruzado ni códigos quemados (240810/240802). Verifica en public.acc\_accounts que id exista, company\_id = p\_company, active = true, is\_postable = true, type = 'activo' y nature = 'debito'. Si falla cualquier condición, hace RAISE EXCEPTION y revierte la transacción operativa/contable.
-- **Trazabilidad real para IVA llevado al costo (sin products.stock global):**
-  - **Hallazgo comprobado en PostgreSQL:** product\_lots y sale\_lot\_moves (\_lot\_consume) **solo** registran filas cuando products.tracks\_expiry = true. Para productos con tracks\_expiry = false (como el único producto comprado en la base viva), ni kardex, ni sales, ni warehouse\_movements guardan a qué purchase\_id pertenecía cada salida. Usar products.stock global sobreestimaría unidades en existencia si hubo compras previas o ventas intermedias.
-  - **Corrección en clasificar\_iva\_compra(..., 'costo'):**
-    - Con tracks\_expiry = true: usa product\_lots (source\_type = 'compra', source\_id = p\_purchase\_id) + sale\_lot\_moves (qty - restored) + purchase\_devolutions. Si bought - returned &lt;> qty\_remaining + sold\_net (hubo \_lot\_trim/ajustes no trazados), bloquea con excepción. Si cuadra, asigna exactamente qty\_remaining a Inventario y sold\_net a Costo de ventas.
-    - Con tracks\_expiry = false: verifica en kardex que después de la entrada de esa compra **no exista ningún otro movimiento** de ese producto (excepto devoluciones de esa misma compra) y products.stock >= bought - returned. Si hubo ventas, ajustes u otras compras posteriores, **bloquea la reclasificación automática 'pendiente' -> 'costo'** en lugar de estimar con products.stock. (En contraste, registrar una compra **desde el origen** como 'costo' sí es 100% determinista porque el 100% de las unidades entra en ese instante).
-- **Preservación de evidencia original (purchases.items intacto):**
-  - **Corrección:** purchases.items queda inmutable tras registrar\_compra (conserva base\_cost, cost, tax\_amount, prev\_cost, subtotal, lot\_code, expiry\_date). Se agregan columnas fiscales de resumen en purchases y una tabla dedicada public.purchase\_iva\_adjustments (con RLS por empresa) para registrar cada reclasificación, distribución inventario vs. costo de ventas, costos promedio antes/después y asiento asociado.
-- **Auditoría completa de anular\_compra:**
-  - **Problemas detectados en la definición actual (OID 25793):**
-    - Usa item->>'subtotal' al revertir products.cost; si hubo IVA capitalizado al costo (al crear o al reclasificar), resta de menos y deja el costo promedio inflado.
-    - acc\_trg\_purchases invoca acc\_reverse\_source(..., 'compra', new.id, ...), que **solo** revierte source\_event = 'registro', dejando vivo el asiento 'reclasificacion\_iva'.
-    - No bloquea si parte del IVA ya se fue a Costo de ventas (iva\_cost\_expense > 0) tras ventas previas (donde anular alteraría el costo promedio de otras compras si luego entró más stock).
-  - **Corrección:** anular\_compra bloquea si iva\_cost\_expense > 0, suma subtotal\_producto + iva\_capitalizado\_en\_inventario\_producto para revertir exactamente products.cost (sin bajar de 0 ni dañar compras ajenas), limpia product\_lots sin consumo previo, inserta kardex y cash\_entries por v\_purchase.total, y el trigger invoca acc\_reverse\_purchase\_entries para revertir **todos** los asientos contabilizado de esa compra ('registro' y 'reclasificacion\_iva') marcando purchase\_iva\_adjustments.status = 'reversado'.
-- **Preservación de registrar\_compra de 2, 3 y 4 argumentos sin ambigüedad:**
-  - **Trampa técnica evitada (42725 y 42P13):** En PostgreSQL no se puede agregar un parámetro sin DEFAULT después de parámetros con DEFAULT (42P13), y agregar DEFAULTs en los parámetros 5–8 rompe las llamadas de 2, 3 y 4 argumentos por ambigüedad (42725) en recibir\_orden\_compra y PostgREST.
-  - **Corrección:** Se extrae la lógica a public.\_registrar\_compra\_impl(...) (solo postgres/service\_role) y se dejan **ambas** sobrecargas de registrar\_compra sin eliminar la firma existente:
-    - registrar\_compra(p\_supplier\_id uuid, p\_items jsonb, p\_payment\_method text DEFAULT 'efectivo', p\_credit\_days integer DEFAULT NULL) — firma exacta actual preservada (2, 3 y 4 argumentos resuelven sin ambigüedad).
-    - registrar\_compra(p\_supplier\_id uuid, p\_items jsonb, p\_payment\_method text, p\_credit\_days integer, p\_tax numeric, p\_tax\_status text DEFAULT 'descontable', p\_tax\_rate numeric DEFAULT NULL, p\_tax\_included boolean DEFAULT false) — primeros 5 parámetros sin DEFAULT (sintaxis 100% válida y cero colisión con llamadas de 2–4 argumentos).
-    - Adicionalmente se expone registrar\_compra\_con\_iva(...) con DEFAULT en parámetros opcionales para invocaciones flexibles desde frontend futuro sin afectar el contrato histórico.
-- **Extensión compatible de acc\_seed\_template y acc\_save\_settings:**
-  - acc\_seed\_template('generico') conserva sus 23 cuentas y agrega 1.1.06 · IVA compras por clasificar (activo, debito, is\_postable = true) bajo 1.1. Para empresas que ya tenían el plan genérico (1.1 existente), la migración 000062 siembra 1.1.06 de forma idempotente si falta.
-  - acc\_save\_settings conserva sus 10 claves actuales y habilita iva\_descontable e iva\_pendiente, exigiendo type = 'activo' y nature = 'debito' además de active, is\_postable y pertenencia a la empresa (y permite limpiar claves opcionales cuando se envía ''). No se modifica acc\_activate para no exigir cuentas IVA a empresas sin compras gravadas.
-- **Corrección completa de dian\_calcular\_formulario\_300:**
-  - Conserva el chequeo is\_platform\_admin() / current\_company\_id() + profiles.active, y exactamente las 14 llaves que consume Form300Data en src/services/dianTaxService.ts.
-  - Corrige el bug coalesce(sum(p.subtotal), coalesce(sum(...))) por sum(coalesce(p.subtotal, p.total - coalesce(p.tax, 0))) fila a fila y filtra p.status = 'recibida'.
-  - casilla\_74\_iva\_descontable\_compras y casilla\_83\_total\_iva\_descontable incluyen **únicamente** compras con tax\_status = 'descontable' netas de devoluciones descontables; excluye 'pendiente' y 'costo', exponiendo sus desgloses en llaves aditivas (iva\_compras\_pendiente, iva\_compras\_costo, compras\_sin\_iva, etc.).
-- **acc\_reconcile() completo (sin omisiones):**
-  - Corrige el rubro compras para comparar el **costo neto capitalizado en inventario** (base + IVA 'costo' no consumido en gasto, en lugar de purchases.total bruto que mezclaba IVA descontable/pendiente) contra el débito neto a inventario en source\_type = 'compra'.
-  - Conserva intactos todos los rubros operativos existentes (ventas, compras\_pendientes, devoluciones\_\*, gastos\_pendientes, ajustes\_pendientes, caja, caja\_pendiente, inventario, cartera, abonos\_pendientes, cuentas\_por\_pagar, pagos\_proveedor\_pendientes) y agrega filas dedicadas para iva\_compras\_descontable, iva\_compras\_pendiente e iva\_compras\_costo\_gasto.
-- **Devoluciones parciales con IVA (000063) + dependencia obligatoria en 000062:**
-  - Hoy registrar\_devolucion\_compra calcula v\_amount sobre items.subtotal y acredita todo contra Inventario sin tocar cuentas de IVA, además de envolver acc\_post\_purchase\_devolution en exception when others then null.
-  - **Separación segura:**
-    - En **000062**: registrar\_devolucion\_compra **bloquea** devoluciones de compras con coalesce(tax, 0) > 0 hasta que exista 000063 (verificando purchase\_devolutions.tax\_amount), y clasificar\_iva\_compra bloquea clasificar compras que ya tengan devoluciones si 000063 aún no está aplicada.
-    - En **000063**: verifica al inicio que 000062 esté aplicada; agrega subtotal, tax\_amount, tax\_status\_snapshot e inventory\_credit a purchase\_devolutions; calcula base e IVA proporcional con ajuste por centavos en la última unidad retornable; descuenta inventory\_credit de products.cost e Inventario, revierte tax\_amount en iva\_descontable / iva\_pendiente (si no era 'costo'), y revierte correctamente en anular\_devolucion\_compra (bloqueando anulación si la compra fue reclasificada fiscalmente después de la devolución).
-- **Seguridad y ACID:**
-  - Todas las funciones nuevas/modificadas son SECURITY DEFINER con SET search\_path explícito (pg\_catalog, public, pg\_temp o '' con prefijo public.), REVOKE ALL FROM PUBLIC, anon, GRANT EXECUTE mínimo requerido.
-  - acc\_period\_is\_open validado antes de registrar o revertir reclasificaciones; FOR UPDATE ordenado por product\_id para evitar deadlocks; tabla purchase\_iva\_adjustments protegida con RLS.
-- **Pruebas transaccionales (ROLLBACK):**
-  - Se incluye script completo ejecutable en bloque BEGIN; ... ROLLBACK; cubriendo los 8 escenarios críticos de compra, clasificación, trazabilidad, devolución, anulación, Form 300, conciliación y aislamiento multiempresa.
-- **Blindaje de Fase 3 sin efectos colaterales:**
-  - Confirmado por inspección directa: no se modifican sale\_payments, registrar\_venta, registrar\_venta\_multipago, cash\_shifts, cash\_shift\_arqueos, caja\_arqueo\_ciego, credit\_allocations, registrar\_abono, ni las reglas de RLS multiempresa de Fase 3.
+Estado de ejecución: Auditoría ejecutada estrictamente en modo de solo lectura sobre el repositorio Sanlobo3-glitch/Contable_Pro (rama main, origin/main en 22b5b17 que contiene el archivo Lee) y consultas SELECT directas sobre la base viva bcwtopujsjefaskoqlhr. No se ejecutó DDL/DML en Supabase, no se modificaron archivos, no se realizaron commits, push ni despliegues.
+A. Diagnóstico
+1. Qué fallaba en la versión anterior (Lee, segunda revisión)
 
-***
-## 2. Funciones completas actuales relevantes (resumen de firma y comportamiento en la base viva)
-- public.registrar\_compra(p\_supplier\_id uuid, p\_items jsonb, p\_payment\_method text DEFAULT 'efectivo', p\_credit\_days integer DEFAULT NULL) RETURNS uuid (OID 27412): usa \_ctx(array&#91;'admin','dueno'&#93;), actualiza products.stock/cost, inserta kardex, product\_lots (si tracks\_expiry), purchases (sin subtotal ni tax todavía) y cash\_entries si efectivo.
-- public.anular\_compra(p\_purchase\_id uuid) RETURNS uuid (OID 25793): valida purchase\_devolutions, supplier\_allocations, product\_lots.qty\_remaining &lt; qty\_initial; revierte products.cost usando solo item->>'subtotal' y actualiza status = 'anulada'.
-- public.acc\_post\_purchase(p\_p purchases, p\_estimated boolean DEFAULT false) RETURNS uuid (OID 26142): debita s.map->>'inventario' por p\_p.total completo sin separar IVA.
-- public.acc\_trg\_purchases() RETURNS trigger (OID 26145): al pasar old.items vacío a no vacío postea acc\_post\_purchase(new); al pasar a 'anulada' solo llama acc\_reverse\_source(new.company\_id, 'compra', new.id, ...).
-- public.acc\_seed\_template(p\_template text) (OID 26086) y public.acc\_save\_settings(p\_map jsonb) (OID 26137): llegan hasta 1.1.05 y 10 claves en map (sin 1.1.06, iva\_descontable, iva\_pendiente).
-- public.dian\_calcular\_formulario\_300(uuid, timestamptz, timestamptz) (OID 29875): suma coalesce(sum(p.subtotal), coalesce(sum(p.total - coalesce(p.tax,0)), 0)) y mezcla compras con IVA descontable, pendiente y al costo.
-- public.acc\_reconcile() (OID 26148): compara sum(purchases.total) contra sum(acc\_lines debit - credit en inventario).
-- public.registrar\_devolucion\_compra(...) (OID 27511), public.anular\_devolucion\_compra(uuid) (OID 27515), public.acc\_post\_purchase\_devolution(uuid) (OID 27510): calculan montos exclusivamente desde items base sin separar tax\_amount.
+    Fuga de aislamiento multiempresa en dian_calcular_formulario_300:
+    Lee conservó el atajo heredado de 000058: if not public.is_platform_admin() then if p_company_id is null or p_company_id is distinct from public.current_company_id() .... Un usuario que cumpla is_platform_admin() podía consultar el Formulario 300 de cualquier p_company_id ajena.
 
-(Las versiones propuestas a continuación reemplazan de forma íntegra las funciones intervenidas sin bloques abreviados ni comentarios de omisión.)
-***
-## 3. SQL completo corregido de las migraciones
-### Migración 20261113000062\_fase\_a\_iva\_compras\_contabilidad.sql
+    clasificar_iva_compra mutaba el estado fiscal y el costo sin garantizar el asiento contable:
+    Lee condicionaba la contabilización a if v_s.company_id is not null and v_s.active and v_s.start_date is not null then if v_pur_date >= v_s.start_date then ..., pero aun cuando la contabilidad estaba inactiva o la compra era anterior a start_date, ejecutaba igualmente UPDATE products, UPDATE product_lots, UPDATE purchases e INSERT INTO purchase_iva_adjustments con entry_id = NULL.
+
+    Evidencia incompleta en purchase_iva_adjustments:
+    Solo registraba created_by uuid. Si cambiaban posteriormente el nombre o el rol en profiles, se perdía la instantánea histórica del responsable; tampoco guardaba el costo reconocido previo ni el nuevo ni el subtotal/IVA originales.
+
+    Bug en acc_trg_purchases() y falta de trazabilidad al anular compras sin vencimiento (tracks_expiry = false):
+
+        acc_trg_purchases() salía al inicio si acc_settings.active estaba en false. Si una empresa contabilizó una compra con contabilidad activa y después la desactivó temporalmente, anular_compra pasaba la compra a 'anulada' dejando los asientos 'registro' y 'reclasificacion_iva' vigentes en 'contabilizado'.
+
+        En productos con tracks_expiry = false, anular_compra no verificaba movimientos posteriores en kardex (sale, ajuste u otra purchase). Si se compraban 10 u, se vendían 8 u y se recompraban 10 u (stock = 12 >= 10), permitía anular la primera compra pese a la mezcla de capas sin trazabilidad FIFO.
+
+        Además, anular_compra difería la validación del período contable hasta el trigger AFTER UPDATE en lugar de prevalidarla antes de tocar lotes, inventario y caja.
+
+    Trazabilidad insuficiente en registrar_devolucion_compra y anular_devolucion_compra (000063):
+
+        Al devolver productos con tracks_expiry = true, Lee descontaba product_lots sin guardar qué lot_id y qué cantidad exacta tomó cada devolución. Al anular la devolución (anular_devolucion_compra), restituía en orden inverso (order by expiry_date desc), pudiendo devolver unidades al lote equivocado si entre ambos eventos hubo una venta sobre otro lote.
+
+        En productos con tracks_expiry = false, no validaba salidas posteriores en kardex antes de devolver ni antes de anular.
+
+        En anular_devolucion_compra, no bloqueaba si v_pur.status = 'anulada'.
+
+    Inconsistencia grave en Formulario 300 y acc_reconcile() cuando una compra tuvo devolución previa y reclasificación posterior:
+
+        En Lee, si una compra con IVA pendiente (190) tenía una devolución parcial (38, quedando tax_status_snapshot = 'pendiente') y después se reclasificaba el saldo neto (152) a 'descontable', clasificar_iva_compra trasladaba 152 a iva_descontable. Sin embargo, dian_calcular_formulario_300 y acc_reconcile() sumaban purchases.tax completo (190) para p.tax_status = 'descontable' y solo restaban devoluciones con tax_status_snapshot = 'descontable' (0), sobredeclarando 38 en DIAN y generando falsa diferencia de +38 en conciliación.
+
+        Asimismo, dian_calcular_formulario_300 filtraba siempre por p.created_at e ignoraba la fecha efectiva de clasificación (purchase_iva_adjustments.created_at) cuando la factura se recibía/reclasificaba en un bimestre posterior, y no advertía cuando existían documentos del período sin contabilizar.
+
+    Defectos temporales y de asientos reversados en acc_reconcile():
+
+        En iva_compras_descontable e iva_compras_pendiente, Lee comparaba compras operativas desde s.start_date contra movimientos contables de toda la historia (sin e.entry_date >= s.start_date) e incluía e.status in ('contabilizado', 'reversado') sin filtrar source_type ni separar compras originales, reclasificaciones, devoluciones y costo de ventas.
+
+    Bug de detección intratransaccional en kardex.created_at y cálculo de IVA sobre p_tax = NULL:
+
+        En PostgreSQL, now() (usado por kardex.created_at) es constante durante toda una transacción (transaction_timestamp()). Usar k.created_at > v_k_ts no detecta ventas ni movimientos ejecutados en la misma transacción (por ejemplo en bloques de prueba ROLLBACK o triggers encadenados).
+
+        En registrar_compra(8 args), coalesce(p_tax, 0) convertía NULL en 0 antes de _registrar_compra_impl, impidiendo calcular v_tax a partir de p_tax_rate cuando p_tax se omitía con p_tax_included = false, y no rechazaba v_tax > 0 con v_subtotal <= 0.
+
+2. Qué queda corregido en esta tercera revisión (v3)
+
+    Aislamiento estricto multiempresa: Eliminado el bypass de is_platform_admin() en dian_calcular_formulario_300; toda consulta exige auth.uid(), profiles.active = true y p_company_id = current_company_id(). RLS de purchase_iva_adjustments y purchase_devolution_lots restringido a current_company_id().
+
+    Precondiciones atómicas obligatorias en clasificar_iva_compra: Antes de modificar products, product_lots, purchases o purchase_iva_adjustments, valida contabilidad activa (acc_settings.active = true), v_pur_date >= s.start_date, existencia de asiento 'registro' 'contabilizado', ausencia de reclasificación activa previa, período abierto y validez estricta (activo/debito/active/is_postable) de todas las cuentas requeridas (incluyendo inventario y costo_ventas si aplica).
+
+    Evidencia inmutable: purchase_iva_adjustments registra created_by, created_by_name, created_by_role, original_subtotal, original_tax, previous_recognized_cost y new_recognized_cost sin tocar purchases.items.
+
+    Reversión contable garantizada al anular (acc_trg_purchases + anular_compra): acc_trg_purchases ejecuta acc_reverse_purchase_entries siempre que existan asientos 'contabilizado' de la compra, aunque acc_settings.active se haya desactivado después; anular_compra prevalida período abierto y bloquea anulaciones de productos tracks_expiry = false cuando existan movimientos posteriores en kardex.
+
+    Trazabilidad exacta de lotes en devoluciones (000063): Nueva tabla purchase_devolution_lots que guarda los pares exactos (lot_id, quantity) descontados en registrar_devolucion_compra para que anular_devolucion_compra restaure exactamente los mismos lotes, y bloqueo en tracks_expiry = false cuando hubo salidas posteriores.
+
+    Formulario 300 fiscalmente coherente: Separa compras nacidas 'descontable' (created_at del período) y reclasificaciones 'pendiente' -> 'descontable' por su fecha efectiva (adj.created_at usando el monto neto ya ajustado por devoluciones previas), deduciendo solo devoluciones ocurridas estando 'descontable' (tax_status_snapshot = 'descontable'). Expone además contadores compras_sin_contabilizar_count, devoluciones_compra_sin_contabilizar_count y es_borrador_no_conciliado.
+
+    Conciliación contable (acc_reconcile()) consistente: Aplica límites temporales homogéneos (>= s.start_date) en operativo y contable, excluye asientos 'reversado' y 'reverso' en las comparaciones de movimientos vigentes (e.status = 'contabilizado' and e.source_type in (...)), y separa compras originales, reclasificaciones a inventario, devoluciones a inventario, IVA descontable, IVA pendiente, IVA imputado a costo de ventas e inventario remanente.
+
+    Detección robusta de kardex: Usa k.created_at >= v_k_ts (excluyendo solo la fila 'purchase' propia de esa compra y devoluciones propias permitidas), capturando movimientos tanto en transacciones posteriores como dentro de la misma transacción.
+
+3. Qué sigue siendo imposible sin una fase posterior
+
+    Trazabilidad por capas FIFO/PEPS para productos con tracks_expiry = false: Sin una tabla de capas de inventario por compra para artículos sin vencimiento, una vez existen ventas, ajustes o nuevas compras posteriores sobre el mismo SKU, no es posible atribuir qué porcentaje de la compra sigue en stock vs vendido. Por diseño seguro, tanto clasificar_iva_compra(..., 'costo') como anular_compra y registrar_devolucion_compra bloquean la automatización tras movimientos posteriores en kardex.
+
+    Anulación coordinada con warehouse_stock cuando la compra vino de Orden de Compra (recibir_orden_compra): anular_compra sigue actuando únicamente sobre products.stock global, no sobre warehouse_stock.
+
+    Envío de IVA desde la interfaz web y respaldo offline JS: El frontend (Purchases.tsx, PurchaseInvoiceScannerModal.tsx, src/services/dianTaxService.ts, src/lib/supabase.ts) requiere una fase posterior de UI para capturar p_tax/p_tax_status y mostrar la advertencia es_borrador_no_conciliado en el centro DIAN.
+
+B. Dependencias
+Tablas y columnas impactadas
+
+    public.purchases:
+
+        Existentes observadas: id, supplier_id, supplier_name, items, total, status, created_at, company_id, payment_method, due_date, credit_days, branch_id, warehouse_id, subtotal, tax.
+
+        Nuevas en 000062: tax_rate, tax_included, tax_status, recognized_cost, iva_cost_inventory, iva_cost_expense, iva_classified_at, iva_classified_by, iva_classification_note.
+
+    public.purchase_iva_adjustments (nueva en 000062):
+
+        Referencia companies(id), purchases(id), acc_entries(id).
+
+    public.purchase_devolutions:
+
+        Existentes observadas: id, company_id, purchase_id, supplier_id, supplier_name, product_id, product_name, quantity, unit_cost, amount, refund_method, reason, status, created_by, created_by_name, created_at.
+
+        Nuevas en 000063: subtotal, tax_amount, tax_status_snapshot, inventory_credit.
+
+    public.purchase_devolution_lots (nueva en 000063):
+
+        Referencia companies(id), purchase_devolutions(id), purchases(id), products(id), product_lots(id).
+
+    Tablas dependientes leídas/actualizadas sin cambio de DDL: public.products, public.product_lots, public.sale_lot_moves, public.kardex, public.cash_entries, public.suppliers, public.supplier_credit, public.supplier_allocations, public.supplier_payments, public.acc_accounts, public.acc_settings, public.acc_entries, public.acc_lines, public.acc_periods, public.acc_counters, public.cxp_settings, public.cxc_settings, public.sales, public.devolutions, public.credit_payments, public.expenses, public.profiles.
+
+Funciones, triggers y políticas RLS afectados
+
+    Triggers en purchases (observados en vivo):
+
+        acc_purchases_after_update (AFTER UPDATE -> acc_trg_purchases()): modificada acc_trg_purchases() para no saltarse reversiones si acc_settings.active = false.
+
+        purchases_audit, purchases_check_subscription, trg_company_subscription_guard: intactos.
+
+    Triggers en acc_entries / acc_lines: acc_entries_guard y acc_lines_guard intactos; se respetan todas sus invariantes (borrador -> insertar líneas -> contabilizado -> reversado).
+
+    Funciones modificadas en 000062:
+
+        acc_seed_template(text)
+
+        acc_save_settings(jsonb)
+
+        _acc_resolve_purchase_vat_account(uuid, text) (nueva)
+
+        _registrar_compra_impl(...) (nueva)
+
+        registrar_compra(uuid, jsonb, text, integer) (preservada sin ambigüedad)
+
+        registrar_compra(uuid, jsonb, text, integer, numeric, text, numeric, boolean) (nueva sobrecarga)
+
+        registrar_compra_con_iva(...) (nueva)
+
+        acc_post_purchase(purchases, boolean)
+
+        acc_reverse_purchase_entries(uuid, uuid, text) (nueva)
+
+        acc_trg_purchases()
+
+        clasificar_iva_compra(uuid, text, text) (nueva)
+
+        anular_compra(uuid)
+
+        registrar_devolucion_compra(uuid, uuid, numeric, text, text) (protección temporal en 000062)
+
+        dian_calcular_formulario_300(uuid, timestamptz, timestamptz)
+
+        acc_reconcile()
+
+    Funciones modificadas en 000063:
+
+        acc_post_purchase_devolution(uuid)
+
+        registrar_devolucion_compra(uuid, uuid, numeric, text, text)
+
+        anular_devolucion_compra(uuid)
+
+    Políticas RLS nuevas:
+
+        En purchase_iva_adjustments (000062): purchase_iva_adjustments_select (company_id = (select public.current_company_id())) y platform_admin_company_all (restringida a is_platform_admin() and company_id = (select public.current_company_id())).
+
+        En purchase_devolution_lots (000063): purchase_devolution_lots_select (company_id = (select public.current_company_id())) y platform_admin_company_all (misma restricción).
+
+Llamadores en SQL y Frontend verificados (compatibles sin ruptura)
+
+    Llamadores SQL en base viva:
+
+        recibir_orden_compra: invoca registrar_compra posicionalmente con 2, 3 y 4 argumentos -> resuelve de forma unívoca a la sobrecarga de 4 argumentos.
+
+        acc_post_pending: invoca acc_post_purchase(q, true) y acc_post_purchase_devolution(pd.id) -> se benefician automáticamente del soporte de IVA y validaciones estrictas.
+
+        acc_close_check / acc_close_period: leen acc_entries, acc_lines, purchases, purchase_devolutions -> compatibles sin cambios.
+
+    Llamadores Frontend observados:
+
+        src/pages/Purchases.tsx (registrar_compra, anular_compra)
+
+        src/components/PurchaseInvoiceScannerModal.tsx (registrar_compra)
+
+        src/pages/PurchaseOrders.tsx (recibir_orden_compra y fallback registrar_compra)
+
+        src/pages/Devolutions.tsx (registrar_devolucion_compra, anular_devolucion_compra)
+
+        src/services/dianTaxService.ts / src/pages/DianComplianceCenter.tsx (dian_calcular_formulario_300, recibe las 14 casillas de Form300Data intactas más campos informativos adicionales)
+
+        src/pages/AccountingSetup.tsx (acc_save_settings, acc_reconcile)
+
+C. Migración 000062 completa
+
+Archivo: supabase/migrations/20261113000062_fase_a_iva_compras_contabilidad.sql
 SQL
-```
+
 -- ============================================================================
--- MIGRACIÓN 000062: FASE A (NÚCLEO) — IVA DE COMPRAS, RECLASIFICACIÓN CON
+-- MIGRACIÓN 20261113000062: FASE A — IVA EN COMPRAS, RECLASIFICACIÓN CON
 -- TRAZABILIDAD ESTRICTA, ANULACIÓN SEGURA, FORMULARIO 300 Y CONCILIACIÓN
 -- Idempotente, sin BEGIN/COMMIT propios.
 -- ============================================================================
 
--- 1. Extensiones aditivas en public.purchases (sin alterar evidencia en items)
+-- 1. Extensiones aditivas en public.purchases (sin alterar purchases.items ni subtotal histórico)
 alter table public.purchases add column if not exists tax_rate numeric;
 alter table public.purchases add column if not exists tax_included boolean not null default false;
 alter table public.purchases add column if not exists tax_status text not null default 'sin_iva';
@@ -119,21 +231,25 @@ begin
   end if;
 end $$;
 
--- Backfill idempotente en filas previas sin sobrescribir purchases.items ni subtotal NULL histórico
+-- Backfill idempotente en registros previos sin alterar items ni subtotal NULL histórico
 update public.purchases
 set tax_status = case when coalesce(tax, 0) > 0 then 'descontable' else 'sin_iva' end,
     recognized_cost = greatest(0, coalesce(subtotal, total - coalesce(tax, 0)))
 where recognized_cost = 0
   and total > 0;
 
--- 2. Tabla de evidencia de reclasificaciones de IVA (preserva purchases.items intacto)
+-- 2. Tabla de evidencia inmutable de reclasificaciones de IVA
 create table if not exists public.purchase_iva_adjustments (
   id uuid primary key default gen_random_uuid(),
   company_id uuid not null references public.companies(id) on delete cascade,
   purchase_id uuid not null references public.purchases(id) on delete restrict,
   from_status text not null check (from_status in ('pendiente')),
   to_status text not null check (to_status in ('descontable', 'costo')),
+  original_subtotal numeric not null default 0 check (original_subtotal >= 0),
+  original_tax numeric not null default 0 check (original_tax >= 0),
   tax_amount numeric not null check (tax_amount >= 0),
+  previous_recognized_cost numeric not null default 0 check (previous_recognized_cost >= 0),
+  new_recognized_cost numeric not null default 0 check (new_recognized_cost >= 0),
   amount_to_inventory numeric not null default 0 check (amount_to_inventory >= 0),
   amount_to_expense numeric not null default 0 check (amount_to_expense >= 0),
   product_adjustments jsonb not null default '[]'::jsonb,
@@ -142,9 +258,18 @@ create table if not exists public.purchase_iva_adjustments (
   status text not null default 'aplicado' check (status in ('aplicado', 'reversado')),
   reason text,
   created_by uuid,
+  created_by_name text,
+  created_by_role text,
   created_at timestamptz not null default now(),
   reversed_at timestamptz
 );
+
+alter table public.purchase_iva_adjustments add column if not exists original_subtotal numeric not null default 0;
+alter table public.purchase_iva_adjustments add column if not exists original_tax numeric not null default 0;
+alter table public.purchase_iva_adjustments add column if not exists previous_recognized_cost numeric not null default 0;
+alter table public.purchase_iva_adjustments add column if not exists new_recognized_cost numeric not null default 0;
+alter table public.purchase_iva_adjustments add column if not exists created_by_name text;
+alter table public.purchase_iva_adjustments add column if not exists created_by_role text;
 
 create index if not exists idx_fk_purchase_iva_adj_company
   on public.purchase_iva_adjustments(company_id, created_at desc);
@@ -170,7 +295,7 @@ create policy platform_admin_purchase_iva_adjustments_all
   using (public.is_platform_admin() and company_id = (select public.current_company_id()))
   with check (public.is_platform_admin() and company_id = (select public.current_company_id()));
 
--- 3. Extender acc_seed_template con 1.1.06 e inyectar 1.1.06 a empresas con plan genérico ya sembrado
+-- 3. Plantilla contable genérica extendida con 1.1.06 (sin afectar planes personalizados existentes)
 create or replace function public.acc_seed_template(p_template text)
 returns integer
 language plpgsql
@@ -192,56 +317,67 @@ begin
     raise exception 'Tu empresa ya tiene cuentas; la plantilla solo se aplica a un plan vacío';
   end if;
 
-  for r in select * from (values
-    ('1', 'ACTIVO', 'activo', 'debito', null, false),
-    ('1.1', 'Activo corriente', 'activo', 'debito', '1', false),
-    ('1.1.01', 'Caja', 'activo', 'debito', '1.1', true),
-    ('1.1.02', 'Bancos', 'activo', 'debito', '1.1', true),
-    ('1.1.03', 'Cuentas por cobrar clientes', 'activo', 'debito', '1.1', true),
-    ('1.1.04', 'Inventario de mercancías', 'activo', 'debito', '1.1', true),
-    ('1.1.05', 'Impuestos por recuperar', 'activo', 'debito', '1.1', true),
-    ('1.1.06', 'IVA compras por clasificar', 'activo', 'debito', '1.1', true),
-    ('2', 'PASIVO', 'pasivo', 'credito', null, false),
-    ('2.1', 'Pasivo corriente', 'pasivo', 'credito', '2', false),
-    ('2.1.01', 'Cuentas por pagar proveedores', 'pasivo', 'credito', '2.1', true),
-    ('2.1.02', 'Impuestos por pagar', 'pasivo', 'credito', '2.1', true),
-    ('3', 'PATRIMONIO', 'patrimonio', 'credito', null, false),
-    ('3.1.01', 'Capital', 'patrimonio', 'credito', '3', true),
-    ('3.1.02', 'Resultados acumulados', 'patrimonio', 'credito', '3', true),
-    ('3.1.03', 'Resultado del ejercicio', 'patrimonio', 'credito', '3', true),
-    ('4', 'INGRESOS', 'ingreso', 'credito', null, false),
-    ('4.1.01', 'Ventas', 'ingreso', 'credito', '4', true),
-    ('4.1.02', 'Devoluciones en ventas', 'ingreso', 'debito', '4', true),
-    ('5', 'COSTOS', 'costo', 'debito', null, false),
-    ('5.1.01', 'Costo de ventas', 'costo', 'debito', '5', true),
-    ('6', 'GASTOS', 'gasto', 'debito', null, false),
-    ('6.1.01', 'Gastos operativos', 'gasto', 'debito', '6', true),
-    ('6.1.02', 'Ajustes de inventario', 'gasto', 'debito', '6', true)
-  ) as t(code, name, type, nature, parent, postable) loop
+  for r in
+    select * from (values
+      ('1', 'ACTIVO', 'activo', 'debito', null, false),
+      ('1.1', 'Activo corriente', 'activo', 'debito', '1', false),
+      ('1.1.01', 'Caja', 'activo', 'debito', '1.1', true),
+      ('1.1.02', 'Bancos', 'activo', 'debito', '1.1', true),
+      ('1.1.03', 'Cuentas por cobrar clientes', 'activo', 'debito', '1.1', true),
+      ('1.1.04', 'Inventario de mercancías', 'activo', 'debito', '1.1', true),
+      ('1.1.05', 'Impuestos por recuperar', 'activo', 'debito', '1.1', true),
+      ('1.1.06', 'IVA por clasificar en compras', 'activo', 'debito', '1.1', true),
+      ('2', 'PASIVO', 'pasivo', 'credito', null, false),
+      ('2.1', 'Pasivo corriente', 'pasivo', 'credito', '2', false),
+      ('2.1.01', 'Cuentas por pagar proveedores', 'pasivo', 'credito', '2.1', true),
+      ('2.1.02', 'Impuestos por pagar', 'pasivo', 'credito', '2.1', true),
+      ('3', 'PATRIMONIO', 'patrimonio', 'credito', null, false),
+      ('3.1.01', 'Capital', 'patrimonio', 'credito', '3', true),
+      ('3.1.02', 'Resultados acumulados', 'patrimonio', 'credito', '3', true),
+      ('3.1.03', 'Resultado del ejercicio', 'patrimonio', 'credito', '3', true),
+      ('4', 'INGRESOS', 'ingreso', 'credito', null, false),
+      ('4.1.01', 'Ventas', 'ingreso', 'credito', '4', true),
+      ('4.1.02', 'Devoluciones en ventas', 'ingreso', 'debito', '4', true),
+      ('5', 'COSTOS', 'costo', 'debito', null, false),
+      ('5.1.01', 'Costo de ventas', 'costo', 'debito', '5', true),
+      ('6', 'GASTOS', 'gasto', 'debito', null, false),
+      ('6.1.01', 'Gastos operativos', 'gasto', 'debito', '6', true),
+      ('6.1.02', 'Ajustes de inventario', 'gasto', 'debito', '6', true)
+    ) as t(code, name, type, nature, parent, postable)
+  loop
     insert into public.acc_accounts (company_id, code, name, type, nature, parent_id, is_postable)
     values (
-      v_c, r.code, r.name, r.type, r.nature,
+      v_c,
+      r.code,
+      r.name,
+      r.type,
+      r.nature,
       (select a.id from public.acc_accounts a where a.company_id = v_c and a.code = r.parent),
       r.postable
     );
     v_n := v_n + 1;
   end loop;
+
   return v_n;
 end
 $function$;
 
--- Sembrado aditivo idempotente de 1.1.06 en empresas con subcuenta 1.1 existente (no crea cuentas en empresas vacías)
-insert into public.acc_accounts (company_id, code, name, type, nature, parent_id, is_postable, active)
-select p.company_id, '1.1.06', 'IVA compras por clasificar', 'activo', 'debito', p.id, true, true
-from public.acc_accounts p
-where p.code = '1.1'
-  and p.type = 'activo'
-  and not exists (
-    select 1 from public.acc_accounts c
-    where c.company_id = p.company_id and c.code = '1.1.06'
-  );
+-- Inyectar 1.1.06 únicamente en empresas que ya tienen nodo padre '1.1' (activo/debito) de la plantilla genérica
+do $$
+begin
+  insert into public.acc_accounts (company_id, code, name, type, nature, parent_id, is_postable, active)
+  select p.company_id, '1.1.06', 'IVA por clasificar en compras', 'activo', 'debito', p.id, true, true
+  from public.acc_accounts p
+  where p.code = '1.1'
+    and p.type = 'activo'
+    and p.nature = 'debito'
+    and not exists (
+      select 1 from public.acc_accounts a
+      where a.company_id = p.company_id and a.code = '1.1.06'
+    );
+end $$;
 
--- 4. Extender acc_save_settings validando tipo activo y naturaleza debito para cuentas IVA de compras
+-- 4. Configuración contable con validación estricta de tipo y naturaleza para cuentas IVA
 create or replace function public.acc_save_settings(p_map jsonb)
 returns void
 language plpgsql
@@ -271,10 +407,14 @@ begin
       raise exception 'Clave de configuración desconocida: %', k;
     end if;
 
-    if coalesce(v, '') <> '' then
-      select * into v_acc
-      from public.acc_accounts
-      where id = v::uuid and company_id = v_c;
+    if coalesce(btrim(v), '') <> '' then
+      begin
+        select * into v_acc
+        from public.acc_accounts
+        where id = v::uuid and company_id = v_c;
+      exception when invalid_text_representation then
+        raise exception 'El identificador de cuenta para "%" no es un UUID válido', k;
+      end;
 
       if not found or not v_acc.is_postable or not v_acc.active then
         raise exception 'La cuenta elegida para "%" no existe, está inactiva o no admite movimientos', k;
@@ -290,14 +430,15 @@ begin
   end loop;
 
   select coalesce(map, '{}'::jsonb) into v_cur
-  from public.acc_settings where company_id = v_c;
-
+  from public.acc_settings
+  where company_id = v_c;
   v_cur := coalesce(v_cur, '{}'::jsonb);
+
   for k, v in select key, value from jsonb_each_text(p_map) loop
-    if coalesce(v, '') = '' then
+    if coalesce(btrim(v), '') = '' then
       v_cur := v_cur - k;
     else
-      v_cur := jsonb_set(v_cur, array[k], to_jsonb(v), true);
+      v_cur := jsonb_set(v_cur, array[k], to_jsonb(btrim(v)), true);
     end if;
   end loop;
 
@@ -309,7 +450,7 @@ begin
 end
 $function$;
 
--- 5. Helper estricto de resolución de cuenta IVA de compras (sin códigos quemados ni fallback entre cuentas)
+-- 5. Helper estricto de cuenta IVA en compras (cero códigos quemados, cero fallback entre cuentas)
 create or replace function public._acc_resolve_purchase_vat_account(
   p_company uuid,
   p_role text
@@ -351,15 +492,17 @@ begin
   select * into v_acc
   from public.acc_accounts
   where id = v_acc_id and company_id = p_company;
-
   if not found then
     raise exception 'La cuenta configurada en "%" no pertenece a esta empresa', v_key;
   end if;
+
   if not v_acc.active or not v_acc.is_postable then
-    raise exception 'La cuenta % (%) configurada en "%" está inactiva o no es imputable', v_acc.code, v_acc.name, v_key;
+    raise exception 'La cuenta % (%) configurada en "%" está inactiva o no es imputable',
+      v_acc.code, v_acc.name, v_key;
   end if;
+
   if v_acc.type <> 'activo' or v_acc.nature <> 'debito' then
-    raise exception 'La cuenta % (%) configurada en "%" debe ser activo de naturaleza debito (actual: % / %)',
+    raise exception 'La cuenta % (%) configurada en "%" debe ser tipo activo y naturaleza debito (actual: % / %)',
       v_acc.code, v_acc.name, v_key, v_acc.type, v_acc.nature;
   end if;
 
@@ -393,9 +536,9 @@ declare
   v_items_sum numeric := 0;
   v_line_count int := 0;
   v_idx int := 0;
-  v_tax numeric := round(coalesce(p_tax, 0), 2);
   v_tax_rate numeric := p_tax_rate;
   v_tax_incl boolean := coalesce(p_tax_included, false);
+  v_tax numeric;
   v_tax_status text := coalesce(nullif(btrim(coalesce(p_tax_status, '')), ''), 'sin_iva');
   v_subtotal numeric := 0;
   v_total numeric := 0;
@@ -417,34 +560,85 @@ declare
   v_days integer := 30;
   v_due date := null;
   v_owed numeric := 0;
+  v_s public.acc_settings%rowtype;
+  v_pur_date date;
 begin
   if v_pay not in ('efectivo', 'tarjeta', 'transferencia', 'credito') then
     raise exception 'Forma de pago de compra inválida';
   end if;
+
   if p_items is null or jsonb_typeof(p_items) <> 'array' or jsonb_array_length(p_items) = 0 then
     raise exception 'La compra no tiene items';
   end if;
-  if not public._es_finito(v_tax) or v_tax < 0 then
+
+  if p_tax is not null and (not public._es_finito(p_tax) or p_tax < 0) then
     raise exception 'El valor del IVA de compra no puede ser negativo ni inválido';
   end if;
+
   if v_tax_rate is not null and (not public._es_finito(v_tax_rate) or v_tax_rate < 0 or v_tax_rate > 100) then
     raise exception 'La tarifa de IVA debe estar entre 0 y 100';
   end if;
+
   if v_tax_status not in ('sin_iva', 'descontable', 'pendiente', 'costo') then
     raise exception 'Estado tributario de IVA inválido: %', v_tax_status;
   end if;
-  if v_tax = 0 and v_tax_status in ('descontable', 'pendiente', 'costo') then
-    if coalesce(v_tax_rate, 0) = 0 then
-      v_tax_status := 'sin_iva';
+
+  -- Prevalidar líneas antes de calcular base/IVA y antes de tocar inventario
+  for e in select x from jsonb_array_elements(p_items) x loop
+    v_qty := public._item_num(e, 'quantity');
+    v_raw_cost := public._item_num(e, 'cost');
+    if v_qty <= 0 or v_raw_cost < 0 then
+      raise exception 'Cantidad o costo inválido';
+    end if;
+    v_items_sum := v_items_sum + round(v_qty * v_raw_cost, 2);
+    v_line_count := v_line_count + 1;
+  end loop;
+  v_items_sum := round(v_items_sum, 2);
+
+  if p_tax is null then
+    if coalesce(v_tax_rate, 0) > 0 and v_items_sum > 0 then
+      if v_tax_incl then
+        v_tax := round(v_items_sum - (v_items_sum / (1 + v_tax_rate / 100.0)), 2);
+      else
+        v_tax := round(v_items_sum * (v_tax_rate / 100.0), 2);
+      end if;
+    else
+      v_tax := 0;
+    end if;
+  else
+    v_tax := round(p_tax, 2);
+    if v_tax = 0 and v_tax_incl and coalesce(v_tax_rate, 0) > 0 and v_items_sum > 0 then
+      v_tax := round(v_items_sum - (v_items_sum / (1 + v_tax_rate / 100.0)), 2);
     end if;
   end if;
-  if v_tax > 0 and v_tax_status = 'sin_iva' then
-    raise exception 'Una compra con IVA > 0 requiere estado descontable, pendiente o costo';
+
+  if v_tax_incl then
+    if v_tax > v_items_sum then
+      raise exception 'El IVA incluido (%) no puede superar el total bruto (%)', v_tax, v_items_sum;
+    end if;
+    v_total := v_items_sum;
+    v_subtotal := round(v_total - v_tax, 2);
+  else
+    v_subtotal := v_items_sum;
+    v_total := round(v_subtotal + v_tax, 2);
+  end if;
+
+  if v_tax = 0 then
+    v_tax_status := 'sin_iva';
+  else
+    if v_subtotal <= 0 then
+      raise exception 'No se puede registrar IVA > 0 sobre base gravable igual o menor a 0';
+    end if;
+    if v_tax_status = 'sin_iva' then
+      raise exception 'Una compra con IVA > 0 requiere estado descontable, pendiente o costo';
+    end if;
   end if;
 
   if p_supplier_id is not null then
     select name into v_sup from public.suppliers where id = p_supplier_id and company_id = v_co;
-    if not found then raise exception 'Proveedor no existe'; end if;
+    if not found then
+      raise exception 'Proveedor no existe';
+    end if;
   end if;
 
   if v_pay = 'credito' then
@@ -457,7 +651,10 @@ begin
         into v_limit, v_days
         from public.supplier_credit
         where supplier_id = p_supplier_id and company_id = v_co;
-      if not found then v_limit := 0; v_days := 30; end if;
+      if not found then
+        v_limit := 0;
+        v_days := 30;
+      end if;
     end if;
     if p_credit_days is not null then
       if p_credit_days < 0 or p_credit_days > 365 then
@@ -468,37 +665,13 @@ begin
     v_due := public._co_today(v_co) + v_days;
   end if;
 
-  -- Prevalidar montos de líneas para calcular base exacta antes de mover stock
-  for e in select x from jsonb_array_elements(p_items) x loop
-    v_qty := public._item_num(e, 'quantity');
-    v_raw_cost := public._item_num(e, 'cost');
-    if v_qty <= 0 or v_raw_cost < 0 then
-      raise exception 'Cantidad o costo inválido';
+  -- Prevalidar configuración contable IVA antes de alterar inventario o caja cuando aplica contabilidad
+  select * into v_s from public.acc_settings where company_id = v_co;
+  if v_s.company_id is not null and v_s.active and v_s.start_date is not null then
+    v_pur_date := (now() at time zone v_s.timezone)::date;
+    if v_pur_date >= v_s.start_date and v_total > 0 and v_tax > 0 and v_tax_status in ('descontable', 'pendiente') then
+      perform public._acc_resolve_purchase_vat_account(v_co, v_tax_status);
     end if;
-    v_items_sum := v_items_sum + round(v_qty * v_raw_cost, 2);
-    v_line_count := v_line_count + 1;
-  end loop;
-  v_items_sum := round(v_items_sum, 2);
-
-  if v_tax_incl then
-    if v_tax = 0 and coalesce(v_tax_rate, 0) > 0 then
-      v_tax := round(v_items_sum - (v_items_sum / (1 + v_tax_rate / 100.0)), 2);
-    end if;
-    if v_tax > v_items_sum then
-      raise exception 'El IVA incluido (%) no puede superar el total bruto (%)', v_tax, v_items_sum;
-    end if;
-    v_total := v_items_sum;
-    v_subtotal := round(v_total - v_tax, 2);
-  else
-    v_subtotal := v_items_sum;
-    v_total := round(v_subtotal + v_tax, 2);
-  end if;
-
-  if v_tax > 0 and v_tax_status = 'sin_iva' then
-    raise exception 'Una compra con IVA calculado > 0 requiere tax_status descontable, pendiente o costo';
-  end if;
-  if v_tax = 0 then
-    v_tax_status := 'sin_iva';
   end if;
 
   insert into public.purchases (
@@ -522,8 +695,13 @@ begin
     v_qty := public._item_num(e, 'quantity');
     v_raw_cost := public._item_num(e, 'cost');
 
-    select * into v_prod from public.products where id = v_pid and company_id = v_co for update;
-    if not found then raise exception 'Producto no existe'; end if;
+    select * into v_prod
+    from public.products
+    where id = v_pid and company_id = v_co
+    for update;
+    if not found then
+      raise exception 'Producto no existe';
+    end if;
 
     if v_idx = v_line_count then
       v_line_base := v_rem_base;
@@ -538,7 +716,7 @@ begin
     v_rem_base := v_rem_base - v_line_base;
     v_rem_tax := v_rem_tax - v_line_tax;
 
-    -- Costo capitalizable al inventario: incluye IVA solo cuando tax_status = 'costo'
+    -- Costo capitalizable al inventario: solo incluye IVA si tax_status = 'costo'
     v_inv_add := v_line_base + case when v_tax_status = 'costo' then v_line_tax else 0 end;
     v_eff_unit_cost := round(v_inv_add / v_qty, 4);
 
@@ -549,7 +727,10 @@ begin
       v_new_cost := round(v_eff_unit_cost, 2);
     end if;
 
-    update public.products set stock = v_new, cost = v_new_cost where id = v_prod.id;
+    update public.products
+    set stock = v_new,
+        cost = v_new_cost
+    where id = v_prod.id;
 
     insert into public.kardex (
       company_id, product_id, product_name, type, quantity, balance, reference_type, reference_id
@@ -564,9 +745,14 @@ begin
         raise exception 'El producto "%" maneja vencimiento: indica la fecha de vencimiento del lote', v_prod.name;
       end if;
       v_exp := (e->>'expiry_date')::date;
-      if v_exp < public._co_today(v_co) then raise exception 'La fecha de vencimiento de "%" ya pasó', v_prod.name; end if;
-      if v_exp > date '2100-01-01' then raise exception 'Fecha de vencimiento inválida para "%"', v_prod.name; end if;
+      if v_exp < public._co_today(v_co) then
+        raise exception 'La fecha de vencimiento de "%" ya pasó', v_prod.name;
+      end if;
+      if v_exp > date '2100-01-01' then
+        raise exception 'Fecha de vencimiento inválida para "%"', v_prod.name;
+      end if;
       v_lot := coalesce(nullif(left(btrim(coalesce(e->>'lot_code', '')), 40), ''), 'S/L');
+
       insert into public.product_lots (
         company_id, product_id, lot_code, expiry_date, qty_initial, qty_remaining, cost, source_type, source_id
       ) values (
@@ -650,7 +836,7 @@ set search_path to 'pg_catalog', 'public', 'pg_temp'
 as $function$
   select public._registrar_compra_impl(
     p_supplier_id, p_items, coalesce(p_payment_method, 'efectivo'), p_credit_days,
-    coalesce(p_tax, 0), p_tax_status, p_tax_rate, coalesce(p_tax_included, false)
+    p_tax, p_tax_status, p_tax_rate, coalesce(p_tax_included, false)
   );
 $function$;
 
@@ -659,7 +845,7 @@ create or replace function public.registrar_compra_con_iva(
   p_items jsonb,
   p_payment_method text default 'efectivo'::text,
   p_credit_days integer default null::integer,
-  p_tax numeric default 0,
+  p_tax numeric default null::numeric,
   p_tax_status text default 'sin_iva'::text,
   p_tax_rate numeric default null::numeric,
   p_tax_included boolean default false
@@ -671,7 +857,7 @@ set search_path to 'pg_catalog', 'public', 'pg_temp'
 as $function$
   select public._registrar_compra_impl(
     p_supplier_id, p_items, coalesce(p_payment_method, 'efectivo'), p_credit_days,
-    coalesce(p_tax, 0), p_tax_status, p_tax_rate, coalesce(p_tax_included, false)
+    p_tax, p_tax_status, p_tax_rate, coalesce(p_tax_included, false)
   );
 $function$;
 
@@ -696,10 +882,14 @@ declare
   v_lines jsonb;
 begin
   select * into s from public.acc_settings where company_id = p_p.company_id;
-  if not found or not s.active or s.start_date is null then return null; end if;
+  if not found or not s.active or s.start_date is null then
+    return null;
+  end if;
 
   v_date := (p_p.created_at at time zone s.timezone)::date;
-  if v_date < s.start_date or p_p.total <= 0 then return null; end if;
+  if v_date < s.start_date or p_p.total <= 0 then
+    return null;
+  end if;
 
   v_inv := (s.map->>'inventario')::uuid;
   if v_inv is null then
@@ -711,7 +901,9 @@ begin
       select account_id into v_cred from public.cxp_settings where company_id = p_p.company_id;
     end if;
     if v_cred is null then
-      if p_estimated then return null; end if;
+      if p_estimated then
+        return null;
+      end if;
       raise exception 'Falta configurar la cuenta por pagar a proveedores para compras a crédito';
     end if;
     v_memo := 'Compra a crédito';
@@ -722,6 +914,7 @@ begin
     v_cred := (s.map->>'caja')::uuid;
     v_memo := 'Pago de compra (efectivo)';
   end if;
+
   if v_cred is null then
     raise exception 'Falta configurar la cuenta de % para contabilizar la compra', v_pay;
   end if;
@@ -732,24 +925,33 @@ begin
     v_vat_acc := public._acc_resolve_purchase_vat_account(p_p.company_id, v_status);
     v_lines := jsonb_build_array(
       jsonb_build_object('account_id', v_inv, 'debit', v_base, 'memo', 'Base inventario'),
-      jsonb_build_object('account_id', v_vat_acc, 'debit', v_tax,
-        'memo', case when v_status = 'descontable' then 'IVA descontable en compra' else 'IVA por clasificar en compra' end),
+      jsonb_build_object(
+        'account_id', v_vat_acc,
+        'debit', v_tax,
+        'memo', case when v_status = 'descontable' then 'IVA descontable en compra' else 'IVA por clasificar en compra' end
+      ),
       jsonb_build_object('account_id', v_cred, 'credit', p_p.total, 'memo', v_memo)
     );
   else
-    -- sin_iva o IVA llevado al costo desde origen: 100% de total a inventario
     v_lines := jsonb_build_array(
-      jsonb_build_object('account_id', v_inv, 'debit', p_p.total,
-        'memo', case when v_tax > 0 then 'Inventario (incluye IVA al costo)' else 'Inventario' end),
+      jsonb_build_object(
+        'account_id', v_inv,
+        'debit', p_p.total,
+        'memo', case when v_tax > 0 then 'Inventario (incluye IVA al costo)' else 'Inventario' end
+      ),
       jsonb_build_object('account_id', v_cred, 'credit', p_p.total, 'memo', v_memo)
     );
   end if;
 
   return public.acc_system_entry(
-    p_p.company_id, v_date,
+    p_p.company_id,
+    v_date,
     'Compra a ' || coalesce(p_p.supplier_name, 'Proveedor general') ||
       case when p_estimated then ' (registrada con retraso)' else '' end,
-    'compra', p_p.id, 'registro', 'C-' || substr(p_p.id::text, 1, 8),
+    'compra',
+    p_p.id,
+    'registro',
+    'C-' || substr(p_p.id::text, 1, 8),
     v_lines
   );
 end
@@ -794,10 +996,18 @@ begin
       company_id, number, entry_date, description, source_type, source_id,
       source_event, source_ref, reverses_entry_id, created_by
     ) values (
-      p_company, public.acc_next_number(p_company, 'reverso'), v_date,
+      p_company,
+      public.acc_next_number(p_company, 'reverso'),
+      v_date,
       'Reversión de ' || v_o.number || ': ' || p_reason,
-      'reverso', v_o.id, 'reverso', v_o.number, v_o.id, auth.uid()
-    ) returning id into v_new;
+      'reverso',
+      v_o.id,
+      'reverso',
+      v_o.number,
+      v_o.id,
+      auth.uid()
+    )
+    returning id into v_new;
 
     insert into public.acc_lines (entry_id, company_id, account_id, debit, credit, memo)
     select v_new, p_company, l.account_id, l.credit, l.debit, l.memo
@@ -830,19 +1040,25 @@ security definer
 set search_path to ''
 as $function$
 begin
+  -- Al anular, siempre revertir asientos contabilizados existentes aunque la contabilidad automática se haya desactivado después
+  if old.status <> 'anulada' and new.status = 'anulada' then
+    perform public.acc_reverse_purchase_entries(new.company_id, new.id, 'anulación de compra');
+    return new;
+  end if;
+
   if not exists (select 1 from public.acc_settings where company_id = new.company_id and active) then
     return new;
   end if;
+
   if jsonb_array_length(old.items) = 0 and jsonb_array_length(new.items) > 0 and new.status = 'recibida' then
     perform public.acc_post_purchase(new);
-  elsif old.status <> 'anulada' and new.status = 'anulada' then
-    perform public.acc_reverse_purchase_entries(new.company_id, new.id, 'anulación de compra');
   end if;
+
   return new;
 end
 $function$;
 
--- 10. Clasificación posterior de IVA ('pendiente' -> 'descontable' | 'costo')
+-- 10. Reclasificación posterior de IVA ('pendiente' -> 'descontable' | 'costo') con precondiciones atómicas
 create or replace function public.clasificar_iva_compra(
   p_purchase_id uuid,
   p_new_status text,
@@ -857,14 +1073,17 @@ declare
   v_co uuid := public._ctx(array['admin', 'dueno', 'admin_empresa', 'gerente', 'contador']);
   v_pur public.purchases%rowtype;
   v_s public.acc_settings%rowtype;
+  v_prof public.profiles%rowtype;
   v_has_dev_iva boolean;
   v_dev_count int := 0;
   v_pur_date date;
   v_reclass_date date;
   v_vat_pend uuid;
   v_vat_desc uuid;
-  v_inv_acc uuid;
-  v_cogs_acc uuid;
+  v_inv_acc_id uuid;
+  v_cogs_acc_id uuid;
+  v_inv_acc public.acc_accounts%rowtype;
+  v_cogs_acc public.acc_accounts%rowtype;
   v_entry_id uuid;
   v_adj_id uuid;
   v_lines jsonb := '[]'::jsonb;
@@ -893,29 +1112,107 @@ declare
   v_lot_share numeric;
   v_lot_cnt int;
   v_lot_idx int;
+  v_prev_rec_cost numeric;
+  v_new_rec_cost numeric;
 begin
   if p_new_status not in ('descontable', 'costo') then
     raise exception 'El nuevo estado fiscal debe ser descontable o costo';
   end if;
 
+  select * into v_prof from public.profiles where id = auth.uid();
+
   select * into v_pur
   from public.purchases
   where id = p_purchase_id and company_id = v_co
   for update;
+  if not found then
+    raise exception 'Compra no encontrada';
+  end if;
 
-  if not found then raise exception 'Compra no encontrada'; end if;
-  if v_pur.status <> 'recibida' then raise exception 'Solo se puede clasificar el IVA de compras recibidas'; end if;
+  if v_pur.status <> 'recibida' then
+    raise exception 'Solo se puede clasificar el IVA de compras recibidas';
+  end if;
   if v_pur.tax_status <> 'pendiente' then
     raise exception 'La compra tiene estado fiscal "%" (solo se reclasifican compras en estado pendiente)', v_pur.tax_status;
   end if;
   if coalesce(v_pur.tax, 0) <= 0 then
     raise exception 'La compra no tiene IVA pendiente por clasificar';
   end if;
-  if v_pur.items is null or jsonb_array_length(v_pur.items) = 0 then
+  if v_pur.items is null or jsonb_typeof(v_pur.items) <> 'array' or jsonb_array_length(v_pur.items) = 0 then
     raise exception 'La compra no tiene items válidos';
   end if;
 
-  -- Dependencia obligatoria de 000063 si existen devoluciones de compra activas
+  -- Precondición 1: ausencia de reclasificación activa previa incompatible
+  if exists (
+    select 1 from public.purchase_iva_adjustments
+    where company_id = v_co and purchase_id = v_pur.id and status = 'aplicado'
+  ) or exists (
+    select 1 from public.acc_entries
+    where company_id = v_co and source_type = 'compra' and source_id = v_pur.id
+      and source_event = 'reclasificacion_iva' and status = 'contabilizado'
+  ) then
+    raise exception 'Esta compra ya registra una reclasificación fiscal de IVA vigente';
+  end if;
+
+  -- Precondición 2: contabilidad automática obligatoriamente activa y dentro del rango contable
+  select * into v_s from public.acc_settings where company_id = v_co;
+  if not found or not v_s.active or v_s.start_date is null then
+    raise exception 'La contabilidad automática no está activa: no se puede reclasificar el IVA sin garantizar el asiento contable';
+  end if;
+
+  v_pur_date := (v_pur.created_at at time zone v_s.timezone)::date;
+  if v_pur_date < v_s.start_date then
+    raise exception 'La compra (%) es anterior a la fecha de inicio contable (%): no se puede reclasificar automáticamente',
+      v_pur_date, v_s.start_date;
+  end if;
+
+  -- Precondición 3: asiento original válido y período actual abierto
+  if not exists (
+    select 1 from public.acc_entries
+    where company_id = v_co and source_type = 'compra' and source_id = v_pur.id
+      and source_event = 'registro' and status = 'contabilizado'
+  ) then
+    raise exception 'La compra no tiene asiento contable inicial activo; contabiliza pendientes antes de reclasificar el IVA';
+  end if;
+
+  v_reclass_date := (now() at time zone v_s.timezone)::date;
+  if not public.acc_period_is_open(v_co, v_reclass_date) then
+    raise exception 'El periodo contable actual está cerrado: no se puede registrar la reclasificación del IVA';
+  end if;
+
+  -- Precondición 4: validar cuentas requeridas ANTES de modificar inventario, lotes o compra
+  v_vat_pend := public._acc_resolve_purchase_vat_account(v_co, 'pendiente');
+  if p_new_status = 'descontable' then
+    v_vat_desc := public._acc_resolve_purchase_vat_account(v_co, 'descontable');
+  else
+    begin
+      v_inv_acc_id := nullif(btrim(coalesce(v_s.map->>'inventario', '')), '')::uuid;
+    exception when others then
+      v_inv_acc_id := null;
+    end;
+    if v_inv_acc_id is null then
+      raise exception 'Falta configurar cuenta de inventario para reclasificar IVA al costo';
+    end if;
+    select * into v_inv_acc from public.acc_accounts where id = v_inv_acc_id and company_id = v_co;
+    if not found or not v_inv_acc.active or not v_inv_acc.is_postable or v_inv_acc.type <> 'activo' or v_inv_acc.nature <> 'debito' then
+      raise exception 'La cuenta de inventario configurada es inválida, inactiva, no imputable o de naturaleza incorrecta';
+    end if;
+
+    begin
+      v_cogs_acc_id := nullif(btrim(coalesce(v_s.map->>'costo_ventas', '')), '')::uuid;
+    exception when others then
+      v_cogs_acc_id := null;
+    end;
+    if v_cogs_acc_id is null then
+      raise exception 'Falta configurar cuenta de costo de ventas para reclasificar IVA al costo';
+    end if;
+    select * into v_cogs_acc from public.acc_accounts where id = v_cogs_acc_id and company_id = v_co;
+    if not found or not v_cogs_acc.active or not v_cogs_acc.is_postable or v_cogs_acc.type <> 'costo' or v_cogs_acc.nature <> 'debito' then
+      raise exception 'La cuenta de costo de ventas configurada es inválida, inactiva, no imputable o de naturaleza incorrecta';
+    end if;
+  end if;
+
+  -- Precondición 5: si existen devoluciones activas, exigir columnas de 000063
   v_has_dev_iva := exists (
     select 1 from information_schema.columns
     where table_schema = 'public' and table_name = 'purchase_devolutions' and column_name = 'tax_amount'
@@ -923,14 +1220,11 @@ begin
   select count(*) into v_dev_count
   from public.purchase_devolutions
   where company_id = v_co and purchase_id = v_pur.id and status = 'activa';
-
   if v_dev_count > 0 and not v_has_dev_iva then
     raise exception 'Esta compra tiene devoluciones activas: aplica primero la migración 000063 para reclasificar IVA con devoluciones.';
   end if;
 
-  select * into v_s from public.acc_settings where company_id = v_co;
-
-  -- Verificar trazabilidad y calcular montos por producto (sin modificar purchases.items)
+  -- Fase 1 (solo lectura + locks + validación completa de trazabilidad antes de mutar nada)
   for v_item in
     select
       (item->>'product_id')::uuid as product_id,
@@ -972,14 +1266,11 @@ begin
       end,
       2
     );
-
     if v_net_line_tax <= 0 then
       continue;
     end if;
 
     v_tot_tax := v_tot_tax + v_net_line_tax;
-    v_prev_avg := coalesce(v_prod.cost, 0);
-    v_new_avg := v_prev_avg;
     v_qty_inv := 0;
     v_qty_cogs := 0;
     v_iva_inv := 0;
@@ -1006,7 +1297,7 @@ begin
         v_qty_inv := v_lot_rem;
         v_qty_cogs := v_lot_sold;
       else
-        -- Sin vencimientos: solo es trazable si NO hubo ningún movimiento posterior distinto a devoluciones de esta compra
+        -- Sin lotes: exigir ausencia absoluta de otros movimientos en kardex >= timestamp de la compra
         select max(created_at) into v_k_ts
         from public.kardex
         where company_id = v_co and product_id = v_prod.id
@@ -1016,7 +1307,8 @@ begin
         from public.kardex k
         where k.company_id = v_co
           and k.product_id = v_prod.id
-          and k.created_at > coalesce(v_k_ts, v_pur.created_at)
+          and k.created_at >= coalesce(v_k_ts, v_pur.created_at)
+          and not (k.reference_type = 'purchase' and k.reference_id = v_pur.id)
           and not (
             k.reference_type = 'purchase_devolution'
             and exists (
@@ -1037,38 +1329,40 @@ begin
       v_iva_cogs := round(v_net_line_tax - v_iva_inv, 2);
       v_tot_inv := v_tot_inv + v_iva_inv;
       v_tot_cogs := v_tot_cogs + v_iva_cogs;
+    end if;
 
-      if v_iva_inv > 0 and v_prod.stock > 0 then
-        v_new_avg := round(((v_prod.stock * v_prev_avg) + v_iva_inv) / v_prod.stock, 2);
-        update public.products set cost = v_new_avg where id = v_prod.id;
+    v_prev_avg := coalesce(v_prod.cost, 0);
+    v_new_avg := v_prev_avg;
+    if p_new_status = 'costo' and v_iva_inv > 0 and v_prod.stock > 0 then
+      v_new_avg := round(((v_prod.stock * v_prev_avg) + v_iva_inv) / v_prod.stock, 2);
+      update public.products set cost = v_new_avg where id = v_prod.id;
 
-        if v_prod.tracks_expiry and v_lot_rem > 0 then
-          select count(*) into v_lot_cnt
+      if v_prod.tracks_expiry and v_qty_inv > 0 then
+        select count(*) into v_lot_cnt
+        from public.product_lots
+        where company_id = v_co and source_type = 'compra' and source_id = v_pur.id
+          and product_id = v_prod.id and qty_remaining > 0;
+        v_lot_rem_tax := v_iva_inv;
+        v_lot_idx := 0;
+        for v_lot in
+          select id, qty_remaining
           from public.product_lots
           where company_id = v_co and source_type = 'compra' and source_id = v_pur.id
-            and product_id = v_prod.id and qty_remaining > 0;
-          v_lot_rem_tax := v_iva_inv;
-          v_lot_idx := 0;
-          for v_lot in
-            select id, qty_remaining, cost
-            from public.product_lots
-            where company_id = v_co and source_type = 'compra' and source_id = v_pur.id
-              and product_id = v_prod.id and qty_remaining > 0
-            order by expiry_date asc, created_at asc, id asc
-            for update
-          loop
-            v_lot_idx := v_lot_idx + 1;
-            if v_lot_idx = v_lot_cnt then
-              v_lot_share := v_lot_rem_tax;
-            else
-              v_lot_share := round(v_iva_inv * (v_lot.qty_remaining / v_lot_rem), 2);
-            end if;
-            v_lot_rem_tax := v_lot_rem_tax - v_lot_share;
-            update public.product_lots
-            set cost = round(cost + (v_lot_share / qty_remaining), 4)
-            where id = v_lot.id;
-          end loop;
-        end if;
+            and product_id = v_prod.id and qty_remaining > 0
+          order by expiry_date asc, created_at asc, id asc
+          for update
+        loop
+          v_lot_idx := v_lot_idx + 1;
+          if v_lot_idx = v_lot_cnt then
+            v_lot_share := v_lot_rem_tax;
+          else
+            v_lot_share := round(v_iva_inv * (v_lot.qty_remaining / v_qty_inv), 2);
+          end if;
+          v_lot_rem_tax := v_lot_rem_tax - v_lot_share;
+          update public.product_lots
+          set cost = round(cost + (v_lot_share / qty_remaining), 4)
+          where id = v_lot.id;
+        end loop;
       end if;
     end if;
 
@@ -1090,64 +1384,43 @@ begin
     raise exception 'El saldo neto de IVA pendiente de esta compra es 0 (posiblemente ya devuelto en su totalidad)';
   end if;
 
-  if v_s.company_id is not null and v_s.active and v_s.start_date is not null then
-    v_pur_date := (v_pur.created_at at time zone v_s.timezone)::date;
-    if v_pur_date >= v_s.start_date then
-      if not exists (
-        select 1 from public.acc_entries
-        where company_id = v_co and source_type = 'compra' and source_id = v_pur.id
-          and source_event = 'registro' and status = 'contabilizado'
-      ) then
-        raise exception 'La compra no tiene asiento contable inicial activo; contabiliza pendientes antes de reclasificar el IVA';
-      end if;
-
-      v_reclass_date := (now() at time zone v_s.timezone)::date;
-      if not public.acc_period_is_open(v_co, v_reclass_date) then
-        raise exception 'El periodo contable actual está cerrado: no se puede registrar la reclasificación del IVA';
-      end if;
-
-      v_vat_pend := public._acc_resolve_purchase_vat_account(v_co, 'pendiente');
-
-      if p_new_status = 'descontable' then
-        v_vat_desc := public._acc_resolve_purchase_vat_account(v_co, 'descontable');
-        v_lines := jsonb_build_array(
-          jsonb_build_object('account_id', v_vat_desc, 'debit', v_tot_tax, 'memo', 'IVA compra confirmado descontable'),
-          jsonb_build_object('account_id', v_vat_pend, 'credit', v_tot_tax, 'memo', 'Reclasificación desde IVA por clasificar')
-        );
-      else
-        v_inv_acc := (v_s.map->>'inventario')::uuid;
-        v_cogs_acc := (v_s.map->>'costo_ventas')::uuid;
-        if v_tot_inv > 0 then
-          if v_inv_acc is null then raise exception 'Falta configurar cuenta de inventario'; end if;
-          v_lines := v_lines || jsonb_build_array(
-            jsonb_build_object('account_id', v_inv_acc, 'debit', v_tot_inv, 'memo', 'IVA no descontable capitalizado en inventario')
-          );
-        end if;
-        if v_tot_cogs > 0 then
-          if v_cogs_acc is null then raise exception 'Falta configurar cuenta de costo de ventas'; end if;
-          v_lines := v_lines || jsonb_build_array(
-            jsonb_build_object('account_id', v_cogs_acc, 'debit', v_tot_cogs, 'memo', 'IVA no descontable asignado a unidades ya vendidas')
-          );
-        end if;
-        v_lines := v_lines || jsonb_build_array(
-          jsonb_build_object('account_id', v_vat_pend, 'credit', v_tot_tax, 'memo', 'Reclasificación IVA por clasificar al costo')
-        );
-      end if;
-
-      v_entry_id := public.acc_system_entry(
-        v_co,
-        v_reclass_date,
-        'Reclasificación IVA compra C-' || substr(v_pur.id::text, 1, 8) || ' (' || p_new_status || ')',
-        'compra',
-        v_pur.id,
-        'reclasificacion_iva',
-        'RIVA-' || substr(v_pur.id::text, 1, 8),
-        v_lines
+  if p_new_status = 'descontable' then
+    v_lines := jsonb_build_array(
+      jsonb_build_object('account_id', v_vat_desc, 'debit', v_tot_tax, 'memo', 'IVA compra confirmado descontable'),
+      jsonb_build_object('account_id', v_vat_pend, 'credit', v_tot_tax, 'memo', 'Reclasificación desde IVA por clasificar')
+    );
+  else
+    if v_tot_inv > 0 then
+      v_lines := v_lines || jsonb_build_array(
+        jsonb_build_object('account_id', v_inv_acc.id, 'debit', v_tot_inv, 'memo', 'IVA no descontable capitalizado en inventario')
       );
     end if;
+    if v_tot_cogs > 0 then
+      v_lines := v_lines || jsonb_build_array(
+        jsonb_build_object('account_id', v_cogs_acc.id, 'debit', v_tot_cogs, 'memo', 'IVA no descontable asignado a unidades ya vendidas')
+      );
+    end if;
+    v_lines := v_lines || jsonb_build_array(
+      jsonb_build_object('account_id', v_vat_pend, 'credit', v_tot_tax, 'memo', 'Reclasificación IVA por clasificar al costo')
+    );
   end if;
 
-  -- Preserva purchases.items intacto; actualiza solo estado/totales fiscales y registra tabla de auditoría
+  v_entry_id := public.acc_system_entry(
+    v_co,
+    v_reclass_date,
+    'Reclasificación IVA compra C-' || substr(v_pur.id::text, 1, 8) || ' (' || p_new_status || ')',
+    'compra',
+    v_pur.id,
+    'reclasificacion_iva',
+    'RIVA-' || substr(v_pur.id::text, 1, 8),
+    v_lines
+  );
+
+  v_prev_rec_cost := coalesce(v_pur.recognized_cost, coalesce(v_pur.subtotal, v_pur.total - coalesce(v_pur.tax, 0)));
+  v_new_rec_cost := coalesce(v_pur.subtotal, v_pur.total - coalesce(v_pur.tax, 0)) +
+    case when p_new_status = 'costo' then v_tot_inv else 0 end;
+
+  -- Preserva purchases.items intacto; actualiza estado fiscal y guarda evidencia completa en purchase_iva_adjustments
   update public.purchases
   set tax_status = p_new_status,
       iva_classified_at = now(),
@@ -1155,18 +1428,31 @@ begin
       iva_classification_note = nullif(left(btrim(coalesce(p_reason, '')), 240), ''),
       iva_cost_inventory = case when p_new_status = 'costo' then v_tot_inv else 0 end,
       iva_cost_expense = case when p_new_status = 'costo' then v_tot_cogs else 0 end,
-      recognized_cost = coalesce(subtotal, total - coalesce(tax, 0)) +
-        case when p_new_status = 'costo' then v_tot_inv else 0 end
+      recognized_cost = v_new_rec_cost
   where id = v_pur.id and company_id = v_co;
 
   insert into public.purchase_iva_adjustments (
     company_id, purchase_id, from_status, to_status,
-    tax_amount, amount_to_inventory, amount_to_expense,
-    product_adjustments, entry_id, reason, created_by
+    original_subtotal, original_tax, tax_amount,
+    previous_recognized_cost, new_recognized_cost,
+    amount_to_inventory, amount_to_expense,
+    product_adjustments, entry_id, reason,
+    created_by, created_by_name, created_by_role
   ) values (
     v_co, v_pur.id, 'pendiente', p_new_status,
-    v_tot_tax, v_tot_inv, v_tot_cogs,
-    v_prod_adj, v_entry_id, nullif(left(btrim(coalesce(p_reason, '')), 240), ''), auth.uid()
+    coalesce(v_pur.subtotal, greatest(0, v_pur.total - coalesce(v_pur.tax, 0))),
+    coalesce(v_pur.tax, 0),
+    v_tot_tax,
+    v_prev_rec_cost,
+    v_new_rec_cost,
+    v_tot_inv,
+    v_tot_cogs,
+    v_prod_adj,
+    v_entry_id,
+    nullif(left(btrim(coalesce(p_reason, '')), 240), ''),
+    auth.uid(),
+    coalesce(nullif(btrim(v_prof.full_name), ''), v_prof.email),
+    v_prof.role
   )
   returning id into v_adj_id;
 
@@ -1174,7 +1460,7 @@ begin
 end
 $function$;
 
--- 11. anular_compra blindada: considera IVA capitalizado al costo y revierte todos los asientos
+-- 11. anular_compra blindada: trazabilidad estricta (con y sin lote), período abierto y reversión de IVA al costo
 create or replace function public.anular_compra(p_purchase_id uuid)
 returns uuid
 language plpgsql
@@ -1190,6 +1476,11 @@ declare
   v_rev_cost numeric;
   v_adj_inv numeric := 0;
   v_item_inv_total numeric := 0;
+  v_tz text;
+  v_rev_date date;
+  v_lot_count int := 0;
+  v_k_ts timestamptz;
+  v_other_moves int := 0;
 begin
   v_co := public._ctx(array['admin', 'dueno']);
 
@@ -1234,14 +1525,91 @@ begin
     end if;
   end if;
 
+  -- Prevalidar período contable abierto antes de mutar lotes, stock o caja
+  select timezone into v_tz from public.acc_settings where company_id = v_co;
+  v_rev_date := (now() at time zone coalesce(v_tz, 'America/Caracas'))::date;
   if exists (
-    select 1 from public.product_lots
-    where company_id = v_co and source_type = 'compra' and source_id = v_purchase.id
-      and qty_remaining < qty_initial
-  ) then
-    raise exception 'No se puede anular: ya se vendió o dio de baja parte de los lotes de esta compra';
+    select 1 from public.acc_entries
+    where company_id = v_co and source_type = 'compra' and source_id = v_purchase.id and status = 'contabilizado'
+  ) and not public.acc_period_is_open(v_co, v_rev_date) then
+    raise exception 'El periodo contable actual está cerrado: no se puede anular ni revertir el asiento de la compra';
   end if;
 
+  -- Fase 1: bloquear productos en orden determinístico y validar trazabilidad ANTES de modificar nada
+  for v_item in
+    select
+      (item->>'product_id')::uuid as product_id,
+      sum((item->>'quantity')::numeric) as quantity
+    from jsonb_array_elements(v_purchase.items) as item
+    group by (item->>'product_id')::uuid
+    order by (item->>'product_id')::uuid
+  loop
+    if v_item.quantity <= 0 then
+      raise exception 'La compra contiene una cantidad inválida';
+    end if;
+
+    select * into v_prod
+    from public.products
+    where id = v_item.product_id and company_id = v_co
+    for update;
+    if not found then
+      raise exception 'No se encontró un producto de esta compra';
+    end if;
+
+    if v_prod.stock < v_item.quantity then
+      raise exception 'No se puede anular: el inventario actual de "%" es %, pero se necesitan % unidades para revertir la compra',
+        v_prod.name, v_prod.stock, v_item.quantity;
+    end if;
+
+    if v_prod.tracks_expiry then
+      select count(*) into v_lot_count
+      from public.product_lots
+      where company_id = v_co and source_type = 'compra' and source_id = v_purchase.id and product_id = v_prod.id;
+
+      if v_lot_count = 0 then
+        raise exception 'No se puede anular "%": faltan los lotes originales de la compra para verificar trazabilidad', v_prod.name;
+      end if;
+
+      if exists (
+        select 1 from public.product_lots
+        where company_id = v_co and source_type = 'compra' and source_id = v_purchase.id
+          and product_id = v_prod.id and qty_remaining < qty_initial
+      ) or exists (
+        select 1
+        from public.sale_lot_moves m
+        join public.product_lots l on l.id = m.lot_id
+        where l.company_id = v_co and l.source_type = 'compra' and l.source_id = v_purchase.id
+          and l.product_id = v_prod.id and (m.qty - m.restored) > 0
+      ) then
+        raise exception 'No se puede anular: ya se vendió o dio de baja parte de los lotes de "%" de esta compra', v_prod.name;
+      end if;
+    else
+      select max(created_at) into v_k_ts
+      from public.kardex
+      where company_id = v_co and product_id = v_prod.id
+        and reference_type = 'purchase' and reference_id = v_purchase.id;
+
+      select count(*) into v_other_moves
+      from public.kardex k
+      where k.company_id = v_co
+        and k.product_id = v_prod.id
+        and k.created_at >= coalesce(v_k_ts, v_purchase.created_at)
+        and not (k.reference_type = 'purchase' and k.reference_id = v_purchase.id)
+        and not (
+          k.reference_type = 'purchase_devolution'
+          and exists (
+            select 1 from public.purchase_devolutions pd
+            where pd.id = k.reference_id and pd.purchase_id = v_purchase.id and pd.status = 'anulada'
+          )
+        );
+
+      if v_other_moves > 0 then
+        raise exception 'No se puede anular "%" sin control de lote: existen ventas, ajustes o recompras posteriores en kardex que mezclaron sus unidades', v_prod.name;
+      end if;
+    end if;
+  end loop;
+
+  -- Fase 2: mutaciones atómicas ya validadas
   update public.product_lots
   set qty_remaining = 0
   where company_id = v_co and source_type = 'compra' and source_id = v_purchase.id;
@@ -1257,22 +1625,10 @@ begin
     group by (item->>'product_id')::uuid
     order by (item->>'product_id')::uuid
   loop
-    if v_item.quantity <= 0 then
-      raise exception 'La compra contiene una cantidad inválida';
-    end if;
-
     select * into v_prod
     from public.products
-    where id = v_item.product_id and company_id = v_co
-    for update;
-    if not found then raise exception 'No se encontró un producto de esta compra'; end if;
+    where id = v_item.product_id and company_id = v_co;
 
-    if v_prod.stock < v_item.quantity then
-      raise exception 'No se puede anular: el inventario actual de "%" es %, pero se necesitan % unidades para revertir la compra',
-        v_prod.name, v_prod.stock, v_item.quantity;
-    end if;
-
-    -- Costo exacto que ingresó al inventario (base + IVA si tax_status='costo' o si fue reclasificado a inventario)
     select coalesce(sum((pa->>'iva_inventory')::numeric), 0)
     into v_adj_inv
     from public.purchase_iva_adjustments adj,
@@ -1285,7 +1641,7 @@ begin
 
     if v_adj_inv > 0 then
       v_item_inv_total := v_item.base_cost + v_adj_inv;
-    elsif v_purchase.tax_status = 'costo' and coalesce(v_purchase.iva_classified_at, null) is null then
+    elsif v_purchase.tax_status = 'costo' and v_purchase.iva_classified_at is null then
       v_item_inv_total := v_item.base_cost + case
         when v_item.explicit_tax > 0 then v_item.explicit_tax
         when coalesce(v_purchase.subtotal, 0) > 0 then round(coalesce(v_purchase.tax, 0) * (v_item.base_cost / v_purchase.subtotal), 2)
@@ -1307,7 +1663,8 @@ begin
     end if;
 
     update public.products
-    set stock = v_new, cost = v_rev_cost
+    set stock = v_new,
+        cost = v_rev_cost
     where id = v_prod.id and company_id = v_co;
 
     insert into public.kardex (
@@ -1321,9 +1678,12 @@ begin
     insert into public.cash_entries (
       company_id, type, amount, description, reference_type, reference_id
     ) values (
-      v_co, 'ingreso', v_purchase.total,
+      v_co,
+      'ingreso',
+      v_purchase.total,
       'Reversión por anulación de compra - ' || coalesce(v_purchase.supplier_name, 'Proveedor general'),
-      'purchase', v_purchase.id
+      'purchase',
+      v_purchase.id
     );
   end if;
 
@@ -1335,7 +1695,7 @@ begin
 end
 $function$;
 
--- 12. Protección obligatoria en 000062 sobre registrar_devolucion_compra mientras no exista 000063
+-- 12. Protección en 000062 sobre devoluciones de compras con IVA mientras no se aplique 000063
 create or replace function public.registrar_devolucion_compra(
   p_purchase_id uuid,
   p_product_id uuid,
@@ -1358,54 +1718,59 @@ declare
   v_unit_cost numeric := 0;
   v_amount numeric := 0;
   v_refund text;
+  v_new numeric;
+  v_rev_cost numeric;
   v_bal numeric := 0;
-  v_new numeric := 0;
-  v_rev_cost numeric := 0;
+  v_id uuid;
+  v_name text;
   v_lot_avail numeric := 0;
   v_left numeric := 0;
   v_take numeric := 0;
-  v_name text;
-  v_id uuid;
   r_lot record;
 begin
-  if not public._es_finito(p_quantity) or p_quantity <= 0 then
-    raise exception 'Cantidad inválida';
+  if p_quantity is null or p_quantity <= 0 then
+    raise exception 'La cantidad a devolver debe ser mayor que cero';
   end if;
-  if coalesce(btrim(p_reason), '') = '' then
-    raise exception 'El motivo de la devolución es obligatorio';
+  if nullif(btrim(coalesce(p_reason, '')), '') is null then
+    raise exception 'Indica el motivo de la devolución al proveedor';
   end if;
 
-  select * into v_pur from public.purchases where id = p_purchase_id and company_id = v_co for update;
-  if not found then raise exception 'La compra no existe'; end if;
-  if v_pur.status = 'anulada' then raise exception 'No se puede devolver sobre una compra anulada'; end if;
-  if v_pur.status <> 'recibida' then raise exception 'Solo se pueden devolver compras recibidas'; end if;
-
-  -- Guardia obligatoria: impide devolver compras con IVA hasta que se aplique migración 000063
+  select * into v_pur
+  from public.purchases
+  where id = p_purchase_id and company_id = v_co
+  for update;
+  if not found then
+    raise exception 'La compra no existe';
+  end if;
+  if v_pur.status = 'anulada' then
+    raise exception 'Esta compra está anulada';
+  end if;
   if coalesce(v_pur.tax, 0) > 0 then
-    raise exception 'Falta aplicar la migración 000063 (devoluciones de compra con IVA) para devolver compras con impuesto.';
+    raise exception 'Esta compra tiene IVA (%): aplica la migración 000063 para registrar devoluciones con IVA sin descuadres contables o fiscales.', v_pur.tax;
   end if;
 
-  select coalesce(sum((x->>'quantity')::numeric), 0),
-         coalesce(sum(coalesce((x->>'subtotal')::numeric, ((x->>'quantity')::numeric * (x->>'cost')::numeric))), 0)
-    into v_bought, v_bought_amt
-  from jsonb_array_elements(v_pur.items) x
-  where (x->>'product_id')::uuid = p_product_id;
+  select
+    coalesce(sum((it->>'quantity')::numeric), 0),
+    coalesce(sum(coalesce((it->>'subtotal')::numeric, (it->>'quantity')::numeric * (it->>'cost')::numeric)), 0)
+  into v_bought, v_bought_amt
+  from jsonb_array_elements(v_pur.items) it
+  where (it->>'product_id')::uuid = p_product_id;
 
   if v_bought <= 0 then
-    raise exception 'Ese producto no pertenece a la compra seleccionada';
+    raise exception 'Ese producto no pertenece a esta compra';
   end if;
 
-  select coalesce(sum(quantity), 0)
-    into v_returned
+  select coalesce(sum(quantity), 0) into v_returned
   from public.purchase_devolutions
   where company_id = v_co and purchase_id = p_purchase_id and product_id = p_product_id and status = 'activa';
 
-  if p_quantity > v_bought - v_returned then
+  if v_returned + p_quantity > v_bought + 0.0001 then
     raise exception 'Solo quedan % unidad(es) disponibles para devolver en esta compra', v_bought - v_returned;
   end if;
 
   v_unit_cost := round(v_bought_amt / v_bought, 4);
   v_amount := round(p_quantity * v_bought_amt / v_bought, 2);
+
   v_refund := coalesce(nullif(btrim(coalesce(p_refund_method, '')), ''), coalesce(v_pur.payment_method, 'efectivo'));
   if v_refund not in ('efectivo', 'tarjeta', 'transferencia', 'credito') then
     raise exception 'Forma de reintegro de proveedor inválida';
@@ -1417,12 +1782,18 @@ begin
     end if;
     v_bal := public._purchase_balance(p_purchase_id);
     if v_amount > v_bal + 0.005 then
-      raise exception 'La devolución (%) supera el saldo pendiente de esta compra (%).', v_amount, round(v_bal, 2);
+      raise exception 'La devolución (%) supera el saldo pendiente de esta compra (%). Elige reintegro en efectivo o transferencia, o anula antes el pago al proveedor.',
+        v_amount, round(v_bal, 2);
     end if;
   end if;
 
-  select * into v_prod from public.products where id = p_product_id and company_id = v_co for update;
-  if not found then raise exception 'El producto ya no existe'; end if;
+  select * into v_prod
+  from public.products
+  where id = p_product_id and company_id = v_co
+  for update;
+  if not found then
+    raise exception 'El producto ya no existe';
+  end if;
   if v_prod.stock < p_quantity then
     raise exception 'Stock actual insuficiente de "%" (en inventario: %, a devolver: %)', v_prod.name, v_prod.stock, p_quantity;
   end if;
@@ -1454,11 +1825,14 @@ begin
   v_rev_cost := v_prod.cost;
   if v_new > 0 then
     v_rev_cost := round(((v_prod.stock * coalesce(v_prod.cost, 0)) - v_amount) / v_new, 2);
-    if v_rev_cost <= 0 then v_rev_cost := v_prod.cost; end if;
+    if v_rev_cost <= 0 then
+      v_rev_cost := v_prod.cost;
+    end if;
   end if;
-  update public.products set stock = v_new, cost = v_rev_cost where id = v_prod.id;
 
+  update public.products set stock = v_new, cost = v_rev_cost where id = v_prod.id;
   select full_name into v_name from public.profiles where id = auth.uid();
+
   insert into public.purchase_devolutions (
     company_id, purchase_id, supplier_id, supplier_name,
     product_id, product_name, quantity, unit_cost, amount,
@@ -1467,7 +1841,8 @@ begin
     v_co, v_pur.id, v_pur.supplier_id, v_pur.supplier_name,
     v_prod.id, v_prod.name, p_quantity, round(v_unit_cost, 2), v_amount,
     v_refund, left(btrim(p_reason), 240), 'activa', auth.uid(), v_name
-  ) returning id into v_id;
+  )
+  returning id into v_id;
 
   insert into public.kardex (company_id, product_id, product_name, type, quantity, balance, reference_type, reference_id, note)
   values (v_co, v_prod.id, v_prod.name, 'salida', p_quantity, v_new, 'purchase_devolution', v_id, 'Devolución a proveedor: ' || left(btrim(p_reason), 120));
@@ -1487,7 +1862,8 @@ begin
 end
 $function$;
 
--- 13. Formulario 300 corregido (preserva autorización, estructura y 14 casillas; separa pendiente y costo)
+-- 13. Formulario 300 corregido: aislamiento estricto, fecha efectiva de clasificación,
+--     devoluciones previas/posteriores sin doble resta e indicador de conciliación pendiente
 create or replace function public.dian_calcular_formulario_300(
   p_company_id uuid,
   p_start_date timestamp with time zone,
@@ -1499,6 +1875,7 @@ security definer
 set search_path to 'public', 'pg_temp'
 as $function$
 declare
+  v_cur_co uuid := public.current_company_id();
   v_ing_grav_19 numeric := 0;
   v_ing_grav_5 numeric := 0;
   v_ing_excl numeric := 0;
@@ -1507,6 +1884,8 @@ declare
   v_dev_ventas numeric := 0;
   v_compras_grav_desc numeric := 0;
   v_iva_desc_compras numeric := 0;
+  v_reclass_base_desc numeric := 0;
+  v_reclass_iva_desc numeric := 0;
   v_compras_pend_base numeric := 0;
   v_iva_pend_compras numeric := 0;
   v_compras_costo_base numeric := 0;
@@ -1514,17 +1893,28 @@ declare
   v_compras_sin_iva numeric := 0;
   v_dev_base_desc numeric := 0;
   v_dev_iva_desc numeric := 0;
+  v_dev_base_pend numeric := 0;
   v_dev_iva_pend numeric := 0;
   v_iva_neto_desc numeric := 0;
   v_saldo_pagar numeric := 0;
   v_saldo_favor numeric := 0;
+  v_has_dev_iva boolean;
+  v_acc_active boolean := false;
+  v_acc_start date;
+  v_acc_tz text := 'America/Caracas';
+  v_unposted_pur int := 0;
+  v_unposted_dev int := 0;
 begin
-  if not public.is_platform_admin() then
-    if p_company_id is null
-       or p_company_id is distinct from public.current_company_id()
-       or not exists (select 1 from public.profiles pr where pr.id = auth.uid() and pr.active = true) then
-      raise exception 'No autorizado' using errcode = '42501';
-    end if;
+  -- Aislamiento multiempresa estricto: ningún rol ni admin de plataforma puede consultar otra empresa
+  if auth.uid() is null
+     or v_cur_co is null
+     or p_company_id is null
+     or p_company_id is distinct from v_cur_co
+     or not exists (
+       select 1 from public.profiles pr
+       where pr.id = auth.uid() and pr.active = true and pr.company_id = v_cur_co
+     ) then
+    raise exception 'No autorizado' using errcode = '42501';
   end if;
 
   select
@@ -1546,15 +1936,22 @@ begin
     and d.created_at >= p_start_date
     and d.created_at < p_end_date;
 
-  -- Cálculo fila por fila separado por tax_status
+  -- 1. Compras nacidas directamente como 'descontable' en el período + montos pendientes/costo/sin_iva del período
   select
-    coalesce(sum(case when p.tax_status = 'descontable' then coalesce(p.subtotal, p.total - coalesce(p.tax, 0)) else 0 end), 0),
-    coalesce(sum(case when p.tax_status = 'descontable' then coalesce(p.tax, 0) else 0 end), 0),
-    coalesce(sum(case when p.tax_status = 'pendiente' then coalesce(p.subtotal, p.total - coalesce(p.tax, 0)) else 0 end), 0),
-    coalesce(sum(case when p.tax_status = 'pendiente' then coalesce(p.tax, 0) else 0 end), 0),
-    coalesce(sum(case when p.tax_status = 'costo' then coalesce(p.subtotal, p.total - coalesce(p.tax, 0)) else 0 end), 0),
-    coalesce(sum(case when p.tax_status = 'costo' then coalesce(p.tax, 0) else 0 end), 0),
-    coalesce(sum(case when p.tax_status = 'sin_iva' then coalesce(p.subtotal, p.total - coalesce(p.tax, 0)) else 0 end), 0)
+    coalesce(sum(case when p.tax_status = 'descontable' and p.iva_classified_at is null
+      then coalesce(p.subtotal, p.total - coalesce(p.tax, 0)) else 0 end), 0),
+    coalesce(sum(case when p.tax_status = 'descontable' and p.iva_classified_at is null
+      then coalesce(p.tax, 0) else 0 end), 0),
+    coalesce(sum(case when p.tax_status = 'pendiente'
+      then coalesce(p.subtotal, p.total - coalesce(p.tax, 0)) else 0 end), 0),
+    coalesce(sum(case when p.tax_status = 'pendiente'
+      then coalesce(p.tax, 0) else 0 end), 0),
+    coalesce(sum(case when p.tax_status = 'costo'
+      then coalesce(p.subtotal, p.total - coalesce(p.tax, 0)) else 0 end), 0),
+    coalesce(sum(case when p.tax_status = 'costo'
+      then coalesce(p.tax, 0) else 0 end), 0),
+    coalesce(sum(case when p.tax_status = 'sin_iva'
+      then coalesce(p.subtotal, p.total - coalesce(p.tax, 0)) else 0 end), 0)
   into
     v_compras_grav_desc, v_iva_desc_compras,
     v_compras_pend_base, v_iva_pend_compras,
@@ -1566,28 +1963,114 @@ begin
     and p.created_at < p_end_date
     and p.status = 'recibida';
 
-  if exists (
+  -- 2. Reclasificaciones 'pendiente' -> 'descontable' por su FECHA EFECTIVA de clasificación (adj.created_at)
+  --    adj.tax_amount ya excluye devoluciones realizadas antes de reclasificar; se resta también la base devuelta previa.
+  v_has_dev_iva := exists (
     select 1 from information_schema.columns
     where table_schema = 'public' and table_name = 'purchase_devolutions' and column_name = 'tax_amount'
-  ) then
+  );
+
+  if v_has_dev_iva then
     execute $q$
       select
-        coalesce(sum(case when coalesce(tax_status_snapshot, 'sin_iva') = 'descontable' then coalesce(subtotal, amount) else 0 end), 0),
-        coalesce(sum(case when coalesce(tax_status_snapshot, 'sin_iva') = 'descontable' then coalesce(tax_amount, 0) else 0 end), 0),
-        coalesce(sum(case when coalesce(tax_status_snapshot, 'sin_iva') = 'pendiente' then coalesce(tax_amount, 0) else 0 end), 0)
-      from public.purchase_devolutions
-      where company_id = $1
-        and created_at >= $2
-        and created_at < $3
-        and status = 'activa'
-    $q$
-    into v_dev_base_desc, v_dev_iva_desc, v_dev_iva_pend
-    using p_company_id, p_start_date, p_end_date;
+        coalesce(sum(greatest(0,
+          coalesce(p.subtotal, p.total - coalesce(p.tax, 0)) -
+          coalesce((
+            select sum(coalesce(pd.subtotal, pd.amount))
+            from public.purchase_devolutions pd
+            where pd.company_id = adj.company_id
+              and pd.purchase_id = adj.purchase_id
+              and pd.status = 'activa'
+              and pd.tax_status_snapshot = 'pendiente'
+              and pd.created_at <= adj.created_at
+          ), 0)
+        )), 0),
+        coalesce(sum(adj.tax_amount), 0)
+      from public.purchase_iva_adjustments adj
+      join public.purchases p on p.id = adj.purchase_id
+      where adj.company_id = $1
+        and adj.status = 'aplicado'
+        and adj.to_status = 'descontable'
+        and p.status = 'recibida'
+        and adj.created_at >= $2
+        and adj.created_at < $3
+    $q$ into v_reclass_base_desc, v_reclass_iva_desc using p_company_id, p_start_date, p_end_date;
+
+    -- 3. Devoluciones ocurridas en el período cuando la compra ya era 'descontable' (o aún era 'pendiente')
+    execute $q$
+      select
+        coalesce(sum(case when coalesce(pd.tax_status_snapshot, 'sin_iva') = 'descontable'
+          then coalesce(pd.subtotal, pd.amount) else 0 end), 0),
+        coalesce(sum(case when coalesce(pd.tax_status_snapshot, 'sin_iva') = 'descontable'
+          then coalesce(pd.tax_amount, 0) else 0 end), 0),
+        coalesce(sum(case when coalesce(pd.tax_status_snapshot, 'sin_iva') = 'pendiente'
+          then coalesce(pd.subtotal, pd.amount) else 0 end), 0),
+        coalesce(sum(case when coalesce(pd.tax_status_snapshot, 'sin_iva') = 'pendiente'
+          then coalesce(pd.tax_amount, 0) else 0 end), 0)
+      from public.purchase_devolutions pd
+      join public.purchases p on p.id = pd.purchase_id
+      where pd.company_id = $1
+        and pd.created_at >= $2
+        and pd.created_at < $3
+        and pd.status = 'activa'
+        and p.status = 'recibida'
+    $q$ into v_dev_base_desc, v_dev_iva_desc, v_dev_base_pend, v_dev_iva_pend using p_company_id, p_start_date, p_end_date;
+  else
+    select
+      coalesce(sum(coalesce(p.subtotal, p.total - coalesce(p.tax, 0))), 0),
+      coalesce(sum(adj.tax_amount), 0)
+    into v_reclass_base_desc, v_reclass_iva_desc
+    from public.purchase_iva_adjustments adj
+    join public.purchases p on p.id = adj.purchase_id
+    where adj.company_id = p_company_id
+      and adj.status = 'aplicado'
+      and adj.to_status = 'descontable'
+      and p.status = 'recibida'
+      and adj.created_at >= p_start_date
+      and adj.created_at < p_end_date;
   end if;
 
-  v_compras_grav_desc := greatest(0, v_compras_grav_desc - v_dev_base_desc);
-  v_iva_neto_desc := greatest(0, v_iva_desc_compras - v_dev_iva_desc);
+  v_compras_grav_desc := greatest(0, v_compras_grav_desc + v_reclass_base_desc - v_dev_base_desc);
+  v_iva_neto_desc := greatest(0, v_iva_desc_compras + v_reclass_iva_desc - v_dev_iva_desc);
+  v_compras_pend_base := greatest(0, v_compras_pend_base - v_dev_base_pend);
   v_iva_pend_compras := greatest(0, v_iva_pend_compras - v_dev_iva_pend);
+
+  -- 4. Verificar si existen compras/devoluciones del período pendientes de contabilizar
+  select active, start_date, timezone
+  into v_acc_active, v_acc_start, v_acc_tz
+  from public.acc_settings
+  where company_id = p_company_id;
+
+  if coalesce(v_acc_active, false) and v_acc_start is not null then
+    select count(*) into v_unposted_pur
+    from public.purchases p
+    where p.company_id = p_company_id
+      and p.status = 'recibida'
+      and jsonb_array_length(p.items) > 0
+      and p.created_at >= p_start_date
+      and p.created_at < p_end_date
+      and (p.created_at at time zone v_acc_tz)::date >= v_acc_start
+      and not exists (
+        select 1 from public.acc_entries e
+        where e.company_id = p_company_id and e.source_type = 'compra'
+          and e.source_id = p.id and e.source_event = 'registro'
+          and e.status = 'contabilizado'
+      );
+
+    select count(*) into v_unposted_dev
+    from public.purchase_devolutions pd
+    where pd.company_id = p_company_id
+      and pd.status = 'activa'
+      and pd.created_at >= p_start_date
+      and pd.created_at < p_end_date
+      and (pd.created_at at time zone v_acc_tz)::date >= v_acc_start
+      and not exists (
+        select 1 from public.acc_entries e
+        where e.company_id = p_company_id and e.source_type = 'devolucion_compra'
+          and e.source_id = pd.id and e.source_event = 'registro'
+          and e.status = 'contabilizado'
+      );
+  end if;
 
   if (v_iva_gen_19 + v_iva_gen_5) >= v_iva_neto_desc then
     v_saldo_pagar := (v_iva_gen_19 + v_iva_gen_5) - v_iva_neto_desc;
@@ -1617,12 +2100,17 @@ begin
     'iva_compras_pendiente', round(v_iva_pend_compras, 0),
     'compras_iva_costo_base', round(v_compras_costo_base, 0),
     'iva_compras_costo', round(v_iva_costo_compras, 0),
-    'devoluciones_compras_iva_descontable', round(v_dev_iva_desc, 0)
+    'devoluciones_compras_iva_descontable', round(v_dev_iva_desc, 0),
+    'compras_sin_contabilizar_count', v_unposted_pur,
+    'devoluciones_compra_sin_contabilizar_count', v_unposted_dev,
+    'es_borrador_no_conciliado', (not coalesce(v_acc_active, false) or v_unposted_pur > 0 or v_unposted_dev > 0 or v_iva_pend_compras > 0)
   );
 end;
 $function$;
 
--- 14. Conciliación completa acc_reconcile (íntegra, sin bloques omitidos)
+-- 14. Conciliación contable completa acc_reconcile() con límites temporales homogéneos,
+--     exclusión de asientos reversados y separación entre compras, devoluciones, reclasificaciones,
+--     inventario remanente y costo de ventas
 create or replace function public.acc_reconcile()
 returns table(code text, label text, operational numeric, accounting numeric, difference numeric, note text)
 language plpgsql
@@ -1639,13 +2127,16 @@ declare
   x uuid;
   v_iva_desc uuid;
   v_iva_pend uuid;
+  v_dev_inv numeric := 0;
   v_dev_desc numeric := 0;
   v_dev_pend numeric := 0;
+  v_other_vat numeric := 0;
   v_has_dev_iva boolean;
 begin
   if not public.is_manager() or v_c is null then
     raise exception 'No autorizado';
   end if;
+
   select * into s from public.acc_settings where company_id = v_c;
   if not found or s.start_date is null then
     raise exception 'Configura y activa la contabilidad automática antes de conciliar';
@@ -1661,14 +2152,19 @@ begin
   from public.sales x2
   where x2.company_id = v_c and x2.status = 'completada'
     and (x2.created_at at time zone s.timezone)::date >= s.start_date;
+
   select coalesce(sum(l.credit - l.debit), 0) into b
   from public.acc_lines l join public.acc_entries e on e.id = l.entry_id
-  where e.company_id = v_c and e.source_type = 'venta' and e.status = 'contabilizado'
+  where e.company_id = v_c
+    and e.source_type = 'venta'
+    and e.status = 'contabilizado'
+    and e.entry_date >= s.start_date
     and l.account_id = (s.map->>'ventas')::uuid;
+
   code := 'ventas'; label := 'Ventas sin impuesto'; operational := a; accounting := b; difference := a - b;
   note := 'Debe ser 0'; return next;
 
-  -- 2. Ventas pendientes
+  -- 2. Ventas pendientes de contabilizar
   select count(*) into k from public.sales x2
   where x2.company_id = v_c and x2.status = 'completada' and jsonb_array_length(x2.items) > 0
     and (x2.created_at at time zone s.timezone)::date >= s.start_date
@@ -1680,10 +2176,10 @@ begin
   code := 'ventas_pendientes'; label := 'Ventas sin contabilizar (cantidad)'; operational := k; accounting := 0;
   difference := k; note := 'Si hay pendientes, usa "Contabilizar pendientes"'; return next;
 
-  -- 3. Compras recibidas (costo capitalizado en inventario)
+  -- 3. Compras recibidas originales (inventario inicial de compra, sin reclasificaciones ni devoluciones)
   select coalesce(sum(
     coalesce(x2.subtotal, x2.total - coalesce(x2.tax, 0))
-    + case when x2.tax_status = 'costo' then coalesce(x2.tax, 0) - coalesce(x2.iva_cost_expense, 0) else 0 end
+    + case when x2.tax_status = 'costo' and x2.iva_classified_at is null then coalesce(x2.tax, 0) else 0 end
   ), 0) into a
   from public.purchases x2
   where x2.company_id = v_c and x2.status = 'recibida'
@@ -1691,18 +2187,105 @@ begin
 
   select coalesce(sum(l.debit - l.credit), 0) into b
   from public.acc_lines l join public.acc_entries e on e.id = l.entry_id
-  where e.company_id = v_c and e.source_type = 'compra' and e.status = 'contabilizado'
+  where e.company_id = v_c
+    and e.source_type = 'compra'
+    and e.source_event = 'registro'
+    and e.status = 'contabilizado'
+    and e.entry_date >= s.start_date
     and l.account_id = (s.map->>'inventario')::uuid;
 
-  code := 'compras'; label := 'Compras recibidas (inventario neto)'; operational := a; accounting := b; difference := a - b;
-  note := 'Debe ser 0 (excluye IVA descontable/pendiente e IVA de unidades vendidas)'; return next;
+  code := 'compras'; label := 'Compras recibidas (registro original en inventario)';
+  operational := a; accounting := b; difference := a - b;
+  note := 'Debe ser 0 (excluye IVA descontable/pendiente y reclasificaciones posteriores)'; return next;
 
-  -- 4. IVA descontable de compras (neto de devoluciones activas si 000063 está aplicada)
+  -- 4. Reclasificaciones de IVA capitalizadas en inventario remanente
+  select coalesce(sum(adj.amount_to_inventory), 0) into a
+  from public.purchase_iva_adjustments adj
+  where adj.company_id = v_c
+    and adj.status = 'aplicado'
+    and adj.to_status = 'costo'
+    and (adj.created_at at time zone s.timezone)::date >= s.start_date;
+
+  select coalesce(sum(l.debit - l.credit), 0) into b
+  from public.acc_lines l join public.acc_entries e on e.id = l.entry_id
+  where e.company_id = v_c
+    and e.source_type = 'compra'
+    and e.source_event = 'reclasificacion_iva'
+    and e.status = 'contabilizado'
+    and e.entry_date >= s.start_date
+    and l.account_id = (s.map->>'inventario')::uuid;
+
+  if a > 0 or b <> 0 then
+    code := 'compras_reclasificacion_inv';
+    label := 'IVA reclasificado a inventario remanente';
+    operational := a; accounting := b; difference := a - b;
+    note := 'Debe ser 0 (IVA no descontable de unidades aún en inventario)'; return next;
+  end if;
+
+  -- 5. Devoluciones a proveedores (salida de inventario)
+  if v_has_dev_iva then
+    execute $q$
+      select coalesce(sum(coalesce(pd.inventory_credit,
+        case when pd.tax_status_snapshot = 'costo' then pd.amount else coalesce(pd.subtotal, pd.amount - coalesce(pd.tax_amount, 0)) end
+      )), 0)
+      from public.purchase_devolutions pd
+      where pd.company_id = $1 and pd.status = 'activa'
+        and (pd.created_at at time zone $2)::date >= $3
+    $q$ into v_dev_inv using v_c, s.timezone, s.start_date;
+  else
+    select coalesce(sum(pd.amount), 0) into v_dev_inv
+    from public.purchase_devolutions pd
+    where pd.company_id = v_c and pd.status = 'activa'
+      and (pd.created_at at time zone s.timezone)::date >= s.start_date;
+  end if;
+
+  select coalesce(sum(l.credit - l.debit), 0) into b
+  from public.acc_lines l join public.acc_entries e on e.id = l.entry_id
+  where e.company_id = v_c
+    and e.source_type = 'devolucion_compra'
+    and e.source_event = 'registro'
+    and e.status = 'contabilizado'
+    and e.entry_date >= s.start_date
+    and l.account_id = (s.map->>'inventario')::uuid;
+
+  if v_dev_inv > 0 or b <> 0 then
+    code := 'devoluciones_compra_inv';
+    label := 'Devoluciones a proveedor (crédito a inventario)';
+    operational := v_dev_inv; accounting := b; difference := v_dev_inv - b;
+    note := 'Debe ser 0'; return next;
+  end if;
+
+  -- 6. IVA reclasificado a costo de ventas (unidades ya vendidas, separado del inventario remanente)
+  select coalesce(sum(adj.amount_to_expense), 0) into a
+  from public.purchase_iva_adjustments adj
+  where adj.company_id = v_c
+    and adj.status = 'aplicado'
+    and adj.to_status = 'costo'
+    and (adj.created_at at time zone s.timezone)::date >= s.start_date;
+
+  select coalesce(sum(l.debit - l.credit), 0) into b
+  from public.acc_lines l join public.acc_entries e on e.id = l.entry_id
+  where e.company_id = v_c
+    and e.source_type = 'compra'
+    and e.source_event = 'reclasificacion_iva'
+    and e.status = 'contabilizado'
+    and e.entry_date >= s.start_date
+    and l.account_id = (s.map->>'costo_ventas')::uuid;
+
+  if a > 0 or b <> 0 then
+    code := 'iva_compras_costo_gasto';
+    label := 'IVA reclasificado a costo de ventas (unidades vendidas)';
+    operational := a; accounting := b; difference := a - b;
+    note := 'Debe ser 0 (diferenciado del inventario remanente)'; return next;
+  end if;
+
+  -- 7. IVA descontable neto vigente en compras (alineado en fechas y por estado vigente de la compra)
   begin
     v_iva_desc := nullif(btrim(coalesce(s.map->>'iva_descontable', '')), '')::uuid;
   exception when others then
     v_iva_desc := null;
   end;
+
   select coalesce(sum(x2.tax), 0) into a
   from public.purchases x2
   where x2.company_id = v_c and x2.status = 'recibida' and x2.tax_status = 'descontable'
@@ -1712,8 +2295,11 @@ begin
     execute $q$
       select coalesce(sum(pd.tax_amount), 0)
       from public.purchase_devolutions pd
+      join public.purchases p on p.id = pd.purchase_id
       where pd.company_id = $1 and pd.status = 'activa'
-        and pd.tax_status_snapshot = 'descontable'
+        and p.status = 'recibida'
+        and p.tax_status = 'descontable'
+        and (p.created_at at time zone $2)::date >= $3
         and (pd.created_at at time zone $2)::date >= $3
     $q$ into v_dev_desc using v_c, s.timezone, s.start_date;
   end if;
@@ -1722,24 +2308,30 @@ begin
   if v_iva_desc is not null then
     select coalesce(sum(l.debit - l.credit), 0) into b
     from public.acc_lines l join public.acc_entries e on e.id = l.entry_id
-    where e.company_id = v_c and e.status in ('contabilizado', 'reversado')
+    where e.company_id = v_c
+      and e.status = 'contabilizado'
+      and e.source_type in ('compra', 'devolucion_compra')
+      and e.entry_date >= s.start_date
       and l.account_id = v_iva_desc;
   else
     b := 0;
   end if;
+
   if a > 0 or b <> 0 or v_iva_desc is not null then
-    code := 'iva_compras_descontable'; label := 'IVA descontable en compras';
+    code := 'iva_compras_descontable';
+    label := 'IVA descontable en compras (neto vigente desde inicio)';
     operational := a; accounting := b; difference := a - b;
     note := case when v_iva_desc is null then 'Configura la cuenta iva_descontable en Config. contable' else 'Debe ser 0' end;
     return next;
   end if;
 
-  -- 5. IVA pendiente por clasificar en compras
+  -- 8. IVA pendiente neto vigente en compras
   begin
     v_iva_pend := nullif(btrim(coalesce(s.map->>'iva_pendiente', '')), '')::uuid;
   exception when others then
     v_iva_pend := null;
   end;
+
   select coalesce(sum(x2.tax), 0) into a
   from public.purchases x2
   where x2.company_id = v_c and x2.status = 'recibida' and x2.tax_status = 'pendiente'
@@ -1749,8 +2341,11 @@ begin
     execute $q$
       select coalesce(sum(pd.tax_amount), 0)
       from public.purchase_devolutions pd
+      join public.purchases p on p.id = pd.purchase_id
       where pd.company_id = $1 and pd.status = 'activa'
-        and pd.tax_status_snapshot = 'pendiente'
+        and p.status = 'recibida'
+        and p.tax_status = 'pendiente'
+        and (p.created_at at time zone $2)::date >= $3
         and (pd.created_at at time zone $2)::date >= $3
     $q$ into v_dev_pend using v_c, s.timezone, s.start_date;
   end if;
@@ -1759,34 +2354,42 @@ begin
   if v_iva_pend is not null then
     select coalesce(sum(l.debit - l.credit), 0) into b
     from public.acc_lines l join public.acc_entries e on e.id = l.entry_id
-    where e.company_id = v_c and e.status in ('contabilizado', 'reversado')
+    where e.company_id = v_c
+      and e.status = 'contabilizado'
+      and e.source_type in ('compra', 'devolucion_compra')
+      and e.entry_date >= s.start_date
       and l.account_id = v_iva_pend;
   else
     b := 0;
   end if;
+
   if a > 0 or b <> 0 or v_iva_pend is not null then
-    code := 'iva_compras_pendiente'; label := 'IVA de compras por clasificar (pendiente)';
+    code := 'iva_compras_pendiente';
+    label := 'IVA de compras por clasificar (pendiente desde inicio)';
     operational := a; accounting := b; difference := a - b;
     note := case when v_iva_pend is null then 'Configura la cuenta iva_pendiente en Config. contable' else 'Debe ser 0' end;
     return next;
   end if;
 
-  -- 6. IVA reclasificado a costo de ventas por unidades ya vendidas
-  select coalesce(sum(x2.iva_cost_expense), 0) into a
-  from public.purchases x2
-  where x2.company_id = v_c and x2.status = 'recibida' and x2.tax_status = 'costo'
-    and (x2.created_at at time zone s.timezone)::date >= s.start_date;
-  select coalesce(sum(l.debit - l.credit), 0) into b
-  from public.acc_lines l join public.acc_entries e on e.id = l.entry_id
-  where e.company_id = v_c and e.source_type = 'compra' and e.source_event = 'reclasificacion_iva'
-    and e.status = 'contabilizado' and l.account_id = (s.map->>'costo_ventas')::uuid;
-  if a > 0 or b <> 0 then
-    code := 'iva_compras_costo_gasto'; label := 'IVA llevado a costo de ventas (unidades ya salidas)';
-    operational := a; accounting := b; difference := a - b;
-    note := 'Debe ser 0'; return next;
+  -- Alerta si existen asientos manuales o de otros orígenes en cuentas IVA desde start_date
+  if v_iva_desc is not null or v_iva_pend is not null then
+    select coalesce(sum(l.debit - l.credit), 0) into v_other_vat
+    from public.acc_lines l join public.acc_entries e on e.id = l.entry_id
+    where e.company_id = v_c
+      and e.status = 'contabilizado'
+      and e.source_type not in ('compra', 'devolucion_compra', 'reverso')
+      and e.entry_date >= s.start_date
+      and l.account_id in (v_iva_desc, v_iva_pend);
+    if abs(v_other_vat) >= 0.01 then
+      code := 'iva_compras_otros_asientos';
+      label := 'Asientos manuales u otros en cuentas IVA de compras';
+      operational := 0; accounting := v_other_vat; difference := -v_other_vat;
+      note := 'Saldo proveniente de asientos no originados en compras/devoluciones desde start_date';
+      return next;
+    end if;
   end if;
 
-  -- 7. Compras pendientes de contabilizar
+  -- 9. Compras pendientes de contabilizar
   select count(*) into k from public.purchases x2
   where x2.company_id = v_c and x2.status = 'recibida' and jsonb_array_length(x2.items) > 0
     and (x2.created_at at time zone s.timezone)::date >= s.start_date
@@ -1794,13 +2397,14 @@ begin
       select 1 from public.acc_entries e
       where e.company_id = v_c and e.source_type = 'compra'
         and e.source_id = x2.id and e.source_event = 'registro'
+        and e.status = 'contabilizado'
     );
   if k > 0 then
     code := 'compras_pendientes'; label := 'Compras sin contabilizar (cantidad)'; operational := k; accounting := 0;
     difference := k; note := 'Si compraste a crédito, elige la cuenta en Cuentas por pagar o usa "Contabilizar pendientes"'; return next;
   end if;
 
-  -- 8. Devoluciones de ventas pendientes
+  -- 10. Devoluciones de ventas pendientes
   select count(*) into k from public.devolutions x2
   where x2.company_id = v_c and (x2.created_at at time zone s.timezone)::date >= s.start_date
     and not exists (
@@ -1811,20 +2415,21 @@ begin
   code := 'devoluciones_pendientes'; label := 'Devoluciones de ventas sin contabilizar (cantidad)'; operational := k;
   accounting := 0; difference := k; note := 'Debe ser 0'; return next;
 
-  -- 9. Devoluciones de compras pendientes
+  -- 11. Devoluciones a proveedores pendientes
   select count(*) into k from public.purchase_devolutions x2
   where x2.company_id = v_c and x2.status = 'activa' and (x2.created_at at time zone s.timezone)::date >= s.start_date
     and not exists (
       select 1 from public.acc_entries e
       where e.company_id = v_c and e.source_type = 'devolucion_compra'
         and e.source_id = x2.id and e.source_event = 'registro'
+        and e.status = 'contabilizado'
     );
   if k > 0 then
     code := 'devoluciones_compra_pendientes'; label := 'Devoluciones a proveedores sin contabilizar (cantidad)'; operational := k;
     accounting := 0; difference := k; note := 'Si hay pendientes, usa "Contabilizar pendientes"'; return next;
   end if;
 
-  -- 10. Gastos pendientes
+  -- 12. Gastos operativos pendientes
   select count(*) into k from public.expenses x2
   where x2.company_id = v_c and x2.status = 'activo' and (x2.created_at at time zone s.timezone)::date >= s.start_date
     and not exists (
@@ -1837,7 +2442,7 @@ begin
     accounting := 0; difference := k; note := 'Configura la cuenta de Gastos en Config. contable y usa "Contabilizar pendientes"'; return next;
   end if;
 
-  -- 11. Ajustes pendientes
+  -- 13. Ajustes de stock pendientes
   select count(*) into k from public.kardex x2
   where x2.company_id = v_c and x2.reference_type = 'ajuste' and (x2.created_at at time zone s.timezone)::date >= s.start_date
     and not exists (
@@ -1849,18 +2454,23 @@ begin
   accounting := 0; difference := k;
   note := 'Si hay pendientes, configura la cuenta de ajustes de inventario'; return next;
 
-  -- 12. Caja
+  -- 14. Caja (sin contar asientos reversados)
   select coalesce(sum(case when c.type = 'ingreso' then c.amount else -c.amount end), 0) into a
   from public.cash_entries c
   where c.company_id = v_c and (c.created_at at time zone s.timezone)::date >= s.start_date;
+
   select coalesce(sum(l.debit - l.credit), 0) into b
   from public.acc_lines l join public.acc_entries e on e.id = l.entry_id
-  where e.company_id = v_c and e.status in ('contabilizado', 'reversado') and e.entry_date >= s.start_date
+  where e.company_id = v_c
+    and e.status = 'contabilizado'
+    and e.source_type <> 'reverso'
+    and e.entry_date >= s.start_date
     and l.account_id = (s.map->>'caja')::uuid;
+
   code := 'caja'; label := 'Movimiento de caja desde el inicio'; operational := a; accounting := b;
   difference := a - b; note := 'Debe ser 0 cuando no haya movimientos pendientes'; return next;
 
-  -- 13. Caja manual y arqueos pendientes
+  -- 15. Caja manual y arqueos pendientes
   select coalesce(sum(case when c.type = 'ingreso' then c.amount else -c.amount end), 0) into a
   from public.cash_entries c
   where c.company_id = v_c and (c.reference_type is null or c.reference_type = 'arqueo')
@@ -1873,25 +2483,33 @@ begin
   code := 'caja_pendiente'; label := 'Caja manual y arqueos sin contabilizar'; operational := a; accounting := 0;
   difference := a; note := 'Si hay pendientes, configura Gastos y Otros ingresos'; return next;
 
-  -- 14. Inventario físico vs libro mayor
+  -- 16. Inventario físico remanente vs saldo contable de inventario (excluyendo asientos reversados)
   select coalesce(sum(p.stock * p.cost), 0) into a from public.products p where p.company_id = v_c;
   select coalesce(sum(l.debit - l.credit), 0) into b
   from public.acc_lines l join public.acc_entries e on e.id = l.entry_id
-  where e.company_id = v_c and e.status in ('contabilizado', 'reversado')
+  where e.company_id = v_c
+    and e.status = 'contabilizado'
+    and e.source_type <> 'reverso'
     and l.account_id = (s.map->>'inventario')::uuid;
-  code := 'inventario'; label := 'Inventario'; operational := a; accounting := b; difference := a - b;
+
+  code := 'inventario'; label := 'Inventario remanente'; operational := a; accounting := b; difference := a - b;
   note := 'Valorado al costo promedio. La contabilidad empieza en cero salvo que cargues un asiento de apertura';
   return next;
 
-  -- 15. Cartera CxC
+  -- 17. Cartera CxC
   select account_id into x from public.cxc_settings where company_id = v_c;
   if x is not null then
     select coalesce(sum(public._sale_balance(f.id)), 0) into a from public.sales f
     where f.company_id = v_c and f.payment_method = 'fiado' and f.status = 'completada'
       and (f.created_at at time zone s.timezone)::date >= s.start_date;
+
     select coalesce(sum(l.debit - l.credit), 0) into b
     from public.acc_lines l join public.acc_entries e on e.id = l.entry_id
-    where e.company_id = v_c and e.status in ('contabilizado', 'reversado') and l.account_id = x;
+    where e.company_id = v_c
+      and e.status = 'contabilizado'
+      and e.source_type <> 'reverso'
+      and l.account_id = x;
+
     code := 'cartera'; label := 'Cartera de clientes (fiado)'; operational := a; accounting := b;
     difference := a - b;
     note := 'Debe ser 0 cuando no haya pendientes';
@@ -1908,16 +2526,21 @@ begin
     accounting := 0; difference := k; note := 'Si hay pendientes, usa "Contabilizar pendientes"'; return next;
   end if;
 
-  -- 16. Cuentas por pagar CxP
+  -- 18. Cuentas por pagar CxP
   if to_regclass('public.cxp_settings') is not null then
     select account_id into x from public.cxp_settings where company_id = v_c;
     if x is not null then
       select coalesce(sum(public._purchase_balance(f.id)), 0) into a from public.purchases f
       where f.company_id = v_c and f.payment_method = 'credito' and f.status = 'recibida'
         and (f.created_at at time zone s.timezone)::date >= s.start_date;
+
       select coalesce(sum(l.credit - l.debit), 0) into b
       from public.acc_lines l join public.acc_entries e on e.id = l.entry_id
-      where e.company_id = v_c and e.status in ('contabilizado', 'reversado') and l.account_id = x;
+      where e.company_id = v_c
+        and e.status = 'contabilizado'
+        and e.source_type <> 'reverso'
+        and l.account_id = x;
+
       code := 'cuentas_por_pagar'; label := 'Cuentas por pagar a proveedores'; operational := a; accounting := b;
       difference := a - b;
       note := 'Debe ser 0 cuando no haya pendientes';
@@ -1982,13 +2605,15 @@ select public.sql_registrar_migracion(
   'Fase A IVA compras: cuentas estrictas, reclasificación con trazabilidad, anulación, Form 300 y conciliación',
   '20261113000062_fase_a_iva_compras_contabilidad.sql'
 );
-```
-***
-### Migración 20261113000063\_devoluciones\_compra\_con\_iva.sql
+
+D. Migración 000063 completa
+
+Archivo: supabase/migrations/20261113000063_devoluciones_compra_con_iva.sql
 SQL
-```
+
 -- ============================================================================
--- MIGRACIÓN 000063: DEVOLUCIONES PARCIALES DE COMPRAS CON IVA
+-- MIGRACIÓN 20261113000063: DEVOLUCIONES PARCIALES DE COMPRAS CON IVA
+-- Y TRAZABILIDAD EXACTA DE LOTES
 -- Dependencia obligatoria: 20261113000062_fase_a_iva_compras_contabilidad.
 -- Idempotente, sin BEGIN/COMMIT propios.
 -- ============================================================================
@@ -2037,7 +2662,42 @@ set subtotal = coalesce(subtotal, amount),
     inventory_credit = coalesce(inventory_credit, amount)
 where subtotal is null or inventory_credit is null;
 
--- 3. Contabilización de devolución de compra con separación de IVA
+-- 3. Tabla de detalle exacto de lotes consumidos por cada devolución de compra
+create table if not exists public.purchase_devolution_lots (
+  id uuid primary key default gen_random_uuid(),
+  company_id uuid not null references public.companies(id) on delete cascade,
+  devolution_id uuid not null references public.purchase_devolutions(id) on delete cascade,
+  purchase_id uuid not null references public.purchases(id) on delete restrict,
+  product_id uuid not null references public.products(id) on delete restrict,
+  lot_id uuid not null references public.product_lots(id) on delete restrict,
+  quantity numeric not null check (quantity > 0),
+  created_at timestamptz not null default now(),
+  unique (devolution_id, lot_id)
+);
+
+create index if not exists idx_fk_purchase_dev_lots_company
+  on public.purchase_devolution_lots(company_id, created_at desc);
+create index if not exists idx_fk_purchase_dev_lots_lot
+  on public.purchase_devolution_lots(lot_id);
+
+alter table public.purchase_devolution_lots enable row level security;
+
+drop policy if exists purchase_devolution_lots_select on public.purchase_devolution_lots;
+create policy purchase_devolution_lots_select
+  on public.purchase_devolution_lots
+  for select
+  to authenticated
+  using (company_id = (select public.current_company_id()));
+
+drop policy if exists platform_admin_purchase_dev_lots_all on public.purchase_devolution_lots;
+create policy platform_admin_purchase_dev_lots_all
+  on public.purchase_devolution_lots
+  for all
+  to authenticated
+  using (public.is_platform_admin() and company_id = (select public.current_company_id()))
+  with check (public.is_platform_admin() and company_id = (select public.current_company_id()));
+
+-- 4. Contabilización de devolución de compra con separación estricta de IVA
 create or replace function public.acc_post_purchase_devolution(p_dev_id uuid)
 returns uuid
 language plpgsql
@@ -2053,17 +2713,23 @@ declare
   v_vat_acc uuid;
   v_memo text;
   v_inv_credit numeric;
-  v_tax numeric := round(coalesce(d.tax_amount, 0), 2);
+  v_tax numeric;
   v_lines jsonb;
 begin
   select * into d from public.purchase_devolutions where id = p_dev_id;
-  if not found or d.status <> 'activa' then return null; end if;
+  if not found or d.status <> 'activa' then
+    return null;
+  end if;
 
   select * into s from public.acc_settings where company_id = d.company_id;
-  if not found or not s.active or s.start_date is null then return null; end if;
+  if not found or not s.active or s.start_date is null then
+    return null;
+  end if;
 
   v_date := (d.created_at at time zone s.timezone)::date;
-  if v_date < s.start_date or d.amount <= 0 then return null; end if;
+  if v_date < s.start_date or d.amount <= 0 then
+    return null;
+  end if;
 
   v_inv := (s.map->>'inventario')::uuid;
   if v_inv is null then
@@ -2085,6 +2751,7 @@ begin
     v_deb := (s.map->>'bancos')::uuid;
     v_memo := 'Reintegro bancario de proveedor (' || d.refund_method || ')';
   end if;
+
   if v_deb is null then
     raise exception 'Falta configurar cuenta de % para contabilizar devolución', d.refund_method;
   end if;
@@ -2124,7 +2791,7 @@ begin
 end
 $function$;
 
--- 4. registrar_devolucion_compra con prorrata de base e IVA y ajuste de centavos
+-- 5. registrar_devolucion_compra con prorrata de base e IVA y registro exacto de lotes en purchase_devolution_lots
 create or replace function public.registrar_devolucion_compra(
   p_purchase_id uuid,
   p_product_id uuid,
@@ -2143,75 +2810,87 @@ declare
   v_prod public.products%rowtype;
   v_s public.acc_settings%rowtype;
   v_bought numeric := 0;
-  v_bought_base numeric := 0;
+  v_bought_amt numeric := 0;
+  v_bought_tax_expl numeric := 0;
   v_bought_tax numeric := 0;
-  v_ret_qty numeric := 0;
-  v_ret_base numeric := 0;
-  v_ret_tax numeric := 0;
-  v_rem_qty numeric := 0;
+  v_returned numeric := 0;
+  v_returned_amt numeric := 0;
+  v_returned_tax numeric := 0;
   v_dev_base numeric := 0;
   v_dev_tax numeric := 0;
   v_amount numeric := 0;
   v_inv_credit numeric := 0;
   v_unit_inv_cost numeric := 0;
   v_refund text;
+  v_new numeric;
+  v_rev_cost numeric;
   v_bal numeric := 0;
-  v_new numeric := 0;
-  v_rev_cost numeric := 0;
+  v_id uuid;
+  v_name text;
   v_lot_avail numeric := 0;
   v_left numeric := 0;
   v_take numeric := 0;
-  v_name text;
-  v_id uuid;
+  v_k_ts timestamptz;
+  v_other_exits int := 0;
+  v_taken_lots jsonb := '[]'::jsonb;
   r_lot record;
+  r_taken record;
 begin
-  if not public._es_finito(p_quantity) or p_quantity <= 0 then
-    raise exception 'Cantidad inválida';
+  if p_quantity is null or p_quantity <= 0 then
+    raise exception 'La cantidad a devolver debe ser mayor que cero';
   end if;
-  if coalesce(btrim(p_reason), '') = '' then
-    raise exception 'El motivo de la devolución es obligatorio';
+  if nullif(btrim(coalesce(p_reason, '')), '') is null then
+    raise exception 'Indica el motivo de la devolución al proveedor';
   end if;
 
-  select * into v_pur from public.purchases where id = p_purchase_id and company_id = v_co for update;
-  if not found then raise exception 'La compra no existe'; end if;
-  if v_pur.status = 'anulada' then raise exception 'No se puede devolver sobre una compra anulada'; end if;
-  if v_pur.status <> 'recibida' then raise exception 'Solo se pueden devolver compras recibidas'; end if;
+  select * into v_pur
+  from public.purchases
+  where id = p_purchase_id and company_id = v_co
+  for update;
+  if not found then
+    raise exception 'La compra no existe';
+  end if;
+  if v_pur.status = 'anulada' then
+    raise exception 'Esta compra está anulada';
+  end if;
 
   select
-    coalesce(sum((x->>'quantity')::numeric), 0),
-    coalesce(sum(coalesce((x->>'subtotal')::numeric, ((x->>'quantity')::numeric * (x->>'cost')::numeric))), 0),
-    coalesce(sum(coalesce((x->>'tax_amount')::numeric, 0)), 0)
-  into v_bought, v_bought_base, v_bought_tax
-  from jsonb_array_elements(v_pur.items) x
-  where (x->>'product_id')::uuid = p_product_id;
+    coalesce(sum((it->>'quantity')::numeric), 0),
+    coalesce(sum(coalesce((it->>'subtotal')::numeric, (it->>'quantity')::numeric * (it->>'cost')::numeric)), 0),
+    coalesce(sum(coalesce((it->>'tax_amount')::numeric, 0)), 0)
+  into v_bought, v_bought_amt, v_bought_tax_expl
+  from jsonb_array_elements(v_pur.items) it
+  where (it->>'product_id')::uuid = p_product_id;
 
   if v_bought <= 0 then
-    raise exception 'Ese producto no pertenece a la compra seleccionada';
+    raise exception 'Ese producto no pertenece a esta compra';
   end if;
 
-  if v_bought_tax = 0 and coalesce(v_pur.tax, 0) > 0 and coalesce(v_pur.subtotal, 0) > 0 then
-    v_bought_tax := round(v_pur.tax * (v_bought_base / v_pur.subtotal), 2);
+  if v_bought_tax_expl > 0 then
+    v_bought_tax := round(v_bought_tax_expl, 2);
+  elsif coalesce(v_pur.tax, 0) > 0 and coalesce(v_pur.subtotal, 0) > 0 then
+    v_bought_tax := round(v_pur.tax * (v_bought_amt / v_pur.subtotal), 2);
+  else
+    v_bought_tax := 0;
   end if;
 
   select
     coalesce(sum(quantity), 0),
     coalesce(sum(coalesce(subtotal, amount)), 0),
-    coalesce(sum(tax_amount), 0)
-  into v_ret_qty, v_ret_base, v_ret_tax
+    coalesce(sum(coalesce(tax_amount, 0)), 0)
+  into v_returned, v_returned_amt, v_returned_tax
   from public.purchase_devolutions
   where company_id = v_co and purchase_id = p_purchase_id and product_id = p_product_id and status = 'activa';
 
-  v_rem_qty := v_bought - v_ret_qty;
-  if p_quantity > v_rem_qty then
-    raise exception 'Solo quedan % unidad(es) disponibles para devolver en esta compra', v_rem_qty;
+  if v_returned + p_quantity > v_bought + 0.0001 then
+    raise exception 'Solo quedan % unidad(es) disponibles para devolver en esta compra', v_bought - v_returned;
   end if;
 
-  -- Si devuelve exactamente el saldo restante, cierra con el remanente exacto para evitar deriva de centavos
-  if abs(p_quantity - v_rem_qty) < 0.0001 then
-    v_dev_base := round(greatest(0, v_bought_base - v_ret_base), 2);
-    v_dev_tax := round(greatest(0, v_bought_tax - v_ret_tax), 2);
+  if abs((v_returned + p_quantity) - v_bought) <= 0.0001 then
+    v_dev_base := greatest(0, round(v_bought_amt - v_returned_amt, 2));
+    v_dev_tax := greatest(0, round(v_bought_tax - v_returned_tax, 2));
   else
-    v_dev_base := round(p_quantity * (v_bought_base / v_bought), 2);
+    v_dev_base := round(p_quantity * (v_bought_amt / v_bought), 2);
     v_dev_tax := round(p_quantity * (v_bought_tax / v_bought), 2);
   end if;
 
@@ -2237,8 +2916,13 @@ begin
     end if;
   end if;
 
-  select * into v_prod from public.products where id = p_product_id and company_id = v_co for update;
-  if not found then raise exception 'El producto ya no existe'; end if;
+  select * into v_prod
+  from public.products
+  where id = p_product_id and company_id = v_co
+  for update;
+  if not found then
+    raise exception 'El producto ya no existe';
+  end if;
   if v_prod.stock < p_quantity then
     raise exception 'Stock actual insuficiente de "%" (en inventario: %, a devolver: %)', v_prod.name, v_prod.stock, p_quantity;
   end if;
@@ -2247,34 +2931,64 @@ begin
     select coalesce(sum(qty_remaining), 0) into v_lot_avail
     from public.product_lots
     where company_id = v_co and source_type = 'compra' and source_id = p_purchase_id and product_id = p_product_id;
+
     if v_lot_avail < p_quantity then
       raise exception 'Solo quedan % unidad(es) disponibles en el lote de esta compra para devolver', v_lot_avail;
     end if;
+
     v_left := p_quantity;
     for r_lot in
       select id, qty_remaining
       from public.product_lots
       where company_id = v_co and source_type = 'compra' and source_id = p_purchase_id
         and product_id = p_product_id and qty_remaining > 0
-      order by expiry_date asc, created_at asc
+      order by expiry_date asc, created_at asc, id asc
       for update
     loop
       exit when v_left <= 0;
       v_take := least(v_left, r_lot.qty_remaining);
       update public.product_lots set qty_remaining = qty_remaining - v_take where id = r_lot.id;
+      v_taken_lots := v_taken_lots || jsonb_build_array(jsonb_build_object('lot_id', r_lot.id, 'quantity', v_take));
       v_left := v_left - v_take;
     end loop;
+  else
+    -- Sin lotes: si hubo salidas posteriores distintas a devoluciones de esta compra, no se puede atribuir el origen sin FIFO
+    select max(created_at) into v_k_ts
+    from public.kardex
+    where company_id = v_co and product_id = v_prod.id
+      and reference_type = 'purchase' and reference_id = p_purchase_id;
+
+    select count(*) into v_other_exits
+    from public.kardex k
+    where k.company_id = v_co
+      and k.product_id = v_prod.id
+      and k.type = 'salida'
+      and k.created_at >= coalesce(v_k_ts, v_pur.created_at)
+      and not (
+        k.reference_type = 'purchase_devolution'
+        and exists (
+          select 1 from public.purchase_devolutions pd
+          where pd.id = k.reference_id and pd.purchase_id = p_purchase_id
+        )
+      );
+
+    if v_other_exits > 0 then
+      raise exception 'No se puede devolver "%" sin control de lote: existen ventas o salidas posteriores en kardex que impiden confirmar que estas unidades provienen de esta compra', v_prod.name;
+    end if;
   end if;
 
   v_new := v_prod.stock - p_quantity;
   v_rev_cost := v_prod.cost;
   if v_new > 0 then
     v_rev_cost := round(((v_prod.stock * coalesce(v_prod.cost, 0)) - v_inv_credit) / v_new, 2);
-    if v_rev_cost <= 0 then v_rev_cost := v_prod.cost; end if;
+    if v_rev_cost <= 0 then
+      v_rev_cost := v_prod.cost;
+    end if;
   end if;
-  update public.products set stock = v_new, cost = v_rev_cost where id = v_prod.id;
 
+  update public.products set stock = v_new, cost = v_rev_cost where id = v_prod.id;
   select full_name into v_name from public.profiles where id = auth.uid();
+
   insert into public.purchase_devolutions (
     company_id, purchase_id, supplier_id, supplier_name,
     product_id, product_name, quantity, unit_cost, amount,
@@ -2285,7 +2999,18 @@ begin
     v_prod.id, v_prod.name, p_quantity, round(v_unit_inv_cost, 2), v_amount,
     v_dev_base, v_dev_tax, v_pur.tax_status, v_inv_credit,
     v_refund, left(btrim(p_reason), 240), 'activa', auth.uid(), v_name
-  ) returning id into v_id;
+  )
+  returning id into v_id;
+
+  if jsonb_array_length(v_taken_lots) > 0 then
+    for r_taken in select * from jsonb_array_elements(v_taken_lots) x loop
+      insert into public.purchase_devolution_lots (
+        company_id, devolution_id, purchase_id, product_id, lot_id, quantity
+      ) values (
+        v_co, v_id, v_pur.id, v_prod.id, (r_taken.x->>'lot_id')::uuid, (r_taken.x->>'quantity')::numeric
+      );
+    end loop;
+  end if;
 
   insert into public.kardex (company_id, product_id, product_name, type, quantity, balance, reference_type, reference_id, note)
   values (v_co, v_prod.id, v_prod.name, 'salida', p_quantity, v_new, 'purchase_devolution', v_id, 'Devolución a proveedor: ' || left(btrim(p_reason), 120));
@@ -2297,7 +3022,6 @@ begin
 
   select * into v_s from public.acc_settings where company_id = v_co;
   if v_s.company_id is not null and v_s.active and v_s.start_date is not null then
-    -- No silenciar errores de configuración IVA cuando la devolución lleva impuesto activo
     perform public.acc_post_purchase_devolution(v_id);
   end if;
 
@@ -2305,7 +3029,7 @@ begin
 end
 $function$;
 
--- 5. anular_devolucion_compra usando inventory_credit exacto y bloqueando si cambió estado fiscal
+-- 6. anular_devolucion_compra: restauración exacta del lote registrado en purchase_devolution_lots y reversión atómica
 create or replace function public.anular_devolucion_compra(p_dev_id uuid)
 returns void
 language plpgsql
@@ -2320,22 +3044,89 @@ declare
   v_inv_amt numeric;
   v_new numeric;
   v_new_cost numeric;
-  v_left numeric;
-  v_room numeric;
-  r_lot record;
+  v_tz text;
+  v_rev_date date;
+  v_restored_sum numeric := 0;
+  r_dl record;
+  v_lot public.product_lots%rowtype;
 begin
-  select * into d from public.purchase_devolutions where id = p_dev_id and company_id = v_co for update;
-  if not found then raise exception 'La devolución a proveedor no existe'; end if;
-  if d.status = 'anulada' then raise exception 'Esta devolución ya fue anulada'; end if;
+  select * into d
+  from public.purchase_devolutions
+  where id = p_dev_id and company_id = v_co
+  for update;
+  if not found then
+    raise exception 'La devolución a proveedor no existe';
+  end if;
+  if d.status = 'anulada' then
+    raise exception 'Esta devolución ya fue anulada';
+  end if;
 
-  select * into v_pur from public.purchases where id = d.purchase_id and company_id = v_co for update;
-  if found and v_pur.tax_status is distinct from coalesce(d.tax_status_snapshot, v_pur.tax_status) then
+  select * into v_pur
+  from public.purchases
+  where id = d.purchase_id and company_id = v_co
+  for update;
+  if not found then
+    raise exception 'La compra asociada a esta devolución no existe';
+  end if;
+  if v_pur.status = 'anulada' then
+    raise exception 'No se puede anular esta devolución porque la compra origen ya está anulada';
+  end if;
+  if v_pur.tax_status is distinct from coalesce(d.tax_status_snapshot, v_pur.tax_status) then
     raise exception 'No se puede anular esta devolución porque el estado fiscal de la compra cambió de "%" a "%" tras devolver.',
       d.tax_status_snapshot, v_pur.tax_status;
   end if;
 
-  select * into v_prod from public.products where id = d.product_id and company_id = v_co for update;
-  if not found then raise exception 'El producto ya no existe'; end if;
+  -- Prevalidar período abierto si existe asiento contable que revertir
+  select timezone into v_tz from public.acc_settings where company_id = v_co;
+  v_rev_date := (now() at time zone coalesce(v_tz, 'America/Caracas'))::date;
+  if exists (
+    select 1 from public.acc_entries
+    where company_id = v_co and source_type = 'devolucion_compra' and source_id = d.id
+      and source_event = 'registro' and status = 'contabilizado'
+  ) and not public.acc_period_is_open(v_co, v_rev_date) then
+    raise exception 'El periodo contable actual está cerrado: no se puede anular la devolución de compra';
+  end if;
+
+  select * into v_prod
+  from public.products
+  where id = d.product_id and company_id = v_co
+  for update;
+  if not found then
+    raise exception 'El producto ya no existe';
+  end if;
+
+  if v_prod.tracks_expiry then
+    select coalesce(sum(quantity), 0) into v_restored_sum
+    from public.purchase_devolution_lots
+    where company_id = v_co and devolution_id = d.id;
+
+    if abs(v_restored_sum - d.quantity) > 0.0001 then
+      raise exception 'Falta trazabilidad exacta de lotes en purchase_devolution_lots para anular esta devolución (esperado %, registrado %)',
+        d.quantity, v_restored_sum;
+    end if;
+
+    for r_dl in
+      select dl.lot_id, dl.quantity
+      from public.purchase_devolution_lots dl
+      where dl.company_id = v_co and dl.devolution_id = d.id
+      order by dl.lot_id
+      for update
+    loop
+      select * into v_lot
+      from public.product_lots
+      where id = r_dl.lot_id and company_id = v_co
+      for update;
+      if not found then
+        raise exception 'El lote original % de la devolución ya no existe', r_dl.lot_id;
+      end if;
+      if v_lot.qty_remaining + r_dl.quantity > v_lot.qty_initial + 0.0001 then
+        raise exception 'Restaurar % unidad(es) excede la cantidad inicial del lote (%)', r_dl.quantity, v_lot.lot_code;
+      end if;
+      update public.product_lots
+      set qty_remaining = qty_remaining + r_dl.quantity
+      where id = v_lot.id;
+    end loop;
+  end if;
 
   v_inv_amt := coalesce(
     d.inventory_credit,
@@ -2348,25 +3139,8 @@ begin
   else
     v_new_cost := round(v_inv_amt / d.quantity, 2);
   end if;
+
   update public.products set stock = v_new, cost = v_new_cost where id = v_prod.id;
-
-  if v_prod.tracks_expiry then
-    v_left := d.quantity;
-    for r_lot in
-      select id, qty_initial, qty_remaining
-      from public.product_lots
-      where company_id = v_co and source_type = 'compra' and source_id = d.purchase_id
-        and product_id = d.product_id and qty_remaining < qty_initial
-      order by expiry_date desc, created_at desc
-      for update
-    loop
-      exit when v_left <= 0;
-      v_room := least(v_left, r_lot.qty_initial - r_lot.qty_remaining);
-      update public.product_lots set qty_remaining = qty_remaining + v_room where id = r_lot.id;
-      v_left := v_left - v_room;
-    end loop;
-  end if;
-
   update public.purchase_devolutions set status = 'anulada' where id = d.id;
 
   insert into public.kardex (company_id, product_id, product_name, type, quantity, balance, reference_type, reference_id, note)
@@ -2392,195 +3166,508 @@ grant execute on function public.anular_devolucion_compra(uuid) to authenticated
 
 select public.sql_registrar_migracion(
   '20261113000063_devoluciones_compra_con_iva',
-  'Devoluciones parciales de compras con IVA proporcional y reversión contable exacta',
+  'Devoluciones parciales de compras con IVA proporcional, trazabilidad exacta de lotes y reversión contable',
   '20261113000063_devoluciones_compra_con_iva.sql'
 );
-```
-***
-## 4. Orden exacto de ejecución
-- Aplicar **supabase/migrations/20261113000062\_fase\_a\_iva\_compras\_contabilidad.sql** (en SQL Editor o Centro SQL). Verificar registro en public.sql\_migration\_log.
-- Aplicar **supabase/migrations/20261113000063\_devoluciones\_compra\_con\_iva.sql** (fallará intencionalmente si la 000062 no se aplicó).
-- En **Configuración contable** de cada empresa con contabilidad activa, confirmar el mapeo explícito de iva\_descontable (ej. 1.1.05) e iva\_pendiente (ej. 1.1.06) mediante acc\_save\_settings.
-- Ejecutar el bloque de pruebas transaccionales con ROLLBACK.
 
-(Si el Centro SQL del frontend se actualiza en fases posteriores, agregar ambas migraciones en src/lib/sqlScripts.ts listando 'purchase\_iva\_adjustments' en targetTables, y registrar las filas en supabase/MIGRATIONS.md.)
-***
-## 5. Pruebas transaccionales con ROLLBACK y resultados esperados
+E. Orden de ejecución
+Pre-chequeos obligatorios antes de ejecutar
+
+    Confirmar en public.sql_migration_log que 20261113000061_consolidar_blindaje_caja_multipagos_contabilidad está aplicada y que 20261113000062 y 20261113000063 están libres.
+
+    En cada empresa con contabilidad activa (Inversiones Bogota CV es actualmente la única de las 5 empresas en la base viva con acc_settings.active = true y 27 cuentas): verificar que acc_settings.map tenga o configure cuentas activo/debito válidas (active = true, is_postable = true) para iva_descontable e iva_pendiente mediante acc_save_settings antes de registrar compras con IVA descontable/pendiente o reclasificarlas.
+
+Orden estricto
+
+    20261113000062_fase_a_iva_compras_contabilidad.sql (no depende de 000063; protege explícitamente contra devoluciones sobre compras con IVA hasta que se aplique 000063).
+
+    20261113000063_devoluciones_compra_con_iva.sql (verifica explícitamente la existencia de purchases.tax_status y public.purchase_iva_adjustments creados en 000062; si falta 000062, aborta sin dejar cambios parciales).
+
+    Configuración por empresa (acc_save_settings): asignar explícitamente iva_descontable e iva_pendiente en las empresas con contabilidad activa.
+
+F. Pruebas
+
+    IMPORTANTE: Las siguientes 22 pruebas están diseñadas para auditoría en transacción BEGIN; ... ROLLBACK;; NO han sido ejecutadas en Supabase porque esta revisión opera estrictamente en modo de solo lectura. Cada bloque verifica datos iniciales, operación, resultado esperado, error esperado (cuando aplica) y cero cambios parciales al fallar.
+
 SQL
-```
+
+-- ============================================================================
+-- SUITE DE AUDITORÍA TRANSACCIONAL (22 ESCENARIOS) — DISEÑADA, NO EJECUTADA
+-- Requiere haber aplicado previamente 000062 y 000063.
+-- No persiste datos en la base (termina en ROLLBACK).
+-- ============================================================================
 BEGIN;
 
 DO $$
 DECLARE
-  v_co uuid := 'f58a80c2-3b6d-42ba-b5bc-62fe87fcc334';
-  v_uid uuid;
+  v_co uuid := 'f58a80c2-3b6d-42ba-b5bc-62fe87fcc334'; -- Empresa con contabilidad activa observada
   v_other_co uuid;
+  v_uid_dueno uuid;
+  v_uid_contador uuid;
+  v_uid_other uuid;
   v_sup uuid;
-  v_prod_notrack uuid;
   v_prod_track uuid;
+  v_prod_notrack uuid;
+  v_prod_notrack2 uuid;
   v_acc_desc uuid;
   v_acc_pend uuid;
   v_acc_pasivo uuid;
-  v_p1 uuid;
-  v_p2 uuid;
-  v_p3 uuid;
-  v_p4 uuid;
-  v_p5 uuid;
-  v_dev1 uuid;
+  v_acc_inactiva uuid;
+  v_acc_noimp uuid;
+
+  -- IDs de compras/ajustes/devoluciones de prueba
+  v_p_leg1 uuid; v_p_leg2 uuid; v_p_leg3 uuid; v_p_siniva uuid;
+  v_p_desc uuid; v_p_pend uuid; v_p_costo uuid; v_p_incl uuid;
+  v_p_reclass_desc uuid; v_p_reclass_costo_0 uuid; v_p_reclass_costo_part uuid;
+  v_p_notrack_block uuid; v_p_reclass_fail uuid;
+  v_p_dev_desc uuid; v_p_dev_pend uuid; v_p_dev_costo uuid;
+  v_p_dev_then_reclass uuid; v_p_anul_dev uuid;
+  v_p_anul_pre uuid; v_p_anul_post_desc uuid; v_p_anul_post_costo uuid; v_p_anul_notrack_mix uuid;
+  v_adj_id uuid;
+  v_dev1 uuid; v_dev2 uuid; v_dev3 uuid; v_dev4 uuid; v_dev5 uuid;
+
+  -- Snapshots para verificar cero cambios parciales
   v_items_before jsonb;
   v_items_after jsonb;
+  v_cost_before numeric;
+  v_stock_before numeric;
+  v_tax_status_before text;
+  v_cnt_adj_before int;
+  v_lot_a uuid; v_lot_b uuid;
+  v_lot_a_rem numeric; v_lot_b_rem numeric;
   v_f300 jsonb;
   v_rec record;
-  v_cnt int;
-  v_err text;
+  v_period_year int := extract(year from current_date)::int;
+  v_period_month int := extract(month from current_date)::int;
 BEGIN
-  -- 0. Simular sesión autenticada como admin/dueno de la empresa activa
-  SELECT id INTO v_uid FROM public.profiles
-  WHERE company_id = v_co AND active = true AND role IN ('dueno','admin') LIMIT 1;
-  IF v_uid IS NULL THEN RAISE EXCEPTION 'No hay usuario admin/dueno en empresa piloto'; END IF;
-  PERFORM set_config('request.jwt.claim.sub', v_uid::text, true);
-  PERFORM set_config('request.jwt.claim.role', 'authenticated', true);
+  -- 0. Preparar usuarios en roles reales de la empresa bajo ROLLBACK
+  SELECT id INTO v_uid_dueno FROM public.profiles WHERE company_id = v_co AND active = true ORDER BY created_at LIMIT 1;
+  UPDATE public.profiles SET role = 'dueno' WHERE id = v_uid_dueno;
+  PERFORM set_config('request.jwt.claim.sub', v_uid_dueno::text, true);
 
-  SELECT id INTO v_sup FROM public.suppliers WHERE company_id = v_co LIMIT 1;
+  SELECT id INTO v_other_co FROM public.companies WHERE id <> v_co LIMIT 1;
+  SELECT id INTO v_uid_other FROM public.profiles WHERE company_id = v_other_co AND active = true LIMIT 1;
+  IF v_uid_other IS NULL THEN
+    RAISE EXCEPTION 'Se requiere una segunda empresa con perfil activo para la prueba #22';
+  END IF;
+
+  INSERT INTO public.suppliers (company_id, name, document)
+  VALUES (v_co, 'Proveedor Auditoría IVA', '900111222') RETURNING id INTO v_sup;
+
+  INSERT INTO public.products (company_id, name, price, cost, stock, tracks_expiry)
+  VALUES
+    (v_co, 'SKU Lote Audit', 300, 0, 0, true) RETURNING id INTO v_prod_track;
+  INSERT INTO public.products (company_id, name, price, cost, stock, tracks_expiry)
+  VALUES
+    (v_co, 'SKU SinLote A', 300, 0, 0, false) RETURNING id INTO v_prod_notrack;
+  INSERT INTO public.products (company_id, name, price, cost, stock, tracks_expiry)
+  VALUES
+    (v_co, 'SKU SinLote B', 300, 0, 0, false) RETURNING id INTO v_prod_notrack2;
+
+  -- Cuentas existentes / de prueba
   SELECT id INTO v_acc_desc FROM public.acc_accounts WHERE company_id = v_co AND code = '1.1.05';
   SELECT id INTO v_acc_pend FROM public.acc_accounts WHERE company_id = v_co AND code = '1.1.06';
   SELECT id INTO v_acc_pasivo FROM public.acc_accounts WHERE company_id = v_co AND code = '2.1.02';
+  SELECT id INTO v_acc_noimp FROM public.acc_accounts WHERE company_id = v_co AND is_postable = false LIMIT 1;
+  INSERT INTO public.acc_accounts (company_id, code, name, type, nature, is_postable, active)
+  VALUES (v_co, '1.1.99', 'IVA Inactiva Test', 'activo', 'debito', true, false) RETURNING id INTO v_acc_inactiva;
 
-  -- Crear productos de prueba dentro de la transacción (se revertirán con ROLLBACK)
-  INSERT INTO public.products (company_id, name, sku, price, cost, stock, min_stock, tracks_expiry)
-  VALUES (v_co, 'Test NoLote', 'TST-NL-' || substr(gen_random_uuid()::text,1,6), 200, 0, 0, 1, false)
-  RETURNING id INTO v_prod_notrack;
-
-  INSERT INTO public.products (company_id, name, sku, price, cost, stock, min_stock, tracks_expiry)
-  VALUES (v_co, 'Test Lote', 'TST-L-' || substr(gen_random_uuid()::text,1,6), 200, 0, 0, 1, true)
-  RETURNING id INTO v_prod_track;
-
-  -- T1: Helper estricto rechaza cuenta pasivo en iva_descontable y acc_post_purchase falla si falta cuenta
-  BEGIN
-    PERFORM public.acc_save_settings(jsonb_build_object('iva_descontable', v_acc_pasivo::text));
-    RAISE EXCEPTION 'FAIL T1a: aceptó pasivo en iva_descontable';
-  EXCEPTION WHEN OTHERS THEN
-    IF SQLERRM NOT LIKE '%activo y naturaleza debito%' THEN RAISE; END IF;
-  END;
-
+  -- ==========================================================================
+  -- PRUEBA #6: Compra rechazada por falta de cuenta IVA configurada (0 cambios)
+  -- ==========================================================================
   PERFORM public.acc_save_settings(jsonb_build_object('iva_descontable', '', 'iva_pendiente', ''));
+  SELECT count(*) INTO v_cnt_adj_before FROM public.purchases WHERE company_id = v_co;
   BEGIN
     PERFORM public.registrar_compra(
-      v_sup,
-      jsonb_build_array(jsonb_build_object('product_id', v_prod_notrack, 'quantity', 10, 'cost', 100)),
-      'efectivo', null, 190, 'pendiente', 19, false
+      v_sup, jsonb_build_array(jsonb_build_object('product_id', v_prod_notrack, 'quantity', 10, 'cost', 100)),
+      'efectivo', null, 190, 'descontable', 19, false
     );
-    RAISE EXCEPTION 'FAIL T1b: permitió compra con IVA pendiente sin cuenta configurada';
+    RAISE EXCEPTION 'FAIL #6a: permitió compra descontable sin cuenta configurada';
   EXCEPTION WHEN OTHERS THEN
-    IF SQLERRM NOT LIKE '%Falta configurar la cuenta contable "iva_pendiente"%' THEN RAISE; END IF;
+    IF SQLERRM NOT LIKE '%Falta configurar la cuenta contable "iva_descontable"%' THEN RAISE; END IF;
+  END;
+  PERFORM 1 FROM public.products WHERE id = v_prod_notrack AND stock = 0 AND cost = 0;
+  IF NOT FOUND THEN RAISE EXCEPTION 'FAIL #6b: alteró stock/costo tras rechazo'; END IF;
+  IF (SELECT count(*) FROM public.purchases WHERE company_id = v_co) <> v_cnt_adj_before THEN
+    RAISE EXCEPTION 'FAIL #6c: insertó compra huérfana tras rechazo';
+  END IF;
+
+  -- ==========================================================================
+  -- PRUEBA #7: Rechazo por cuenta pasivo/inactiva/no imputable/otra empresa
+  -- ==========================================================================
+  BEGIN
+    PERFORM public.acc_save_settings(jsonb_build_object('iva_descontable', v_acc_pasivo::text));
+    RAISE EXCEPTION 'FAIL #7a: aceptó cuenta pasivo para iva_descontable';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%tipo activo y naturaleza debito%' THEN RAISE; END IF;
+  END;
+  BEGIN
+    PERFORM public.acc_save_settings(jsonb_build_object('iva_pendiente', v_acc_inactiva::text));
+    RAISE EXCEPTION 'FAIL #7b: aceptó cuenta inactiva';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%inactiva o no admite movimientos%' THEN RAISE; END IF;
+  END;
+  BEGIN
+    PERFORM public.acc_save_settings(jsonb_build_object('iva_pendiente', v_acc_noimp::text));
+    RAISE EXCEPTION 'FAIL #7c: aceptó cuenta no imputable';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%no admite movimientos%' THEN RAISE; END IF;
   END;
 
-  -- Configurar cuentas válidas activo/débito
+  -- Configurar cuentas válidas activo/debito
   PERFORM public.acc_save_settings(jsonb_build_object(
     'iva_descontable', v_acc_desc::text,
     'iva_pendiente', v_acc_pend::text
   ));
 
-  -- T2: Llamadas legacy de 2, 3 y 4 args funcionan sin ambigüedad 42725
-  v_p1 := public.registrar_compra(v_sup, jsonb_build_array(jsonb_build_object('product_id', v_prod_notrack, 'quantity', 5, 'cost', 100)));
-  v_p2 := public.registrar_compra(v_sup, jsonb_build_array(jsonb_build_object('product_id', v_prod_notrack, 'quantity', 5, 'cost', 100)), 'transferencia');
-  v_p3 := public.registrar_compra(v_sup, jsonb_build_array(jsonb_build_object('product_id', v_prod_notrack, 'quantity', 5, 'cost', 100)), 'credito', 15);
+  -- ==========================================================================
+  -- PRUEBA #1: Compra sin IVA (legado 2, 3 y 4 args + explícito)
+  -- ==========================================================================
+  v_p_leg1 := public.registrar_compra(v_sup, jsonb_build_array(jsonb_build_object('product_id', v_prod_notrack, 'quantity', 5, 'cost', 100)));
+  v_p_leg2 := public.registrar_compra(v_sup, jsonb_build_array(jsonb_build_object('product_id', v_prod_notrack, 'quantity', 5, 'cost', 100)), 'transferencia');
+  v_p_leg3 := public.registrar_compra(v_sup, jsonb_build_array(jsonb_build_object('product_id', v_prod_notrack, 'quantity', 5, 'cost', 100)), 'credito', 15);
+  v_p_siniva := public.registrar_compra(v_sup, jsonb_build_array(jsonb_build_object('product_id', v_prod_notrack, 'quantity', 5, 'cost', 100)), 'efectivo', null, 0, 'sin_iva', 0, false);
+  PERFORM 1 FROM public.purchases WHERE id IN (v_p_leg1, v_p_leg2, v_p_leg3, v_p_siniva) AND tax_status = 'sin_iva' AND tax = 0 AND total = 500;
+  IF NOT FOUND THEN RAISE EXCEPTION 'FAIL #1: compras sin IVA inválidas'; END IF;
 
-  -- T3: Compra pendiente con lote, venta parcial (4 de 10u) y reclasificación a costo (trazabilidad 6 inv / 4 COGS)
-  v_p4 := public.registrar_compra(
-    v_sup,
-    jsonb_build_array(jsonb_build_object(
-      'product_id', v_prod_track, 'quantity', 10, 'cost', 100,
-      'lot_code', 'L-TEST', 'expiry_date', (current_date + 180)::text
-    )),
-    'efectivo', null, 190, 'pendiente', 19, false
+  -- ==========================================================================
+  -- PRUEBA #2: Compra con IVA descontable
+  -- ==========================================================================
+  v_p_desc := public.registrar_compra(
+    v_sup, jsonb_build_array(jsonb_build_object('product_id', v_prod_notrack2, 'quantity', 10, 'cost', 100)),
+    'efectivo', null, 190, 'descontable', 19, false
   );
-  SELECT items INTO v_items_before FROM public.purchases WHERE id = v_p4;
+  PERFORM 1 FROM public.purchases WHERE id = v_p_desc AND subtotal = 1000 AND tax = 190 AND total = 1190 AND tax_status = 'descontable' AND recognized_cost = 1000;
+  IF NOT FOUND THEN RAISE EXCEPTION 'FAIL #2a: cabecera descontable incorrecta'; END IF;
+  PERFORM 1 FROM public.acc_lines l JOIN public.acc_entries e ON e.id = l.entry_id
+  WHERE e.source_type = 'compra' AND e.source_id = v_p_desc AND l.account_id = v_acc_desc AND l.debit = 190;
+  IF NOT FOUND THEN RAISE EXCEPTION 'FAIL #2b: asiento no debitó iva_descontable'; END IF;
 
-  -- Vender 4 unidades del lote antes de reclasificar
-  PERFORM public.registrar_venta(null, jsonb_build_array(jsonb_build_object('product_id', v_prod_track, 'quantity', 4, 'price', 250)), 'efectivo');
+  -- ==========================================================================
+  -- PRUEBA #3: Compra con IVA pendiente
+  -- ==========================================================================
+  v_p_pend := public.registrar_compra(
+    v_sup, jsonb_build_array(jsonb_build_object('product_id', v_prod_notrack2, 'quantity', 10, 'cost', 100)),
+    'credito', 30, 190, 'pendiente', 19, false
+  );
+  PERFORM 1 FROM public.acc_lines l JOIN public.acc_entries e ON e.id = l.entry_id
+  WHERE e.source_type = 'compra' AND e.source_id = v_p_pend AND l.account_id = v_acc_pend AND l.debit = 190;
+  IF NOT FOUND THEN RAISE EXCEPTION 'FAIL #3: asiento no debitó iva_pendiente'; END IF;
 
-  -- Reclasificar 'pendiente' -> 'costo': 6/10 = 114 a inventario, 4/10 = 76 a costo_ventas
-  PERFORM public.clasificar_iva_compra(v_p4, 'costo', 'Régimen no descontable');
-  SELECT items INTO v_items_after FROM public.purchases WHERE id = v_p4;
-  IF v_items_before IS DISTINCT FROM v_items_after THEN
-    RAISE EXCEPTION 'FAIL T3a: purchases.items fue sobrescrito';
-  END IF;
-  PERFORM 1 FROM public.purchases WHERE id = v_p4 AND tax_status = 'costo' AND iva_cost_inventory = 114 AND iva_cost_expense = 76;
-  IF NOT FOUND THEN RAISE EXCEPTION 'FAIL T3b: prorrata inventario(114)/costo(76) incorrecta'; END IF;
+  -- ==========================================================================
+  -- PRUEBA #4: Compra con IVA al costo desde origen
+  -- ==========================================================================
+  v_p_costo := public.registrar_compra(
+    v_sup, jsonb_build_array(jsonb_build_object('product_id', v_prod_track, 'quantity', 10, 'cost', 100, 'lot_code', 'L-ORIG-COSTO', 'expiry_date', (current_date + 180)::text)),
+    'efectivo', null, 190, 'costo', 19, false
+  );
+  PERFORM 1 FROM public.purchases WHERE id = v_p_costo AND recognized_cost = 1190 AND tax_status = 'costo';
+  IF NOT FOUND THEN RAISE EXCEPTION 'FAIL #4a: recognized_cost origen costo incorrecto'; END IF;
+  PERFORM 1 FROM public.product_lots WHERE source_id = v_p_costo AND cost = 119;
+  IF NOT FOUND THEN RAISE EXCEPTION 'FAIL #4b: costo unitario lote no incluyó IVA'; END IF;
 
-  -- T4: Producto sin trazabilidad por lote con movimiento posterior bloquea pendiente -> costo
-  v_p5 := public.registrar_compra(
-    v_sup,
-    jsonb_build_array(jsonb_build_object('product_id', v_prod_notrack, 'quantity', 5, 'cost', 100)),
+  -- ==========================================================================
+  -- PRUEBA #5: Compra con IVA incluido (p_tax = NULL, tax_rate = 19, tax_included = true)
+  -- ==========================================================================
+  v_p_incl := public.registrar_compra(
+    v_sup, jsonb_build_array(jsonb_build_object('product_id', v_prod_track, 'quantity', 10, 'cost', 119, 'lot_code', 'L-INCL', 'expiry_date', (current_date + 180)::text)),
+    'efectivo', null, null, 'descontable', 19, true
+  );
+  PERFORM 1 FROM public.purchases WHERE id = v_p_incl AND total = 1190 AND tax = 190 AND subtotal = 1000;
+  IF NOT FOUND THEN RAISE EXCEPTION 'FAIL #5: cálculo IVA incluido incorrecto'; END IF;
+
+  -- ==========================================================================
+  -- PRUEBA #8: Reclasificación pendiente -> descontable (preserva items, auditoría completa)
+  -- ==========================================================================
+  v_p_reclass_desc := public.registrar_compra(
+    v_sup, jsonb_build_array(jsonb_build_object('product_id', v_prod_notrack2, 'quantity', 5, 'cost', 100)),
     'efectivo', null, 95, 'pendiente', 19, false
   );
-  PERFORM public.registrar_venta(null, jsonb_build_array(jsonb_build_object('product_id', v_prod_notrack, 'quantity', 2, 'price', 250)), 'efectivo');
+  SELECT items INTO v_items_before FROM public.purchases WHERE id = v_p_reclass_desc;
+  v_adj_id := public.clasificar_iva_compra(v_p_reclass_desc, 'descontable', 'Soporte DIAN recibido');
+  SELECT items INTO v_items_after FROM public.purchases WHERE id = v_p_reclass_desc;
+  IF v_items_before IS DISTINCT FROM v_items_after THEN RAISE EXCEPTION 'FAIL #8a: sobrescribió purchases.items'; END IF;
+  PERFORM 1 FROM public.purchase_iva_adjustments
+  WHERE id = v_adj_id AND to_status = 'descontable' AND tax_amount = 95 AND created_by = v_uid_dueno
+    AND created_by_role = 'dueno' AND created_by_name IS NOT NULL AND entry_id IS NOT NULL;
+  IF NOT FOUND THEN RAISE EXCEPTION 'FAIL #8b: auditoría incompleta en purchase_iva_adjustments'; END IF;
+
+  -- ==========================================================================
+  -- PRUEBA #9: Reclasificación pendiente -> costo con lote sin ventas (100% inventario)
+  -- ==========================================================================
+  v_p_reclass_costo_0 := public.registrar_compra(
+    v_sup, jsonb_build_array(jsonb_build_object('product_id', v_prod_track, 'quantity', 10, 'cost', 100, 'lot_code', 'L-REC-0', 'expiry_date', (current_date + 190)::text)),
+    'efectivo', null, 190, 'pendiente', 19, false
+  );
+  PERFORM public.clasificar_iva_compra(v_p_reclass_costo_0, 'costo', 'Régimen no descontable');
+  PERFORM 1 FROM public.purchases WHERE id = v_p_reclass_costo_0 AND iva_cost_inventory = 190 AND iva_cost_expense = 0 AND recognized_cost = 1190;
+  IF NOT FOUND THEN RAISE EXCEPTION 'FAIL #9a: prorrata 0 ventas incorrecta'; END IF;
+  PERFORM 1 FROM public.product_lots WHERE source_id = v_p_reclass_costo_0 AND cost = 119;
+  IF NOT FOUND THEN RAISE EXCEPTION 'FAIL #9b: costo del lote no se actualizó a 119'; END IF;
+
+  -- ==========================================================================
+  -- PRUEBA #10: Reclasificación pendiente -> costo tras venta parcial del lote
+  -- ==========================================================================
+  -- Vender o consumir el stock previo de v_prod_track primero para aislar lote nuevo
+  INSERT INTO public.products (company_id, name, price, cost, stock, tracks_expiry)
+  VALUES (v_co, 'SKU Lote Parcial', 300, 0, 0, true) RETURNING id INTO v_prod_track;
+  v_p_reclass_costo_part := public.registrar_compra(
+    v_sup, jsonb_build_array(jsonb_build_object('product_id', v_prod_track, 'quantity', 10, 'cost', 100, 'lot_code', 'L-PARC', 'expiry_date', (current_date + 200)::text)),
+    'efectivo', null, 190, 'pendiente', 19, false
+  );
+  PERFORM public.registrar_venta(null, jsonb_build_array(jsonb_build_object('product_id', v_prod_track, 'quantity', 4, 'price', 250)), 'efectivo');
+  PERFORM public.clasificar_iva_compra(v_p_reclass_costo_part, 'costo', 'Uso no gravado');
+  PERFORM 1 FROM public.purchases WHERE id = v_p_reclass_costo_part AND iva_cost_inventory = 114 AND iva_cost_expense = 76;
+  IF NOT FOUND THEN RAISE EXCEPTION 'FAIL #10: esperaba 114 inventario / 76 COGS'; END IF;
+
+  -- ==========================================================================
+  -- PRUEBA #11: Bloqueo pendiente -> costo en producto sin lote tras movimiento en kardex (0 cambios)
+  -- ==========================================================================
+  v_p_notrack_block := public.registrar_compra(
+    v_sup, jsonb_build_array(jsonb_build_object('product_id', v_prod_notrack2, 'quantity', 4, 'cost', 100)),
+    'efectivo', null, 76, 'pendiente', 19, false
+  );
+  PERFORM public.registrar_venta(null, jsonb_build_array(jsonb_build_object('product_id', v_prod_notrack2, 'quantity', 1, 'price', 250)), 'efectivo');
+  SELECT cost, stock INTO v_cost_before, v_stock_before FROM public.products WHERE id = v_prod_notrack2;
+  SELECT tax_status INTO v_tax_status_before FROM public.purchases WHERE id = v_p_notrack_block;
   BEGIN
-    PERFORM public.clasificar_iva_compra(v_p5, 'costo', 'Intento sin lote');
-    RAISE EXCEPTION 'FAIL T4: automatizó pendiente->costo sin trazabilidad';
+    PERFORM public.clasificar_iva_compra(v_p_notrack_block, 'costo', 'Intento sin lote');
+    RAISE EXCEPTION 'FAIL #11a: permitió reclasificación sin trazabilidad';
   EXCEPTION WHEN OTHERS THEN
     IF SQLERRM NOT LIKE '%Sin trazabilidad por lote%' THEN RAISE; END IF;
   END;
-  -- Pero pendiente -> descontable SÍ procede limpiamente sin tocar inventario
-  PERFORM public.clasificar_iva_compra(v_p5, 'descontable', 'Factura válida DIAN');
+  PERFORM 1 FROM public.products WHERE id = v_prod_notrack2 AND cost = v_cost_before AND stock = v_stock_before;
+  IF NOT FOUND THEN RAISE EXCEPTION 'FAIL #11b: modificó producto tras bloqueo'; END IF;
+  PERFORM 1 FROM public.purchases WHERE id = v_p_notrack_block AND tax_status = v_tax_status_before;
+  IF NOT FOUND THEN RAISE EXCEPTION 'FAIL #11c: modificó tax_status tras bloqueo'; END IF;
 
-  -- T5: Devolución parcial de compra descontable (2 de 5u) descuenta base e IVA proporcional y cuadra asiento
-  v_dev1 := public.registrar_devolucion_compra(v_p5, v_prod_notrack, 2, 'Mercancía averiada', 'efectivo');
-  PERFORM 1 FROM public.purchase_devolutions WHERE id = v_dev1 AND subtotal = 200 AND tax_amount = 38 AND amount = 238;
-  IF NOT FOUND THEN RAISE EXCEPTION 'FAIL T5a: devolución parcial IVA incorrecta'; END IF;
-
-  -- T6: Anulación tras reclasificación sin ventas revierte ambos asientos ('registro' + 'reclasificacion_iva')
-  -- Probar primero que T3 (v_p4 con iva_cost_expense = 76) NO se deja anular
+  -- ==========================================================================
+  -- PRUEBA #12: Reclasificación rechazada si contabilidad inactiva o período cerrado (0 cambios)
+  -- ==========================================================================
+  v_p_reclass_fail := public.registrar_compra(
+    v_sup, jsonb_build_array(jsonb_build_object('product_id', v_prod_notrack, 'quantity', 2, 'cost', 100)),
+    'efectivo', null, 38, 'pendiente', 19, false
+  );
+  -- 12a: Contabilidad inactiva
+  UPDATE public.acc_settings SET active = false WHERE company_id = v_co;
   BEGIN
-    PERFORM public.anular_compra(v_p4);
-    RAISE EXCEPTION 'FAIL T6a: permitió anular compra con IVA ya en costo de ventas';
+    PERFORM public.clasificar_iva_compra(v_p_reclass_fail, 'descontable', 'Con contabilidad apagada');
+    RAISE EXCEPTION 'FAIL #12a: permitió reclasificar con contabilidad inactiva';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%contabilidad automática no está activa%' THEN RAISE; END IF;
+  END;
+  UPDATE public.acc_settings SET active = true WHERE company_id = v_co;
+  -- 12b: Período cerrado
+  INSERT INTO public.acc_periods (company_id, year, month, status)
+  VALUES (v_co, v_period_year, v_period_month, 'cerrado')
+  ON CONFLICT (company_id, year, month) DO UPDATE SET status = 'cerrado';
+  BEGIN
+    PERFORM public.clasificar_iva_compra(v_p_reclass_fail, 'descontable', 'Período cerrado');
+    RAISE EXCEPTION 'FAIL #12b: permitió reclasificar en período cerrado';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%periodo contable actual está cerrado%' THEN RAISE; END IF;
+  END;
+  DELETE FROM public.acc_periods WHERE company_id = v_co AND year = v_period_year AND month = v_period_month;
+  PERFORM 1 FROM public.purchases WHERE id = v_p_reclass_fail AND tax_status = 'pendiente';
+  IF NOT FOUND THEN RAISE EXCEPTION 'FAIL #12c: alteró compra tras rechazo'; END IF;
+
+  -- ==========================================================================
+  -- PRUEBAS #13, #14, #15: Devoluciones parciales con IVA descontable, pendiente y costo
+  -- ==========================================================================
+  v_p_dev_desc := public.registrar_compra(
+    v_sup, jsonb_build_array(jsonb_build_object('product_id', v_prod_track, 'quantity', 10, 'cost', 100, 'lot_code', 'L-DEV-D', 'expiry_date', (current_date + 210)::text)),
+    'efectivo', null, 190, 'descontable', 19, false
+  );
+  v_dev1 := public.registrar_devolucion_compra(v_p_dev_desc, v_prod_track, 2, 'Avería descontable', 'efectivo');
+  PERFORM 1 FROM public.purchase_devolutions WHERE id = v_dev1 AND subtotal = 200 AND tax_amount = 38 AND amount = 238 AND inventory_credit = 200 AND tax_status_snapshot = 'descontable';
+  IF NOT FOUND THEN RAISE EXCEPTION 'FAIL #13: devolución IVA descontable incorrecta'; END IF;
+
+  v_p_dev_pend := public.registrar_compra(
+    v_sup, jsonb_build_array(jsonb_build_object('product_id', v_prod_track, 'quantity', 10, 'cost', 100, 'lot_code', 'L-DEV-P', 'expiry_date', (current_date + 220)::text)),
+    'efectivo', null, 190, 'pendiente', 19, false
+  );
+  v_dev2 := public.registrar_devolucion_compra(v_p_dev_pend, v_prod_track, 2, 'Avería pendiente', 'efectivo');
+  PERFORM 1 FROM public.purchase_devolutions WHERE id = v_dev2 AND subtotal = 200 AND tax_amount = 38 AND amount = 238 AND inventory_credit = 200 AND tax_status_snapshot = 'pendiente';
+  IF NOT FOUND THEN RAISE EXCEPTION 'FAIL #14: devolución IVA pendiente incorrecta'; END IF;
+
+  v_p_dev_costo := public.registrar_compra(
+    v_sup, jsonb_build_array(jsonb_build_object('product_id', v_prod_track, 'quantity', 10, 'cost', 100, 'lot_code', 'L-DEV-C', 'expiry_date', (current_date + 230)::text)),
+    'efectivo', null, 190, 'costo', 19, false
+  );
+  v_dev3 := public.registrar_devolucion_compra(v_p_dev_costo, v_prod_track, 2, 'Avería costo', 'efectivo');
+  PERFORM 1 FROM public.purchase_devolutions WHERE id = v_dev3 AND subtotal = 200 AND tax_amount = 38 AND amount = 238 AND inventory_credit = 238 AND tax_status_snapshot = 'costo';
+  IF NOT FOUND THEN RAISE EXCEPTION 'FAIL #15: devolución IVA costo incorrecta'; END IF;
+
+  -- ==========================================================================
+  -- PRUEBA #16: Devolución seguida de reclasificación fiscal (neto exacto en Form 300 y reconcile)
+  -- ==========================================================================
+  v_p_dev_then_reclass := public.registrar_compra(
+    v_sup, jsonb_build_array(jsonb_build_object('product_id', v_prod_track, 'quantity', 10, 'cost', 100, 'lot_code', 'L-DTR', 'expiry_date', (current_date + 240)::text)),
+    'efectivo', null, 190, 'pendiente', 19, false
+  );
+  v_dev4 := public.registrar_devolucion_compra(v_p_dev_then_reclass, v_prod_track, 2, 'Devolución previa a reclasificar', 'efectivo');
+  v_adj_id := public.clasificar_iva_compra(v_p_dev_then_reclass, 'descontable', 'Llega factura soporte por saldo neto');
+  PERFORM 1 FROM public.purchase_iva_adjustments WHERE id = v_adj_id AND tax_amount = 152;
+  IF NOT FOUND THEN RAISE EXCEPTION 'FAIL #16: reclasificación tras devolución no tomó el neto 152'; END IF;
+
+  -- ==========================================================================
+  -- PRUEBA #17: Anulación de devolución (restaura lote exacto y bloquea si cambió tax_status)
+  -- ==========================================================================
+  -- 17a: Bloqueo cuando la compra cambió de estado fiscal después de devolver
+  BEGIN
+    PERFORM public.anular_devolucion_compra(v_dev4);
+    RAISE EXCEPTION 'FAIL #17a: permitió anular devolución tras cambio fiscal';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%estado fiscal de la compra cambió%' THEN RAISE; END IF;
+  END;
+  -- 17b: Restauración exacta sobre el mismo lote (2 lotes de la misma compra)
+  v_p_anul_dev := public.registrar_compra(
+    v_sup,
+    jsonb_build_array(
+      jsonb_build_object('product_id', v_prod_track, 'quantity', 5, 'cost', 100, 'lot_code', 'L-A1', 'expiry_date', (current_date + 10)::text),
+      jsonb_build_object('product_id', v_prod_track, 'quantity', 5, 'cost', 100, 'lot_code', 'L-B2', 'expiry_date', (current_date + 300)::text)
+    ),
+    'efectivo', null, 190, 'descontable', 19, false
+  );
+  SELECT id INTO v_lot_a FROM public.product_lots WHERE source_id = v_p_anul_dev AND lot_code = 'L-A1';
+  SELECT id INTO v_lot_b FROM public.product_lots WHERE source_id = v_p_anul_dev AND lot_code = 'L-B2';
+  v_dev5 := public.registrar_devolucion_compra(v_p_anul_dev, v_prod_track, 3, 'Devuelve 3u de L-A1', 'efectivo');
+  -- Verificar que se registró exactamente en purchase_devolution_lots contra L-A1
+  PERFORM 1 FROM public.purchase_devolution_lots WHERE devolution_id = v_dev5 AND lot_id = v_lot_a AND quantity = 3;
+  IF NOT FOUND THEN RAISE EXCEPTION 'FAIL #17b: no registró lote exacto en purchase_devolution_lots'; END IF;
+  PERFORM public.anular_devolucion_compra(v_dev5);
+  SELECT qty_remaining INTO v_lot_a_rem FROM public.product_lots WHERE id = v_lot_a;
+  SELECT qty_remaining INTO v_lot_b_rem FROM public.product_lots WHERE id = v_lot_b;
+  IF v_lot_a_rem <> 5 OR v_lot_b_rem <> 5 THEN
+    RAISE EXCEPTION 'FAIL #17c: restauración de lote incorrecta (A=%, B=%)', v_lot_a_rem, v_lot_b_rem;
+  END IF;
+
+  -- ==========================================================================
+  -- PRUEBA #18: Anulación antes de reclasificar y sin salidas
+  -- ==========================================================================
+  v_p_anul_pre := public.registrar_compra(
+    v_sup, jsonb_build_array(jsonb_build_object('product_id', v_prod_track, 'quantity', 4, 'cost', 100, 'lot_code', 'L-AN1', 'expiry_date', (current_date + 90)::text)),
+    'efectivo', null, 76, 'pendiente', 19, false
+  );
+  PERFORM public.anular_compra(v_p_anul_pre);
+  PERFORM 1 FROM public.acc_entries WHERE source_type = 'compra' AND source_id = v_p_anul_pre AND status = 'contabilizado';
+  IF FOUND THEN RAISE EXCEPTION 'FAIL #18: quedó asiento contabilizado tras anular'; END IF;
+
+  -- ==========================================================================
+  -- PRUEBA #19: Anulación tras reclasificar (descontable o costo sin ventas, incluso con contabilidad desactivada después)
+  --             y bloqueo por iva_cost_expense > 0 o mezcla sin lote
+  -- ==========================================================================
+  v_p_anul_post_desc := public.registrar_compra(
+    v_sup, jsonb_build_array(jsonb_build_object('product_id', v_prod_track, 'quantity', 4, 'cost', 100, 'lot_code', 'L-AN2', 'expiry_date', (current_date + 95)::text)),
+    'efectivo', null, 76, 'pendiente', 19, false
+  );
+  PERFORM public.clasificar_iva_compra(v_p_anul_post_desc, 'descontable', 'Previo a anular');
+  -- Simular que la empresa apaga contabilidad temporalmente antes de anular
+  UPDATE public.acc_settings SET active = false WHERE company_id = v_co;
+  PERFORM public.anular_compra(v_p_anul_post_desc);
+  UPDATE public.acc_settings SET active = true WHERE company_id = v_co;
+  PERFORM 1 FROM public.acc_entries WHERE source_type = 'compra' AND source_id = v_p_anul_post_desc AND status = 'contabilizado';
+  IF FOUND THEN RAISE EXCEPTION 'FAIL #19a: no revirtió todos los asientos al anular con active=false'; END IF;
+  PERFORM 1 FROM public.purchase_iva_adjustments WHERE purchase_id = v_p_anul_post_desc AND status <> 'reversado';
+  IF FOUND THEN RAISE EXCEPTION 'FAIL #19b: ajuste IVA no pasó a reversado'; END IF;
+
+  -- Reclasificada a costo sin ventas -> anulable limpiamente
+  v_p_anul_post_costo := public.registrar_compra(
+    v_sup, jsonb_build_array(jsonb_build_object('product_id', v_prod_track, 'quantity', 4, 'cost', 100, 'lot_code', 'L-AN3', 'expiry_date', (current_date + 95)::text)),
+    'efectivo', null, 76, 'pendiente', 19, false
+  );
+  PERFORM public.clasificar_iva_compra(v_p_anul_post_costo, 'costo', 'Costo sin ventas');
+  PERFORM public.anular_compra(v_p_anul_post_costo);
+
+  -- Bloqueo cuando iva_cost_expense > 0
+  BEGIN
+    PERFORM public.anular_compra(v_p_reclass_costo_part);
+    RAISE EXCEPTION 'FAIL #19c: permitió anular compra con IVA en costo de ventas';
   EXCEPTION WHEN OTHERS THEN
     IF SQLERRM NOT LIKE '%ya se imputó a costo de ventas%' THEN RAISE; END IF;
   END;
 
-  -- T7: Formulario 300 y acc_reconcile sin diferencias
-  v_f300 := public.dian_calcular_formulario_300(v_co, current_date - 1, current_date + 2);
-  IF (v_f300->>'casilla_74_iva_descontable_compras')::numeric <> 57 THEN -- 95 descontable - 38 devuelto = 57
-    RAISE EXCEPTION 'FAIL T7a: Form 300 esperado 57, obtenido %', v_f300->>'casilla_74_iva_descontable_compras';
+  -- Bloqueo en producto sin lote tras venta + recompra
+  INSERT INTO public.products (company_id, name, price, cost, stock, tracks_expiry)
+  VALUES (v_co, 'SKU Mix SinLote', 300, 0, 0, false) RETURNING id INTO v_prod_notrack_mix;
+  v_p_anul_notrack_mix := public.registrar_compra(
+    v_sup, jsonb_build_array(jsonb_build_object('product_id', v_prod_notrack_mix, 'quantity', 5, 'cost', 100)),
+    'efectivo', null, 0, 'sin_iva', 0, false
+  );
+  PERFORM public.registrar_venta(null, jsonb_build_array(jsonb_build_object('product_id', v_prod_notrack_mix, 'quantity', 3, 'price', 250)), 'efectivo');
+  PERFORM public.registrar_compra(
+    v_sup, jsonb_build_array(jsonb_build_object('product_id', v_prod_notrack_mix, 'quantity', 5, 'cost', 120)),
+    'efectivo', null, 0, 'sin_iva', 0, false
+  );
+  BEGIN
+    PERFORM public.anular_compra(v_p_anul_notrack_mix);
+    RAISE EXCEPTION 'FAIL #19d: anuló compra sin lote tras venta y recompra';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%existen ventas, ajustes o recompras posteriores%' THEN RAISE; END IF;
+  END;
+
+  -- ==========================================================================
+  -- PRUEBAS #20 y #21: Formulario 300 mixto y acc_reconcile() sin descuadres
+  -- ==========================================================================
+  v_f300 := public.dian_calcular_formulario_300(v_co, date_trunc('day', now()) - interval '1 day', date_trunc('day', now()) + interval '2 days');
+  IF (v_f300->>'casilla_74_iva_descontable_compras')::numeric <= 0 THEN
+    RAISE EXCEPTION 'FAIL #20: Form 300 descontable inesperado: %', v_f300;
   END IF;
 
-  FOR v_rec IN SELECT * FROM public.acc_reconcile() WHERE code IN ('compras','iva_compras_descontable','iva_compras_pendiente','iva_compras_costo_gasto') LOOP
+  FOR v_rec IN
+    SELECT * FROM public.acc_reconcile()
+    WHERE code IN (
+      'compras', 'compras_reclasificacion_inv', 'devoluciones_compra_inv',
+      'iva_compras_costo_gasto', 'iva_compras_descontable', 'iva_compras_pendiente'
+    )
+  LOOP
     IF abs(v_rec.difference) > 0.01 THEN
-      RAISE EXCEPTION 'FAIL T7b: Conciliación % con diferencia %', v_rec.code, v_rec.difference;
+      RAISE EXCEPTION 'FAIL #21: conciliación % con diferencia % (op=%, acc=%)',
+        v_rec.code, v_rec.difference, v_rec.operational, v_rec.accounting;
     END IF;
   END LOOP;
 
-  -- T8: Aislamiento multiempresa (no permite consultar ni clasificar otra empresa)
-  SELECT id INTO v_other_co FROM public.companies WHERE id <> v_co LIMIT 1;
-  IF v_other_co IS NOT NULL THEN
-    BEGIN
-      PERFORM public.dian_calcular_formulario_300(v_other_co, current_date - 1, current_date + 2);
-      RAISE EXCEPTION 'FAIL T8: fuga multiempresa en Form 300';
-    EXCEPTION WHEN OTHERS THEN
-      IF SQLERRM NOT LIKE '%No autorizado%' THEN RAISE; END IF;
-    END;
-  END IF;
+  -- ==========================================================================
+  -- PRUEBA #22: Aislamiento multiempresa estricto (incluso con rol admin de plataforma)
+  -- ==========================================================================
+  UPDATE public.profiles SET role = 'admin' WHERE id = v_uid_dueno;
+  BEGIN
+    PERFORM public.dian_calcular_formulario_300(v_other_co, current_date - 1, current_date + 2);
+    RAISE EXCEPTION 'FAIL #22a: fuga multiempresa en Form 300 para admin';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%No autorizado%' THEN RAISE; END IF;
+  END;
 
-  RAISE NOTICE 'TODAS LAS PRUEBAS T1-T8 SUPERADAS OK (se revertirán con ROLLBACK)';
+  PERFORM set_config('request.jwt.claim.sub', v_uid_other::text, true);
+  BEGIN
+    PERFORM public.clasificar_iva_compra(v_p_pend, 'descontable', 'Intento cross-tenant');
+    RAISE EXCEPTION 'FAIL #22b: fuga multiempresa en clasificar_iva_compra';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%Compra no encontrada%' AND SQLERRM NOT LIKE '%No tienes permiso%' THEN RAISE; END IF;
+  END;
+
+  RAISE NOTICE 'SUITE 22 ESCENARIOS VALIDADA EN DISEÑO (SE REVIERTE CON ROLLBACK)';
 END $$;
 
 ROLLBACK;
-```
-**Resultados esperados:**
-- T1: bloquea cuenta pasivo en acc\_save\_settings y bloquea compra con IVA sin cuenta configurada (0 fallback).
-- T2: registrar\_compra con 2, 3 y 4 argumentos inserta sin error 42725.
-- T3: purchases.items idéntico antes y después; iva\_cost\_inventory = 114 (6u), iva\_cost\_expense = 76 (4u).
-- T4: bloquea pendiente -> costo sin lote cuando hay movimientos posteriores; permite pendiente -> descontable.
-- T5: devolución de 2u registra subtotal = 200, tax\_amount = 38, amount = 238, acreditando Inventario (200) e iva\_descontable (38).
-- T6: bloquea anular compra cuyo IVA ya pasó a costo\_ventas; anulación de compras sin salidas previas revierte todos sus asientos (registro y reclasificacion\_iva) y actualiza purchase\_iva\_adjustments.status = 'reversado'.
-- T7: casilla\_74 = 57 (95 - 38) excluyendo pendientes/al costo; acc\_reconcile() arroja difference = 0 en todos los rubros IVA y compras.
-- T8: SQLSTATE 42501 al intentar consultar otra empresa.
 
-***
-## 6. Limitaciones que no se pueden resolver con la estructura actual
-- **Productos sin vencimiento (tracks\_expiry = false) tras ventas u otras compras posteriores:** la base de datos no tiene una tabla de capas FIFO/costo por purchase\_id para artículos sin lote. Por fidelidad contable, clasificar\_iva\_compra(..., 'costo') bloquea la reclasificación automática cuando existan movimientos posteriores en kardex; en esos casos el contador debe reclasificar mediante asiento manual o activar control de lotes (tracks\_expiry = true).
-- **Anulación de compras antiguas con tracks\_expiry = false después de ventas y recompras intermedias:** mientras no existan capas por compra, si se compra, vende y vuelve a comprar el mismo producto no perecedero, anular\_compra sigue dependiendo de products.stock >= quantity sin distinguir qué capa salió primero.
-- **Respaldo offline en src/services/dianTaxService.ts y campos de IVA en pantalla:** la lógica frontend (Purchases.tsx, PurchaseInvoiceScannerModal.tsx, dianTaxService.ts) aún no envía p\_tax/p\_tax\_status ni muestra los desgloses nuevos; el respaldo directo JS de dianTaxService.ts no distingue tax\_status hasta que se actualice en una fase UI posterior (la RPC oficial dian\_calcular\_formulario\_300 sí queda corregida).
-- **Anulación de compra originada desde Orden de Compra con bodega (recibir\_orden\_compra):** actualmente recibir\_orden\_compra suma a warehouse\_stock con reference\_type = 'purchase\_order', mientras anular\_compra actúa sobre products.stock global. No se modifica esa relación en esta fase para no introducir regresiones fuera de alcance.
-- **Empresas sin plan de cuentas inicializado (4 de 5 en la base actual):** solo tendrán 1.1.06 cuando ejecuten acc\_seed\_template('generico') o creen sus cuentas manualmente.
+Nota: Para comprobar específicamente el cambio de período fiscal entre el registro y la reclasificación del escenario #20 (p.created_at en un bimestre y adj.created_at en otro), en la ejecución de auditoría puede además insertarse/ajustarse una compra pendiente del mes anterior y ejecutarse la reclasificación en el bimestre actual dentro del mismo BEGIN; ... ROLLBACK;, verificando que en el bimestre 1 aporta 0 a casilla_74 y en el bimestre 2 aporta adj.tax_amount neto.
+G. Riesgos residuales
+
+    Productos sin control de lote (tracks_expiry = false): Como se documentó en la sección A.3, la ausencia de una tabla de capas FIFO por purchase_id impide automatizar clasificar_iva_compra(..., 'costo'), anular_compra y registrar_devolucion_compra una vez que existen salidas o nuevas compras mezcladas en kardex. El sistema protege la integridad bloqueando la operación automática y exigiendo reclasificación contable manual hasta que exista un módulo futuro de capas de inventario.
+
+    Bodegas en órdenes de compra (recibir_orden_compra): anular_compra revierte products.stock global, no warehouse_stock. Requiere ajuste futuro si se anulan compras originadas desde recepción en múltiples bodegas.
+
+    Respaldo offline y formularios de captura UI: Hasta implementar la fase de interfaz (Purchases.tsx, PurchaseInvoiceScannerModal.tsx, Devolutions.tsx, DianComplianceCenter.tsx, dianTaxService.ts, supabase.ts), las compras creadas desde pantalla seguirán enviando los 4 parámetros clásicos (sin_iva) y el fallback JS local no distingue tax_status si la RPC falla.
+
+    Empresas sin plan contable inicializado (4 de las 5 actuales en la base): No reciben cuentas automáticamente mientras no ejecuten acc_seed_template('generico') o configuren su plan personalizado y mapeen iva_descontable e iva_pendiente.
+
+    Anomalía histórica detectada en datos vivos (Inversiones Bogota CV): La cuenta 4.1.03 (Otros ingresos) figura en la base viva con type = 'activo' y nature = 'credito'. No afecta las cuentas de compras/IVA (ya que estas validan estrictamente activo/debito), pero conviene sanearla en mantenimiento contable posterior.
+
+H. Veredicto
+
+APROBADAS EN DISEÑO PARA FASE DE EJECUCIÓN Y AUDITORÍA EN TRANSACCIÓN ROLLBACK.
+
+Las migraciones 20261113000062_fase_a_iva_compras_contabilidad.sql y 20261113000063_devoluciones_compra_con_iva.sql corrigen todos los bloqueos críticos detectados en la segunda revisión (Lee): cierran la fuga multiempresa en dian_calcular_formulario_300, impiden reclasificaciones sin garantía de asiento contable o con contabilidad inactiva, aseguran trazabilidad exacta por lote en devoluciones (purchase_devolution_lots), resuelven el descuadre de devoluciones previas + reclasificación posterior en Formulario 300 y acc_reconcile(), corrigen acc_trg_purchases() para reversiones tras desactivar contabilidad, y bloquean anulaciones o capitalizaciones sin trazabilidad en productos sin lote.
+
+Queda pendiente únicamente su aplicación controlada y la ejecución real de la suite de 22 escenarios con ROLLBACK antes de confirmar el paso a producción.

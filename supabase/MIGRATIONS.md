@@ -133,6 +133,7 @@ Resultado de la verificación contra la base (2026-11-07): **todas las migracion
 | 84 | `20261112000056_historial_inmutable_arqueos_caja.sql` | ✅ Aplicada | Historial inmutable de arqueos X y cierres Z (`cash_shift_arqueos`, solo lectura para usuarios; escribe `caja_arqueo_ciego`). Verificada en la base viva el 2026-11-12. |
 | 85 | `20261112000057_cerrar_anon_funciones_sensibles.sql` | ✅ Aplicada | Aplicada el 2026-11-12. Quita EXECUTE a `anon` en `dian_calcular_formulario_300/350`, `contabilizar_venta_automatica` y `registrar_pagos_venta`. |
 | 86 | `20261112000058_validar_empresa_funciones_dian.sql` | ✅ Aplicada | Aplicada el 2026-11-12. Valida que `p_company_id` sea la empresa del usuario (o admin de plataforma) en `dian_calcular_formulario_300/350`. Pendiente: ambas aún fallan por columnas inexistentes (`purchases.subtotal/tax`, `acc_entries.date`); el frontend usa su respaldo directo desde tablas. |
+| 87 | `20261112000059_corregir_columna_fecha_formulario_350.sql` | ✅ Aplicada | Aplicada el 2026-11-12. Corrige `e.date` por `e.entry_date` en `dian_calcular_formulario_350`. El respaldo del frontend (`dianTaxService.ts`) se corrigió igual. |
 
 **Reemplazadas, NO ejecutar** (`supabase/migrations_superseded/`): `20261106000022_contable_pro_partida_doble_puc_niif.sql`, `20261106000046_sistema_contable_partida_doble.sql`, `20261106000047_reportes_financieros_contables.sql`.
 Crean un libro contable paralelo (`accounts`, `journal_entries`, `journal_lines`, `fn_*`) que nunca se aplicó.

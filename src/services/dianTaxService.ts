@@ -208,10 +208,10 @@ export async function getFormulario350(
   // Fallback calculando sobre acc_lines si existen
   let entriesQuery = supabase
     .from('acc_entries')
-    .select('id, date, status, company_id')
-    .gte('date', startDate.toISOString().split('T')[0])
-    .lt('date', endDate.toISOString().split('T')[0])
-    .eq('status', 'posted')
+    .select('id, entry_date, status, company_id')
+    .gte('entry_date', startDate.toISOString().split('T')[0])
+    .lt('entry_date', endDate.toISOString().split('T')[0])
+    .eq('status', 'contabilizado')
 
   if (companyId) {
     entriesQuery = entriesQuery.eq('company_id', companyId)

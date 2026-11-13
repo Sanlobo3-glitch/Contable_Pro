@@ -123,7 +123,7 @@ export default function Cartera() {
     setAmount(''); setAbNote(''); setMethod('efectivo'); setAbId(newId())
     const { data: res, error: err } = await supabase.rpc('cartera_cliente', { p_customer_id: id })
     setDetLoading(false)
-    if (err) { flash('No se pudo abrir el cliente: ' + err.message); setSel(null); return }
+    if (err) { flashError('No se pudo abrir el cliente: ' + err.message); setSel(null); return }
     const d = res as Detail
     setDetail(d)
     setLimit(String(Number(d.credit_limit) || 0)); setDays(String(d.credit_days ?? 30))

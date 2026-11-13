@@ -1,39 +1,62 @@
 # Catálogo de Procedimientos Almacenados (RPC) Críticos
 
 **Sistema:** Contable Pro (ERP Financiero, Comercial y Contable)  
-**Fecha de corte:** 2026-11-10  
+**Fecha de corte:** 2026-11-13  
 **Arquitectura:** PostgreSQL + Supabase (Multi-tenant con `company_id` y RLS al 100%)
 
 ---
 
 ## 1. Ciclo Comercial y Facturación
 
-### 1.1 `registrar_venta(p_customer_id, p_items, p_payment_method, p_channel, p_client_id, p_captured_at)`
-- **Propósito:** Registra una venta en mostrador o ruta, descuenta inventario en la bodega activa, crea comprobante fiscal (`invoice_number`) y dispara el asiento contable (`acc_entries` / `acc_lines`) de partida doble (Caja/Bancos vs Ingresos e IVA).
-- **Tablas afectadas:** `sales`, `sale_items`, `products`, `acc_entries`, `acc_lines`, `cash_shifts`.
-- **Nivel de seguridad:** SECURITY DEFINER, valida `company_id` contra `auth.uid()`.
+### 1.1 `registrar_venta(p_customer_id, p_items, p_payment_method, p_geo, p_client_id, p_captured_at, p_channel, p_discount, p_received, p_fx_currency, p_fx_amount, p_fx_rate, p_base_amount)`
+- **Propósito:** Registra una venta individual en mostrador o ruta, descuenta inventario, vincula el turno de caja abierto (`shift_id`), inserta ingreso de caja si es efectivo y dispara el asiento contable NIIF (`acc_entries` / `acc_lines`).
+- **Tablas afectadas:** `sales`, `products`, `kardex`, `cash_entries`, `acc_entries`, `acc_lines`.
+- **Nivel de seguridad:** `SECURITY DEFINER`, `search_path` fijado, valida `company_id` vía `_ctx(null)`.
 
-### 1.2 `registrar_venta_bodega(p_customer_id, p_warehouse_id, p_items, p_payment_method, p_channel, p_client_id, p_captured_at)`
+### 1.2 `registrar_venta_multipago(p_customer_id, p_items, p_payments, p_warehouse_id, p_shift_id, p_geo, p_client_id, p_captured_at, p_channel, p_discount, p_received)`
+- **Propósito:** Registra de forma atómica (ACID) una venta con múltiples medios de pago (`efectivo`, `tarjeta`, `transferencia`, `fiado`), valida bodega activa (`warehouses.active = true`), descuenta `warehouse_stock` y `products`, verifica cupo de crédito para la fracción fiada, inserta filas en `sale_payments` antes del trigger contable (`acc_post_sale`), registra ingreso en `cash_entries` únicamente por el efectivo y dispara la contabilización NIIF con débitos desglosados por medio de pago.
+- **Tablas afectadas:** `sales`, `sale_payments`, `products`, `warehouse_stock`, `warehouse_movements`, `kardex`, `cash_entries`, `acc_entries`, `acc_lines`.
+- **Nivel de seguridad:** `SECURITY DEFINER`, `search_path` fijado, bloqueo idempotente por `client_uuid`, revocado a `anon`/`public`.
+
+### 1.3 `registrar_pagos_venta(p_sale_id, p_payments, p_shift_id)`
+- **Propósito:** Registra o reemplaza los renglones de pago (`sale_payments`) de una venta existente dentro de la empresa activa.
+- **Tablas afectadas:** `sale_payments`, `sales`.
+- **Nivel de seguridad:** `SECURITY DEFINER`, `search_path` fijado, revocado a `anon`/`public`.
+
+### 1.4 `contabilizar_venta_automatica(p_sale_id)`
+- **Propósito:** Genera de forma idempotente el asiento contable NIIF en `acc_entries`/`acc_lines` (vía `acc_system_entry`) para una venta completada leyendo sus pagos en `sale_payments` o `sales.payment_method`.
+- **Tablas afectadas:** `acc_entries`, `acc_lines`, `acc_settings`, `acc_accounts`, `sale_payments`.
+- **Nivel de seguridad:** `SECURITY DEFINER`, `search_path` fijado, revocado a `anon`/`public`.
+
+### 1.5 `registrar_venta_bodega(p_customer_id, p_warehouse_id, p_items, p_payment_method, p_channel, p_client_id, p_captured_at)`
 - **Propósito:** Variante multi-bodega con validación estricta de stock disponible en la bodega de origen.
-- **Tablas afectadas:** `sales`, `sale_items`, `warehouse_stock`, `kardex_movements`.
+- **Tablas afectadas:** `sales`, `warehouse_stock`, `warehouse_movements`, `kardex`.
 
-### 1.3 `anular_venta(p_sale_id, p_reason)`
+### 1.6 `anular_venta(p_sale_id, p_reason)`
 - **Propósito:** Revierte una venta previamente emitida, reincorpora los productos al inventario físico mediante movimiento inverso en kardex y reversa el asiento contable NIIF.
 - **Tablas afectadas:** `sales`, `products`, `warehouse_stock`, `acc_entries`, `audit_logs`.
+
+### 1.7 `registrar_abono(p_customer_id, p_amount, p_method, p_note, p_client_id)`
+- **Propósito:** Registra un abono a cartera (FIFO sobre ventas con `payment_method = 'fiado'` o con renglón `'fiado'` parcial en `sale_payments`), descuenta la deuda calculada con `_sale_balance`, registra el ingreso en `cash_entries` vinculado al `shift_id` abierto si es efectivo y contabiliza vía `acc_post_payment`.
+- **Tablas afectadas:** `credit_payments`, `credit_allocations`, `cash_entries`, `acc_entries`.
 
 ---
 
 ## 2. Caja y Control Antifraude
 
-### 2.1 `caja_abrir_turno(p_branch_id, p_base_amount, p_notes)`
-- **Propósito:** Abre una sesión/turno de caja para el usuario actual, registrando la base en efectivo inicial y asegurando que no tenga turnos concurrentes huérfanos.
-- **Tablas afectadas:** `cash_shifts`, `cash_movements`.
+### 2.1 `caja_abrir_turno(p_opening_amount, p_warehouse_id, p_notes, p_denominations)`
+- **Propósito:** Abre una sesión/turno de caja para el usuario autenticado (con `pg_advisory_xact_lock` por empresa y usuario), valida bodega activa (`warehouses.active = true`), registra la base inicial en `cash_entries` y guarda el desglose por denominaciones.
+- **Tablas afectadas:** `cash_shifts`, `cash_entries`, `cash_shift_denominations`.
 
-### 2.2 `caja_arqueo_ciego(p_shift_id, p_cash_counted, p_voucher_counted, p_notes)`
-- **Propósito:** Permite el cierre ciego donde el cajero reporta el dinero físico contado sin ver los totales del sistema. El sistema calcula el sobrante/faltante y genera la alerta para el Gerente o Administrador.
-- **Tablas afectadas:** `cash_shifts`, `manager_alerts`.
+### 2.2 `caja_obtener_turno_activo()`
+- **Propósito:** Retorna el turno abierto del cajero en la empresa en sesión con los totales autoritativos calculados desde servidor (`sales_cash`, `sales_card`, `sales_transfer`, `sales_credit`, `sales_count`, ingresos/egresos de caja y `expected_cash`).
+- **Tablas consultadas:** `cash_shifts`, `sales`, `sale_payments`, `cash_entries`, `cash_shift_denominations`.
 
-### 2.3 `caja_registrar_movimiento(p_shift_id, p_type, p_amount, p_concept)`
+### 2.3 `caja_arqueo_ciego(p_shift_id, p_counted_cash, p_notes, p_denominations, p_is_final)`
+- **Propósito:** Ejecuta arqueo parcial (`X`) o cierre ciego definitivo (`Z`) donde el cajero reporta el dinero físico contado sin ver totales esperados. Calcula diferencia sobre efectivo esperado, guarda registro inmutable en `cash_shift_arqueos`, genera alerta gerencial si hay descuadre y retorna el desglose autoritativo de servidor.
+- **Tablas afectadas:** `cash_shifts`, `cash_shift_arqueos`, `cash_shift_denominations`, `manager_alerts`.
+
+### 2.4 `caja_registrar_movimiento(p_shift_id, p_type, p_amount, p_concept)`
 - **Propósito:** Registra ingresos extraordinarios o egresos menores de caja menor, vinculándolos al turno y a la contabilidad.
 - **Tablas afectadas:** `cash_movements`, `cash_shifts`.
 

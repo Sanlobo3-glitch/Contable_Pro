@@ -89,6 +89,7 @@ interface Receipt {
   total: number
   payment: string
   paymentChannel?: string | null
+  payments?: { method: string; amount: number; reference?: string }[]
   received: number | null
   change: number
   fx: FxResult | null
@@ -142,7 +143,17 @@ ${rows}
 ${r.discount > 0 ? `<div class="row"><span>Subtotal</span><span>${m(r.sum)}</span></div><div class="row"><span>Descuento</span><span>-${m(r.discount)}</span></div>` : ''}
 ${r.tax > 0 ? `<div class="row"><span>Impuesto${r.taxRate ? ` (${esc(r.taxRate)}%)` : ''}</span><span>${m(r.tax)}</span></div>` : ''}
 <div class="row t"><span>TOTAL</span><span>${m(r.total)}</span></div>
-<div class="row"><span>Pago</span><span>${esc(PAYMENT_LABEL[r.payment] ?? r.payment)}${r.paymentChannel ? ` (${esc(r.paymentChannel)})` : ''}</span></div>
+${
+  r.payments && r.payments.length > 1
+    ? `<div style="margin-top:4px;font-weight:bold;">Desglose de pago:</div>` +
+      r.payments
+        .map(
+          p =>
+            `<div class="row"><span>${esc(PAYMENT_LABEL[p.method] ?? p.method)}${p.reference ? ` (${esc(p.reference)})` : ''}</span><span>${m(p.amount)}</span></div>`
+        )
+        .join('')
+    : `<div class="row"><span>Pago</span><span>${esc(PAYMENT_LABEL[r.payment] ?? r.payment)}${r.paymentChannel ? ` (${esc(r.paymentChannel)})` : ''}</span></div>`
+}
 ${r.fx ? `<div class="row"><span>Pagó en ${esc(r.fx.currency)}</span><span>${esc(formatMoney(r.fx.amount, r.fx.currency))}</span></div><div class="row"><span>Tasa</span><span>1 ${esc(r.fx.currency)} = ${m(r.fx.rate)}</span></div>${r.fx.baseAmount > 0 ? `<div class="row"><span>Además recibió</span><span>${m(r.fx.baseAmount)}</span></div>` : ''}` : ''}
 ${r.received != null ? `<div class="row"><span>Recibido</span><span>${m(r.received)}</span></div><div class="row"><span>Cambio</span><span>${m(r.change)}</span></div>` : ''}
 <hr>
@@ -162,7 +173,14 @@ function shareText(r: Receipt, cfg: CompanyConfig | null): string {
   L.push('')
   if (r.discount > 0) L.push(`Descuento: -${m(r.discount)}`)
   if (r.tax > 0) L.push(`Impuesto: ${m(r.tax)}`)
-  L.push(`*Total: ${m(r.total)}*`, `Pago: ${PAYMENT_LABEL[r.payment] ?? r.payment}${r.paymentChannel ? ` (${r.paymentChannel})` : ''}`)
+  if (r.payments && r.payments.length > 1) {
+    L.push(`*Total: ${m(r.total)}*`, 'Pago dividido:')
+    for (const p of r.payments) {
+      L.push(`• ${PAYMENT_LABEL[p.method] ?? p.method}${p.reference ? ` (${p.reference})` : ''}: ${m(p.amount)}`)
+    }
+  } else {
+    L.push(`*Total: ${m(r.total)}*`, `Pago: ${PAYMENT_LABEL[r.payment] ?? r.payment}${r.paymentChannel ? ` (${r.paymentChannel})` : ''}`)
+  }
   if (r.fx) L.push(`Pagó en ${r.fx.currency}: ${formatMoney(r.fx.amount, r.fx.currency)} (tasa: 1 ${r.fx.currency} = ${m(r.fx.rate)})`)
   if (r.fx && r.fx.baseAmount > 0) L.push(`Además recibió: ${m(r.fx.baseAmount)}`)
   if (r.fx && r.change > 0) L.push(`Cambio: ${m(r.change)}`)
@@ -234,6 +252,13 @@ export default function Mostrador({ onNavigate }: { onNavigate?: (page: string) 
   const [discValue, setDiscValue] = useState('')
   const [payment, setPayment] = useState('efectivo')
   const [paymentChannel, setPaymentChannel] = useState<string>('')
+  const [isMultipago, setIsMultipago] = useState(false)
+  const [splitPayments, setSplitPayments] = useState<
+    { method: 'efectivo' | 'tarjeta' | 'transferencia' | 'fiado'; amount: string; reference: string }[]
+  >([
+    { method: 'efectivo', amount: '', reference: '' },
+    { method: 'transferencia', amount: '', reference: '' },
+  ])
   const [received, setReceived] = useState('')
   const [fx, setFx] = useState<FxState | null>(null)
   const [saving, setSaving] = useState(false)
@@ -454,15 +479,41 @@ export default function Mostrador({ onNavigate }: { onNavigate?: (page: string) 
   const taxMode = taxModeOf(config)
   const tx = calcTax(round2(sum - discount), taxMode, taxRateOf(config))
   const total = tx.total
-  const fxRes = payment === 'efectivo' || payment === 'transferencia' ? fxResult(fx) : null
+  const splitParsed = useMemo(
+    () =>
+      splitPayments.map(p => ({
+        method: p.method,
+        amount: round2(parseFloat(p.amount) || 0),
+        reference: p.reference.trim() || undefined,
+      })),
+    [splitPayments]
+  )
+  const splitAssignedSum = useMemo(
+    () => round2(splitParsed.reduce((acc, p) => acc + (p.amount > 0 ? p.amount : 0), 0)),
+    [splitParsed]
+  )
+  const splitRemaining = round2(total - splitAssignedSum)
+  const splitCashSum = useMemo(
+    () => round2(splitParsed.filter(p => p.method === 'efectivo').reduce((a, p) => a + (p.amount > 0 ? p.amount : 0), 0)),
+    [splitParsed]
+  )
+  const splitHasFiado = useMemo(
+    () => isMultipago && splitParsed.some(p => p.method === 'fiado' && p.amount > 0),
+    [isMultipago, splitParsed]
+  )
+
+  const fxRes = !isMultipago && (payment === 'efectivo' || payment === 'transferencia') ? fxResult(fx) : null
   const receivedNum = fxRes
     ? fxRes.equivalent
     : received.trim() === ''
       ? null
       : parseFloat(received)
+  const cashTarget = isMultipago ? splitCashSum : total
   const change =
-    (payment === 'efectivo' || fxRes) && receivedNum != null && !isNaN(receivedNum)
-      ? round2(receivedNum - total)
+    ((!isMultipago && (payment === 'efectivo' || fxRes)) || (isMultipago && splitCashSum > 0)) &&
+    receivedNum != null &&
+    !isNaN(receivedNum)
+      ? round2(receivedNum - cashTarget)
       : 0
 
   const totalCartUnits = useMemo(() => lines.reduce((acc, l) => acc + l.qty, 0), [lines])
@@ -564,6 +615,11 @@ export default function Mostrador({ onNavigate }: { onNavigate?: (page: string) 
     setDiscMode('monto')
     setPayment('efectivo')
     setPaymentChannel('')
+    setIsMultipago(false)
+    setSplitPayments([
+      { method: 'efectivo', amount: '', reference: '' },
+      { method: 'transferencia', amount: '', reference: '' },
+    ])
     setReceived('')
     setFx(null)
     setSearch('')
@@ -609,36 +665,74 @@ export default function Mostrador({ onNavigate }: { onNavigate?: (page: string) 
       setNotice('El descuento no puede ser negativo.')
       return
     }
-    if (payment === 'fiado') {
-      if (!customerId) {
-        setNotice('El fiado requiere un cliente registrado. Elige un cliente.')
+    if (isMultipago) {
+      const validLines = splitParsed.filter(p => p.amount > 0)
+      if (validLines.length < 2) {
+        setNotice('En modo multipago ingresa al menos 2 medios de pago con monto mayor a cero.')
         return
       }
-      if (pendingCustomers.some(p => p.client_id === customerId)) {
-        setNotice('Este cliente aún no se ha sincronizado. Espera a que suba para venderle a crédito.')
+      if (Math.abs(splitRemaining) > 0.05) {
+        setNotice(`La suma de los pagos (${money(splitAssignedSum)}) debe coincidir con el total (${money(total)}).`)
         return
       }
-      if (!navigator.onLine) {
-        setNotice('El fiado necesita conexión a internet para revisar el cupo del cliente.')
+      if (splitHasFiado) {
+        if (!customerId) {
+          setNotice('El pago a crédito (fiado) requiere elegir un cliente registrado.')
+          return
+        }
+        if (pendingCustomers.some(p => p.client_id === customerId)) {
+          setNotice('Este cliente aún no se ha sincronizado. Espera a que suba para venderle a crédito.')
+          return
+        }
+        if (!navigator.onLine) {
+          setNotice('El pago con fiado necesita conexión a internet para verificar el cupo del cliente.')
+          return
+        }
+      }
+      if (splitCashSum > 0 && receivedNum != null && (isNaN(receivedNum) || receivedNum < splitCashSum)) {
+        setNotice('El efectivo recibido es menor que la porción a pagar en efectivo.')
+        return
+      }
+    } else {
+      if (payment === 'fiado') {
+        if (!customerId) {
+          setNotice('El fiado requiere un cliente registrado. Elige un cliente.')
+          return
+        }
+        if (pendingCustomers.some(p => p.client_id === customerId)) {
+          setNotice('Este cliente aún no se ha sincronizado. Espera a que suba para venderle a crédito.')
+          return
+        }
+        if (!navigator.onLine) {
+          setNotice('El fiado necesita conexión a internet para revisar el cupo del cliente.')
+          return
+        }
+      }
+      if (fx && (payment === 'efectivo' || payment === 'transferencia') && !fxRes) {
+        setNotice('Completa el monto recibido y la tasa del pago en otra moneda.')
+        return
+      }
+      if (fxRes && fxRes.equivalent < total) {
+        setNotice('Lo recibido en la otra moneda no cubre el total de la venta.')
+        return
+      }
+      if (!fxRes && payment === 'efectivo' && receivedNum != null && (isNaN(receivedNum) || receivedNum < total)) {
+        setNotice('El efectivo recibido es menor que el total.')
         return
       }
     }
-    if (fx && (payment === 'efectivo' || payment === 'transferencia') && !fxRes) {
-      setNotice('Completa el monto recibido y la tasa del pago en otra moneda.')
-      return
-    }
-    if (fxRes && fxRes.equivalent < total) {
-      setNotice('Lo recibido en la otra moneda no cubre el total de la venta.')
-      return
-    }
-    if (!fxRes && payment === 'efectivo' && receivedNum != null && (isNaN(receivedNum) || receivedNum < total)) {
-      setNotice('El efectivo recibido es menor que el total.')
-      return
-    }
+
+    const activeSplitLines = isMultipago ? splitParsed.filter(p => p.amount > 0) : undefined
+    const primaryPayMethod = activeSplitLines
+      ? activeSplitLines.find(p => p.method === 'fiado')?.method || activeSplitLines[0].method
+      : payment
+
     setSaving(true)
     const recv = fxRes
       ? fxRes.equivalent
-      : payment === 'efectivo' && receivedNum != null && !isNaN(receivedNum)
+      : ((!isMultipago && payment === 'efectivo') || (isMultipago && splitCashSum > 0)) &&
+          receivedNum != null &&
+          !isNaN(receivedNum)
         ? receivedNum
         : null
     const sale: PendingSale = {
@@ -652,7 +746,9 @@ export default function Mostrador({ onNavigate }: { onNavigate?: (page: string) 
         price: l.price,
         subtotal: l.subtotal,
       })),
-      payment_method: payment,
+      payment_method: primaryPayMethod,
+      payments: activeSplitLines,
+      shift_id: activeShift.active ? activeShift.shift_id || null : null,
       geo: null,
       captured_at: new Date().toISOString(),
       total,
@@ -721,10 +817,11 @@ export default function Mostrador({ onNavigate }: { onNavigate?: (page: string) 
       taxRate: tx.tax > 0 ? tx.rate : 0,
       tax: tx.tax,
       total,
-      payment,
-      paymentChannel: paymentChannel || null,
+      payment: primaryPayMethod,
+      paymentChannel: !isMultipago ? paymentChannel || null : null,
+      payments: activeSplitLines,
       received: recv,
-      change: recv != null ? round2(recv - total) : 0,
+      change: recv != null ? round2(recv - (isMultipago ? splitCashSum : total)) : 0,
       fx: fxRes,
       pending: queued,
     })
@@ -1495,29 +1592,179 @@ export default function Mostrador({ onNavigate }: { onNavigate?: (page: string) 
               </div>
 
               <div>
-                <label className="block text-xs font-medium text-slate-500 mb-1">Forma de pago</label>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                  {Object.entries(PAYMENT_LABEL).map(([k, v]) => (
-                    <button
-                      key={k}
-                      type="button"
-                      onClick={() => {
-                        setPayment(k)
-                        if (k === 'fiado' || k === 'tarjeta') setFx(null)
-                      }}
-                      className={`py-2 rounded-lg text-sm font-medium border whitespace-nowrap ${
-                        payment === k
-                          ? 'bg-slate-800 text-white border-slate-800'
-                          : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'
-                      }`}
-                    >
-                      {v}
-                    </button>
-                  ))}
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-xs font-medium text-slate-500">Forma de pago</label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const next = !isMultipago
+                      setIsMultipago(next)
+                      if (next) {
+                        setFx(null)
+                        const first = round2(total / 2)
+                        const rest = round2(total - first)
+                        setSplitPayments([
+                          { method: 'efectivo', amount: total > 0 ? String(first) : '', reference: '' },
+                          { method: 'transferencia', amount: total > 0 ? String(rest) : '', reference: '' },
+                        ])
+                      }
+                    }}
+                    className={`text-xs font-semibold px-2 py-0.5 rounded border transition-colors ${
+                      isMultipago
+                        ? 'bg-slate-800 text-white border-slate-800'
+                        : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
+                    }`}
+                  >
+                    {isMultipago ? 'Volver a pago único' : 'Dividir pago (Multipago)'}
+                  </button>
                 </div>
+
+                {!isMultipago ? (
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    {Object.entries(PAYMENT_LABEL).map(([k, v]) => (
+                      <button
+                        key={k}
+                        type="button"
+                        onClick={() => {
+                          setPayment(k)
+                          if (k === 'fiado' || k === 'tarjeta') setFx(null)
+                        }}
+                        className={`py-2 rounded-lg text-sm font-medium border whitespace-nowrap ${
+                          payment === k
+                            ? 'bg-slate-800 text-white border-slate-800'
+                            : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'
+                        }`}
+                      >
+                        {v}
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 space-y-2.5">
+                    <div className="space-y-2">
+                      {splitPayments.map((sp, idx) => (
+                        <div key={idx} className="grid grid-cols-12 gap-1.5 items-center">
+                          <select
+                            value={sp.method}
+                            onChange={e => {
+                              const val = e.target.value as 'efectivo' | 'tarjeta' | 'transferencia' | 'fiado'
+                              setSplitPayments(prev => prev.map((x, i) => (i === idx ? { ...x, method: val } : x)))
+                            }}
+                            className="col-span-4 px-2 py-1.5 rounded-lg border border-slate-300 bg-white text-xs font-medium"
+                          >
+                            <option value="efectivo">Efectivo</option>
+                            <option value="transferencia">Transferencia</option>
+                            <option value="tarjeta">Tarjeta</option>
+                            <option value="fiado">Fiado (crédito)</option>
+                          </select>
+                          <input
+                            type="number"
+                            inputMode="decimal"
+                            min="0"
+                            step="any"
+                            placeholder="Monto"
+                            value={sp.amount}
+                            onChange={e =>
+                              setSplitPayments(prev =>
+                                prev.map((x, i) => (i === idx ? { ...x, amount: e.target.value } : x))
+                              )
+                            }
+                            className="col-span-4 px-2 py-1.5 rounded-lg border border-slate-300 bg-white text-xs font-mono tabular-nums"
+                          />
+                          <input
+                            type="text"
+                            placeholder="Ref / canal"
+                            maxLength={40}
+                            value={sp.reference}
+                            onChange={e =>
+                              setSplitPayments(prev =>
+                                prev.map((x, i) => (i === idx ? { ...x, reference: e.target.value } : x))
+                              )
+                            }
+                            className="col-span-3 px-2 py-1.5 rounded-lg border border-slate-300 bg-white text-xs"
+                          />
+                          <button
+                            type="button"
+                            disabled={splitPayments.length <= 2}
+                            onClick={() => setSplitPayments(prev => prev.filter((_, i) => i !== idx))}
+                            className="col-span-1 text-slate-400 hover:text-red-600 disabled:opacity-30 flex justify-center"
+                            title="Quitar medio"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="flex items-center justify-between pt-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const rem = Math.max(0, splitRemaining)
+                          setSplitPayments(prev => [
+                            ...prev,
+                            { method: 'tarjeta', amount: rem > 0 ? String(rem) : '', reference: '' },
+                          ])
+                        }}
+                        className="text-xs font-semibold text-slate-700 hover:text-slate-900"
+                      >
+                        + Agregar medio de pago
+                      </button>
+                      <span
+                        className={`text-xs font-bold tabular-nums ${
+                          Math.abs(splitRemaining) <= 0.05
+                            ? 'text-emerald-700'
+                            : splitRemaining > 0
+                              ? 'text-amber-700'
+                              : 'text-red-600'
+                        }`}
+                      >
+                        {Math.abs(splitRemaining) <= 0.05
+                          ? 'Cuadrado al 100%'
+                          : splitRemaining > 0
+                            ? `Falta asignar: ${money(splitRemaining)}`
+                            : `Excede por: ${money(Math.abs(splitRemaining))}`}
+                      </span>
+                    </div>
+
+                    {splitHasFiado && !customerId && (
+                      <p className="text-xs text-amber-700 bg-amber-50 rounded px-2.5 py-1.5">
+                        Elige un cliente registrado para poder asignar una parte a crédito (Fiado).
+                      </p>
+                    )}
+
+                    {splitCashSum > 0 && (
+                      <div className="pt-2 border-t border-slate-200 space-y-1.5">
+                        <label className="block text-[11px] font-medium text-slate-600">
+                          Efectivo físico recibido (porción en efectivo: {money(splitCashSum)})
+                        </label>
+                        <input
+                          type="number"
+                          inputMode="decimal"
+                          min="0"
+                          step="any"
+                          value={received}
+                          onChange={e => setReceived(e.target.value)}
+                          placeholder={`Mínimo ${splitCashSum}`}
+                          className="w-full px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-xs tabular-nums"
+                        />
+                        {receivedNum != null && !isNaN(receivedNum) && (
+                          <div
+                            className={`text-xs font-bold p-1.5 rounded flex justify-between tabular-nums ${
+                              change < 0 ? 'bg-red-50 text-red-700' : 'bg-emerald-50 text-emerald-800'
+                            }`}
+                          >
+                            <span>{change < 0 ? 'Falta efectivo:' : 'Cambio en efectivo:'}</span>
+                            <span>{money(Math.abs(change))}</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
-              {payment === 'fiado' && (
+              {!isMultipago && payment === 'fiado' && (
                 <p className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2">
                   {customerId
                     ? 'El cliente queda debiendo este valor y se cobra después con abonos.'
@@ -1525,7 +1772,7 @@ export default function Mostrador({ onNavigate }: { onNavigate?: (page: string) 
                 </p>
               )}
 
-              {payment === 'transferencia' && (
+              {!isMultipago && payment === 'transferencia' && (
                 <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 space-y-1.5">
                   <span className="text-[11px] font-bold text-slate-600 block">Canal rápido de transferencia:</span>
                   <div className="flex flex-wrap gap-1.5">
@@ -1552,7 +1799,7 @@ export default function Mostrador({ onNavigate }: { onNavigate?: (page: string) 
                 </div>
               )}
 
-              {payment === 'tarjeta' && (
+              {!isMultipago && payment === 'tarjeta' && (
                 <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 space-y-1.5">
                   <span className="text-[11px] font-bold text-slate-600 block">Terminal / Datáfono:</span>
                   <div className="flex flex-wrap gap-1.5">
@@ -1579,7 +1826,7 @@ export default function Mostrador({ onNavigate }: { onNavigate?: (page: string) 
                 </div>
               )}
 
-              {payment === 'efectivo' && !fx && (
+              {!isMultipago && payment === 'efectivo' && !fx && (
                 <div>
                   <div className="flex items-center justify-between mb-1">
                     <label className="text-xs font-medium text-slate-500">
@@ -1640,7 +1887,8 @@ export default function Mostrador({ onNavigate }: { onNavigate?: (page: string) 
                 </div>
               )}
 
-              {(payment === 'efectivo' || payment === 'transferencia') &&
+              {!isMultipago &&
+                (payment === 'efectivo' || payment === 'transferencia') &&
                 !!config &&
                 'fx_rates' in (config as object) && (
                   <FxPayment
@@ -1786,6 +2034,20 @@ export default function Mostrador({ onNavigate }: { onNavigate?: (page: string) 
               {receipt.pending ? ' · pendiente de envío (sin señal)' : ''}
             </p>
             <p className="text-2xl font-bold text-slate-800 tabular-nums">{money(receipt.total)}</p>
+            {receipt.payments && receipt.payments.length > 1 && (
+              <div className="mt-2 bg-slate-50 border border-slate-200 rounded-lg p-2.5 space-y-1 text-xs">
+                <p className="font-semibold text-slate-700">Pago dividido:</p>
+                {receipt.payments.map((p, i) => (
+                  <div key={i} className="flex justify-between text-slate-600 tabular-nums">
+                    <span>
+                      {PAYMENT_LABEL[p.method] ?? p.method}
+                      {p.reference ? ` (${p.reference})` : ''}
+                    </span>
+                    <span className="font-medium text-slate-800">{money(p.amount)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
             {receipt.fx && (
               <p className="text-sm text-slate-600 mt-1 tabular-nums">
                 Pagó en {receipt.fx.currency}:{' '}

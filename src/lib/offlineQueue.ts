@@ -30,6 +30,9 @@ export interface PendingSale {
   fx_base?: number
   /** Bodega opcional de despacho (multibodega). */
   warehouse_id?: string | null
+  /** Desglose multipago y turno de caja activo opcionales. */
+  payments?: { method: 'efectivo' | 'tarjeta' | 'transferencia' | 'fiado'; amount: number; reference?: string }[]
+  shift_id?: string | null
   error?: string
 }
 
@@ -188,6 +191,26 @@ export type SendResult = { ok: true } | { ok: false; network: true } | { ok: fal
 
 export async function sendSale(s: PendingSale): Promise<SendResult> {
   try {
+    if (s.payments && s.payments.length > 1) {
+      const mpRes = await supabase.rpc('registrar_venta_multipago', {
+        p_customer_id: s.customer_id,
+        p_items: s.items,
+        p_payments: s.payments,
+        p_warehouse_id: s.warehouse_id || null,
+        p_shift_id: s.shift_id || null,
+        p_geo: s.geo,
+        p_client_id: s.client_id,
+        p_captured_at: s.captured_at,
+        p_channel: s.channel || 'mostrador',
+        p_discount: s.discount || 0,
+        p_received: s.received ?? null,
+      })
+      if (!mpRes.error) return { ok: true }
+      if (String(mpRes.error.code) === '23505') return { ok: true }
+      if (isNetworkError(mpRes.error)) return { ok: false, network: true }
+      return { ok: false, network: false, message: friendlyMessage(mpRes.error.message) }
+    }
+
     const args: Record<string, unknown> = {
       p_customer_id: s.customer_id,
       p_items: s.items,

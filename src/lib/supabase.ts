@@ -4502,6 +4502,41 @@ function createMockSupabase(silent = false): SupabaseClient {
           error: null,
         }
       }
+      case 'registrar_pagos_venta': {
+        return {
+          data: {
+            ok: true,
+            sale_id: args.p_sale_id,
+            payments_count: Array.isArray(args.p_payments) ? args.p_payments.length : 0,
+            total_paid: 0,
+          },
+          error: null,
+        }
+      }
+      case 'registrar_venta_multipago': {
+        const payments = Array.isArray(args.p_payments) ? args.p_payments : []
+        const saleId = genId()
+        const primary = payments[0]?.method || 'efectivo'
+        const items = Array.isArray(args.p_items) ? args.p_items : []
+        const total = items.reduce((s: number, i: any) => s + Number(i.quantity || 0) * Number(i.price || 0), 0) - Number(args.p_discount || 0)
+        for (const it of items) {
+          const prod = prods.find(p => p.id === it.product_id)
+          if (prod) {
+            prod.stock = Math.max(0, (Number(prod.stock) || 0) - (Number(it.quantity) || 0))
+          }
+        }
+        getTable('sales').unshift({
+          id: saleId,
+          customer_id: args.p_customer_id || null,
+          items,
+          total: Math.max(0, total),
+          payment_method: primary,
+          status: 'completada',
+          channel: args.p_channel || 'mostrador',
+          created_at: nowIso(),
+        })
+        return { data: saleId, error: null }
+      }
       case 'anular_venta': {
         const s = getTable('sales').find(x => x.id === args.p_sale_id)
         if (!s) return { data: null, error: { message: 'La venta no existe' } }

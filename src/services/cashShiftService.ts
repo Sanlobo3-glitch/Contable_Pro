@@ -138,6 +138,12 @@ export async function openCashShift(
   }
 }
 
+export interface SalePaymentInput {
+  method: 'efectivo' | 'tarjeta' | 'transferencia' | 'fiado'
+  amount: number
+  reference?: string
+}
+
 /**
  * Realiza un arqueo ciego o cierre Z exclusivamente mediante la RPC oficial.
  * Un error de red nunca se transforma en un cierre exitoso local.
@@ -156,6 +162,12 @@ export async function submitBlindArqueo(
   difference: number
   status: string
   message: string
+  arqueo_id?: string
+  sales_cash?: number
+  sales_card?: number
+  sales_transfer?: number
+  sales_credit?: number
+  sales_count?: number
 }> {
   const failure = (message: string) => ({
     ok: false,
@@ -194,6 +206,12 @@ export async function submitBlindArqueo(
       difference?: number
       status?: string
       message?: string
+      arqueo_id?: string
+      sales_cash?: number
+      sales_card?: number
+      sales_transfer?: number
+      sales_credit?: number
+      sales_count?: number
     } | null
 
     if (result?.ok !== true) {
@@ -208,6 +226,12 @@ export async function submitBlindArqueo(
       difference: Number(result.difference) || 0,
       status: result.status || (isFinal ? 'closed' : 'open'),
       message: result.message || 'Arqueo registrado correctamente.',
+      arqueo_id: result.arqueo_id,
+      sales_cash: result.sales_cash != null ? Number(result.sales_cash) : undefined,
+      sales_card: result.sales_card != null ? Number(result.sales_card) : undefined,
+      sales_transfer: result.sales_transfer != null ? Number(result.sales_transfer) : undefined,
+      sales_credit: result.sales_credit != null ? Number(result.sales_credit) : undefined,
+      sales_count: result.sales_count != null ? Number(result.sales_count) : undefined,
     }
   } catch (error) {
     console.error('[cashShiftService] Error al registrar arqueo:', error)
@@ -216,6 +240,33 @@ export async function submitBlindArqueo(
         ? error.message
         : 'No se pudo confirmar el arqueo en el servidor.'
     )
+  }
+}
+
+/**
+ * Registra pagos múltiples para una venta existente en la tabla sale_payments.
+ */
+export async function registrarPagosVenta(
+  saleId: string,
+  payments: SalePaymentInput[],
+  shiftId?: string | null
+): Promise<{ ok: boolean; message?: string }> {
+  try {
+    const { data, error } = await supabase.rpc('registrar_pagos_venta', {
+      p_sale_id: saleId,
+      p_payments: payments,
+      p_shift_id: shiftId || null,
+    })
+    if (error) throw error
+    if (data && (data as { ok?: boolean }).ok) {
+      return { ok: true }
+    }
+    return { ok: false, message: 'No se pudo confirmar el desglose de pagos.' }
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : 'Error al registrar desglose de pagos.',
+    }
   }
 }
 
@@ -240,3 +291,4 @@ export async function autoContabilizarVenta(saleId: string): Promise<{ ok: boole
 
   return { ok: false, reason: 'Función no disponible o venta aún no contabilizada' }
 }
+

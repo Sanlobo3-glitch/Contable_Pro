@@ -136,11 +136,11 @@ export default function CashShiftModal({ isOpen, onClose, activeShift, onShiftCh
         expected: res.expected_cash,
         counted: res.counted_cash,
         diff: res.difference,
-        salesCash: activeShift.sales_cash || 0,
-        salesCard: activeShift.sales_card || 0,
-        salesTransfer: activeShift.sales_transfer || 0,
-        salesCredit: activeShift.sales_credit || 0,
-        salesCount: activeShift.sales_count || 0,
+        salesCash: res.sales_cash ?? activeShift.sales_cash ?? 0,
+        salesCard: res.sales_card ?? activeShift.sales_card ?? 0,
+        salesTransfer: res.sales_transfer ?? activeShift.sales_transfer ?? 0,
+        salesCredit: res.sales_credit ?? activeShift.sales_credit ?? 0,
+        salesCount: res.sales_count ?? activeShift.sales_count ?? 0,
       })
       setMode('resultado')
       onShiftChange()

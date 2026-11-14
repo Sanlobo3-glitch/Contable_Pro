@@ -3965,9 +3965,11 @@ ROLLBACK;
 
 ### 6. Veredicto técnico justificado
 
-**VERIFICACIÓN EN VIVO SUPERADA (`DRY_RUN_PASSED` DENTRO DE `BEGIN; ... ROLLBACK;`) — LISTA PARA AUTORIZACIÓN DE DESPLIEGUE (`000063` Y `000064`).**
+**APLICADA Y VERIFICADA EN VIVO (`000063` Y `000064` DESPLEGADAS EN SUPABASE `bcwtopujsjefaskoqlhr` + SUITE POST-DESPLIEGUE SUPERADA).**
 
-1. **Verificación real en `bcwtopujsjefaskoqlhr`:** ambas migraciones (`20261114000063` y `20261114000064`), la compatibilidad de llamadas `registrar_compra` (2, 3, 4 y 8 parámetros) y toda la suite de auditoría (`H1..H4`, `N1`, `N3`, `4A..4C`, `#21` con deltas + `s.start_date`, `#20` con importes exactos y `#22` bajo `SET LOCAL ROLE authenticated`) se ejecutaron con éxito dentro de `BEGIN; ... ROLLBACK;` sin persistir ningún cambio en la base de datos.
-2. **Correcciones incorporadas gracias a la ejecución real:** renumeración a `000063`/`000064` por ocupación de `000062`, preservación del filtro multipagos en `acc_reconcile()` (`cartera`), corrección de `r_taken.elem` en `registrar_devolucion_compra` (`000064`), y paso real de `v_other_co` mediante GUCs en la prueba `#22` bajo RLS activo.
-3. **Estado de producción:** **todavía NO se han persistido cambios** ni en Supabase ni en `supabase/migrations/`, a la espera de autorización explícita para aplicar `000063` y `000064` y registrar los archivos en el repositorio.
+1. **Verificación previa y post-despliegue en `bcwtopujsjefaskoqlhr`:** ambas migraciones (`20261114000063` y `20261114000064`), la compatibilidad de llamadas `registrar_compra` (2, 3, 4 y 8 parámetros) y toda la suite de auditoría (`H1..H4`, `N1`, `N3`, `4A..4C`, `#21` con deltas + `s.start_date`, `#20` con importes exactos y `#22` bajo `SET LOCAL ROLE authenticated`) superaron la ejecución en `BEGIN; ... ROLLBACK;` antes y después del despliegue persistente (`POST_DEPLOY_AUDIT_PASSED`).
+2. **Registro comprobado en `public.sql_migration_log`:**
+   - `20261114000063_fase_a_iva_compras_contabilidad` (`cc7c5faa-5bea-4a84-a49b-8d2d694383b2`, `aplicado`, `2026-11-14 22:58:10 UTC`).
+   - `20261114000064_devoluciones_compra_con_iva` (`2ffe1235-f9b5-4441-9322-bf6dbbe23259`, `aplicado`, `2026-11-14 22:58:11 UTC`).
+3. **Estado de repositorio:** archivos creados en `supabase/migrations/`, registrados en `supabase/MIGRATIONS.md` y añadidos como paquete `iva_compras` en `src/lib/sqlScripts.ts`. Pendiente de configuración operativa: asignar `iva_descontable` e `iva_pendiente` en `acc_settings` de las empresas con contabilidad activa antes de registrar compras con IVA.
 

@@ -14,8 +14,11 @@ import sqlCommercialSuite21 from '../../supabase/migrations/20261104000021_cinco
 import sqlManagerCenter from '../../supabase/migrations/20261108000051_centro_direccion_gerencial_tablas_y_autorizaciones.sql?raw'
 import sqlDianReports from '../../supabase/migrations/20261109000052_reportes_dian_exogena_y_formularios.sql?raw'
 import sqlCashShifts from '../../supabase/migrations/20261110000053_consolidacion_ciclo_comercial_caja_turnos_y_contabilidad.sql?raw'
+import sqlFaseAIvaCompras from '../../supabase/migrations/20261114000063_fase_a_iva_compras_contabilidad.sql?raw'
+import sqlDevolucionesCompraIva from '../../supabase/migrations/20261114000064_devoluciones_compra_con_iva.sql?raw'
 
 export type SqlBundleId =
+  | 'iva_compras'
   | 'cash_shifts'
   | 'dian_reports'
   | 'manager_center'
@@ -43,6 +46,19 @@ export interface SqlScriptBundle {
 }
 
 export const SQL_SCRIPT_BUNDLES: SqlScriptBundle[] = [
+  {
+    id: 'iva_compras',
+    title: 'Fase A: IVA en Compras NIIF, Trazabilidad Kardex y Devoluciones con IVA',
+    filename: '20261114000063_000064_fase_a_iva_compras_y_devoluciones.sql',
+    category: 'Recomendado',
+    summary:
+      'Implementa IVA en compras (descontable, pendiente, costo y sin_iva), cuentas IVA estrictas sin fallback, secuencia verificable en kardex (seq + seq_verified + trigger), tablas de auditoría inmutables (purchase_iva_adjustments y purchase_devolution_lots), reclasificación NIIF, Formulario 300, conciliación y devoluciones parciales con IVA.',
+    targetTables: [
+      'purchase_iva_adjustments',
+      'purchase_devolution_lots',
+    ],
+    sql: [sqlFaseAIvaCompras, '', sqlDevolucionesCompraIva].join('\n'),
+  },
   {
     id: 'cash_shifts',
     title: 'Consolidación Comercial: Turnos de Caja, Arqueos Ciegos y Contabilidad NIIF',

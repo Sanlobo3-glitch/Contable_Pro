@@ -119,10 +119,13 @@ export interface PurchaseItem {
   quantity: number
   cost: number
   subtotal: number
+  tax_amount?: number | null
   lot_code?: string | null
   expiry_date?: string | null
   prev_cost?: number | null
 }
+
+export type PurchaseTaxStatus = 'sin_iva' | 'descontable' | 'pendiente' | 'costo'
 
 export interface Purchase {
   id: string
@@ -130,6 +133,17 @@ export interface Purchase {
   supplier_name: string | null
   items: PurchaseItem[]
   total: number
+  subtotal?: number | null
+  tax?: number | null
+  tax_rate?: number | null
+  tax_included?: boolean | null
+  tax_status?: PurchaseTaxStatus | null
+  recognized_cost?: number | null
+  iva_cost_inventory?: number | null
+  iva_cost_expense?: number | null
+  iva_classified_at?: string | null
+  iva_classified_by?: string | null
+  iva_classification_note?: string | null
   status: 'recibida' | 'pendiente' | 'anulada'
   payment_method?: 'efectivo' | 'tarjeta' | 'transferencia' | 'credito' | null
   due_date?: string | null
@@ -138,6 +152,31 @@ export interface Purchase {
   branch_id?: string | null
   warehouse_id?: string | null
   created_at: string
+}
+
+export interface PurchaseIvaAdjustment {
+  id: string
+  company_id: string
+  purchase_id: string
+  from_status: 'pendiente'
+  to_status: 'descontable' | 'costo'
+  original_subtotal: number
+  original_tax: number
+  tax_amount: number
+  previous_recognized_cost: number
+  new_recognized_cost: number
+  amount_to_inventory: number
+  amount_to_expense: number
+  product_adjustments: Array<Record<string, unknown>>
+  entry_id?: string | null
+  reversed_by_entry_id?: string | null
+  status: 'aplicado' | 'reversado'
+  reason?: string | null
+  created_by?: string | null
+  created_by_name?: string | null
+  created_by_role?: string | null
+  created_at: string
+  reversed_at?: string | null
 }
 
 export interface CashEntry {
@@ -172,6 +211,10 @@ export interface PurchaseDevolution {
   quantity: number
   unit_cost: number
   amount: number
+  subtotal?: number | null
+  tax_amount?: number | null
+  tax_status_snapshot?: PurchaseTaxStatus | null
+  inventory_credit?: number | null
   refund_method: 'efectivo' | 'tarjeta' | 'transferencia' | 'credito'
   reason: string
   status: 'activa' | 'anulada'

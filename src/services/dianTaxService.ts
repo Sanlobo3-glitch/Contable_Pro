@@ -15,6 +15,15 @@ export interface Form300Data {
   casilla_83_total_iva_descontable: number
   casilla_84_saldo_a_pagar: number
   casilla_85_saldo_a_favor: number
+  compras_sin_iva_base?: number
+  compras_iva_pendiente_base?: number
+  iva_compras_pendiente?: number
+  compras_iva_costo_base?: number
+  iva_compras_costo?: number
+  devoluciones_compras_iva_descontable?: number
+  compras_sin_contabilizar_count?: number
+  devoluciones_compra_sin_contabilizar_count?: number
+  es_borrador_no_conciliado?: boolean
 }
 
 export interface Form350Data {
@@ -81,22 +90,28 @@ export async function getFormulario300(
   startDate: Date,
   endDate: Date
 ): Promise<Form300Data> {
-  try {
-    // 1. Intentar llamar a la RPC oficial si el paquete SQL ya fue ejecutado
-    const { data, error } = await supabase.rpc('dian_calcular_formulario_300', {
-      p_company_id: companyId || null,
-      p_start_date: startDate.toISOString(),
-      p_end_date: endDate.toISOString(),
-    })
+  const { data, error } = await supabase.rpc('dian_calcular_formulario_300', {
+    p_company_id: companyId || null,
+    p_start_date: startDate.toISOString(),
+    p_end_date: endDate.toISOString(),
+  })
 
-    if (!error && data) {
-      return data as Form300Data
-    }
-  } catch {
-    // Fallback directo desde tablas existentes
+  if (!error && data) {
+    return data as Form300Data
   }
 
-  // Fallback: cálculo directo sobre tablas sales, devolutions y purchases
+  // Nunca evadir errores de autorización o aislamiento multiempresa con fallback en cliente
+  if (error) {
+    const msg = error.message || ''
+    if (error.code === '42501' || /no autorizado|not authorized|permission/i.test(msg)) {
+      throw new Error(msg || 'No autorizado para consultar el Formulario 300 de esta empresa.')
+    }
+    if (!/could not find the function|schema cache|does not exist/i.test(msg)) {
+      throw new Error(msg)
+    }
+  }
+
+  // Fallback solo si la RPC aún no existe en entorno local/legado
   let salesQuery = supabase
     .from('sales')
     .select('subtotal, total, tax_rate, tax_amount, status, created_at')
@@ -132,7 +147,6 @@ export async function getFormulario300(
     }
   }
 
-  // Devoluciones
   let devQuery = supabase
     .from('devolutions')
     .select('amount, created_at')
@@ -143,26 +157,44 @@ export async function getFormulario300(
     devQuery = devQuery.eq('company_id', companyId)
   }
   const { data: devs } = await devQuery
-  const devTotal = (devs || []).reduce((acc: number, d: any) => acc + (Number(d.amount) || 0), 0)
+  const devTotal = (devs || []).reduce((acc: number, d: { amount?: number | string | null }) => acc + (Number(d.amount) || 0), 0)
 
-  // Compras
   let purQuery = supabase
     .from('purchases')
-    .select('subtotal, total, tax, status, created_at')
+    .select('subtotal, total, tax, tax_status, status, created_at')
     .gte('created_at', startDate.toISOString())
     .lt('created_at', endDate.toISOString())
-    .neq('status', 'anulada')
+    .eq('status', 'recibida')
 
   if (companyId) {
     purQuery = purQuery.eq('company_id', companyId)
   }
   const { data: purchases } = await purQuery
 
-  let compras19 = 0
+  let comprasDescBase = 0
   let ivaDesc = 0
+  let comprasPendBase = 0
+  let ivaPend = 0
+  let comprasCostoBase = 0
+  let ivaCosto = 0
+  let comprasSinIva = 0
+
   for (const p of purchases || []) {
-    compras19 += Number(p.subtotal || p.total || 0)
-    ivaDesc += Number(p.tax || 0)
+    const tax = Number(p.tax || 0)
+    const sub = p.subtotal !== null && p.subtotal !== undefined ? Number(p.subtotal) : Number(p.total || 0) - tax
+    const status = p.tax_status || (tax > 0 ? 'descontable' : 'sin_iva')
+    if (status === 'descontable') {
+      comprasDescBase += sub
+      ivaDesc += tax
+    } else if (status === 'pendiente') {
+      comprasPendBase += sub
+      ivaPend += tax
+    } else if (status === 'costo') {
+      comprasCostoBase += sub
+      ivaCosto += tax
+    } else {
+      comprasSinIva += sub
+    }
   }
 
   const ivaGenTotal = iva19 + iva5
@@ -179,11 +211,20 @@ export async function getFormulario300(
     casilla_59_iva_generado_19: Math.round(iva19),
     casilla_60_iva_generado_5: Math.round(iva5),
     casilla_65_total_iva_generado: Math.round(ivaGenTotal),
-    casilla_66_compras_gravadas: Math.round(compras19),
+    casilla_66_compras_gravadas: Math.round(comprasDescBase),
     casilla_74_iva_descontable_compras: Math.round(ivaDesc),
     casilla_83_total_iva_descontable: Math.round(ivaDesc),
     casilla_84_saldo_a_pagar: Math.round(saldoPagar),
     casilla_85_saldo_a_favor: Math.round(saldoFavor),
+    compras_sin_iva_base: Math.round(comprasSinIva),
+    compras_iva_pendiente_base: Math.round(comprasPendBase),
+    iva_compras_pendiente: Math.round(ivaPend),
+    compras_iva_costo_base: Math.round(comprasCostoBase),
+    iva_compras_costo: Math.round(ivaCosto),
+    devoluciones_compras_iva_descontable: 0,
+    compras_sin_contabilizar_count: 0,
+    devoluciones_compra_sin_contabilizar_count: 0,
+    es_borrador_no_conciliado: true,
   }
 }
 
@@ -284,21 +325,22 @@ export async function getExogenaRows(
 ): Promise<ExogenaRow[]> {
   const rows: ExogenaRow[] = []
 
-  if (formatCode === '1001') {
-    // Compras y gastos a proveedores
+  if (formatCode === '1001' || formatCode === '1005') {
+    // Compras a proveedores (1001 pagos/bases, 1005 IVA descontable)
     let q = supabase
       .from('purchases')
-      .select('id, supplier_id, subtotal, total, tax, suppliers(name, document, phone, address)')
+      .select('id, supplier_id, subtotal, total, tax, tax_status, suppliers(name, document, phone, address)')
       .gte('created_at', `${year}-01-01T00:00:00`)
       .lt('created_at', `${year + 1}-01-01T00:00:00`)
-      .neq('status', 'anulada')
+      .eq('status', 'recibida')
 
     if (companyId) q = q.eq('company_id', companyId)
     const { data } = await q
 
-    const bySupplier = new Map<string, any>()
+    const bySupplier = new Map<string, { docType: string; nit: string; name: string; base: number; tax: number }>()
     for (const p of data || []) {
-      const s = (p as any).suppliers
+      if (formatCode === '1005' && p.tax_status !== 'descontable') continue
+      const s = (p as { suppliers?: { name?: string; document?: string } }).suppliers
       const doc = s?.document || '222222222222'
       const prev = bySupplier.get(doc) || {
         docType: '31',
@@ -307,21 +349,24 @@ export async function getExogenaRows(
         base: 0,
         tax: 0,
       }
-      prev.base += Number(p.subtotal || p.total || 0)
-      prev.tax += Number(p.tax || 0)
+      const taxVal = Number(p.tax || 0)
+      const subVal = p.subtotal !== null && p.subtotal !== undefined ? Number(p.subtotal) : Number(p.total || 0) - taxVal
+      if (formatCode === '1005' && taxVal <= 0) continue
+      prev.base += subVal
+      prev.tax += taxVal
       bySupplier.set(doc, prev)
     }
 
     for (const item of bySupplier.values()) {
       rows.push({
-        form: '1001',
-        concept: '5007',
+        form: formatCode,
+        concept: formatCode === '1005' ? '1005' : '5007',
         docType: item.docType,
         nit: item.nit,
         name: item.name,
         baseAmount: Math.round(item.base),
         paymentAmount: Math.round(item.base),
-        retentionPracticed: Math.round(item.base * 0.025),
+        retentionPracticed: formatCode === '1001' ? Math.round(item.base * 0.025) : 0,
         retentionAssumed: 0,
         taxAmount: Math.round(item.tax),
       })

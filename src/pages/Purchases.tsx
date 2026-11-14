@@ -6,8 +6,32 @@ import { buildDocHtml, buildShareText, printHtml, type DocData } from '../lib/do
 import { downloadCsv } from '../lib/csv'
 import { consumePurchaseDraft } from '../lib/purchaseDraft'
 import PurchaseInvoiceScannerModal from '../components/PurchaseInvoiceScannerModal'
-import type { Product, Supplier, Purchase, CompanyConfig } from '../types'
-import { Plus, X, Trash2, Truck, Lock, Ban, Receipt, Share2, Printer, MessageCircle, Mail, Download, ScanLine } from 'lucide-react'
+import type {
+  Product,
+  Supplier,
+  Purchase,
+  PurchaseTaxStatus,
+  PurchaseIvaAdjustment,
+  CompanyConfig,
+} from '../types'
+import {
+  Plus,
+  X,
+  Trash2,
+  Truck,
+  Lock,
+  Ban,
+  Receipt,
+  Share2,
+  Printer,
+  MessageCircle,
+  Mail,
+  Download,
+  ScanLine,
+  Search,
+  CheckCircle2,
+  AlertTriangle,
+} from 'lucide-react'
 
 type PaymentMethod = 'efectivo' | 'tarjeta' | 'transferencia' | 'credito'
 
@@ -20,6 +44,38 @@ type CartItem = {
   lot_code?: string
   expiry_date?: string
 }
+
+const TAX_STATUS_META: Record<
+  PurchaseTaxStatus,
+  { label: string; short: string; cls: string; hint: string }
+> = {
+  sin_iva: {
+    label: 'Sin IVA / Excluida',
+    short: 'Sin IVA',
+    cls: 'text-slate-600 bg-slate-100 border-slate-200',
+    hint: 'Compra sin impuesto o proveedor no responsable de IVA.',
+  },
+  descontable: {
+    label: 'IVA Descontable',
+    short: 'Descontable',
+    cls: 'text-emerald-800 bg-emerald-50 border-emerald-200',
+    hint: 'El IVA va a cuenta 2408xx descontable (Casilla 74 F300) y NO entra al costo del inventario.',
+  },
+  pendiente: {
+    label: 'IVA Pendiente por clasificar',
+    short: 'Pendiente',
+    cls: 'text-amber-800 bg-amber-50 border-amber-200',
+    hint: 'El IVA queda temporalmente por clasificar; el contador o administrador lo define luego como descontable o al costo.',
+  },
+  costo: {
+    label: 'IVA al Costo / Mayor valor',
+    short: 'Al costo',
+    cls: 'text-indigo-800 bg-indigo-50 border-indigo-200',
+    hint: 'El IVA NO es descontable y se suma al costo unitario e inventario del producto.',
+  },
+}
+
+const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100
 
 const PAYMENT_LABEL: Record<string, string> = {
   efectivo: 'Efectivo',
@@ -83,6 +139,9 @@ export default function Purchases({ onNavigate }: { onNavigate?: (page: string) 
 
   const canManage = canManageInventory(user?.role)
   const readOnly = isReadOnly(user) || !canManage
+  const canClassifyVat =
+    !isReadOnly(user) &&
+    ['admin', 'dueno', 'admin_empresa', 'gerente', 'contador'].includes(user?.role || '')
 
   const [purchases, setPurchases] = useState<Purchase[]>([])
   const [products, setProducts] = useState<Product[]>([])
@@ -93,10 +152,23 @@ export default function Purchases({ onNavigate }: { onNavigate?: (page: string) 
   const [showInvoiceScanner, setShowInvoiceScanner] = useState(false)
   const [saving, setSaving] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState('')
   const [cancellingId, setCancellingId] = useState<string | null>(null)
+  const [cancelTarget, setCancelTarget] = useState<Purchase | null>(null)
+  const [cancelErr, setCancelErr] = useState('')
   const [viewTarget, setViewTarget] = useState<Purchase | null>(null)
+  const [viewAdjustments, setViewAdjustments] = useState<PurchaseIvaAdjustment[]>([])
+  const [loadingAdj, setLoadingAdj] = useState(false)
+  const [classifyTarget, setClassifyTarget] = useState<Purchase | null>(null)
+  const [classifyNewStatus, setClassifyNewStatus] = useState<'descontable' | 'costo'>('descontable')
+  const [classifyReason, setClassifyReason] = useState('')
+  const [classifying, setClassifying] = useState(false)
+  const [classifyErr, setClassifyErr] = useState('')
+  const [searchQuery, setSearchQuery] = useState('')
+  const [taxFilter, setTaxFilter] = useState<'all' | PurchaseTaxStatus>('all')
   const [notice, setNotice] = useState('')
   const [draftNotice, setDraftNotice] = useState('')
+  const [formErr, setFormErr] = useState('')
 
   const [cart, setCart] = useState<CartItem[]>([])
   const [selProduct, setSelProduct] = useState('')
@@ -107,6 +179,11 @@ export default function Purchases({ onNavigate }: { onNavigate?: (page: string) 
   const [creditDays, setCreditDays] = useState('30')
   const [lotCode, setLotCode] = useState('')
   const [expiry, setExpiry] = useState('')
+
+  const [taxStatus, setTaxStatus] = useState<PurchaseTaxStatus>('sin_iva')
+  const [taxRate, setTaxRate] = useState('19')
+  const [taxIncluded, setTaxIncluded] = useState(false)
+  const [customTax, setCustomTax] = useState('')
 
   useEffect(() => {
     void load()
@@ -189,7 +266,7 @@ export default function Purchases({ onNavigate }: { onNavigate?: (page: string) 
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      alert('Error al cargar las compras: ' + message)
+      setLoadError('Error al cargar las compras: ' + message)
     } finally {
       setLoading(false)
     }
@@ -216,15 +293,16 @@ export default function Purchases({ onNavigate }: { onNavigate?: (page: string) 
 
   function addToCart() {
     if (readOnly || saving) return
+    setFormErr('')
 
     if (!selProduct) {
-      alert('Selecciona un producto.')
+      setFormErr('Selecciona un producto.')
       return
     }
 
     const product = products.find(p => p.id === selProduct)
     if (!product) {
-      alert('No se encontró el producto seleccionado. Actualiza la página.')
+      setFormErr('No se encontró el producto seleccionado. Actualiza la página.')
       return
     }
 
@@ -232,23 +310,23 @@ export default function Purchases({ onNavigate }: { onNavigate?: (page: string) 
     const unitCost = Number(cost)
 
     if (!Number.isInteger(quantity) || quantity <= 0) {
-      alert('La cantidad debe ser un número entero mayor que cero.')
+      setFormErr('La cantidad debe ser un número entero mayor que cero.')
       return
     }
 
     if (cost.trim() === '' || !Number.isFinite(unitCost) || unitCost < 0) {
-      alert('Introduce un costo válido, igual o mayor que cero.')
+      setFormErr('Introduce un costo válido, igual o mayor que cero.')
       return
     }
 
     const tracked = product.tracks_expiry === true
     if (tracked) {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(expiry)) {
-        alert('Este producto maneja vencimiento: indica la fecha de vencimiento del lote.')
+        setFormErr('Este producto maneja vencimiento: indica la fecha de vencimiento del lote.')
         return
       }
       if (expiry < localToday()) {
-        alert('La fecha de vencimiento ya pasó.')
+        setFormErr('La fecha de vencimiento ya pasó.')
         return
       }
     }
@@ -289,29 +367,83 @@ export default function Purchases({ onNavigate }: { onNavigate?: (page: string) 
     setCart(previous => previous.filter((_, i) => i !== index))
   }
 
-  const total = Math.round(cart.reduce((sum, item) => sum + item.subtotal, 0) * 100) / 100
+  const itemsSum = round2(cart.reduce((sum, item) => sum + item.subtotal, 0))
+  const parsedRate = Math.max(0, Math.min(100, Number(taxRate) || 0))
+  const hasCustomTax = customTax.trim() !== ''
+  const computedVat =
+    taxStatus === 'sin_iva'
+      ? 0
+      : hasCustomTax
+        ? Number.isFinite(Number(customTax)) && Number(customTax) >= 0
+          ? round2(Number(customTax))
+          : 0
+        : parsedRate > 0 && itemsSum > 0
+          ? taxIncluded
+            ? round2(itemsSum - itemsSum / (1 + parsedRate / 100))
+            : round2(itemsSum * (parsedRate / 100))
+          : 0
+
+  const computedTotal =
+    taxStatus === 'sin_iva'
+      ? itemsSum
+      : taxIncluded
+        ? itemsSum
+        : round2(itemsSum + computedVat)
+
+  const computedSubtotal =
+    taxStatus === 'sin_iva'
+      ? itemsSum
+      : taxIncluded
+        ? round2(Math.max(0, computedTotal - computedVat))
+        : itemsSum
+
+  const recognizedInventoryCost =
+    taxStatus === 'costo' ? computedTotal : computedSubtotal
 
   async function handleSubmit() {
     if (readOnly || saving) return
+    setFormErr('')
 
     if (cart.length === 0) {
-      alert('Agrega al menos un producto a la compra.')
+      setFormErr('Agrega al menos un producto a la compra.')
       return
     }
 
     if (paymentMethod === 'credito') {
       if (!supplierId) {
-        alert('Para registrar una compra a crédito debes seleccionar un proveedor registrado.')
+        setFormErr('Para registrar una compra a crédito debes seleccionar un proveedor registrado.')
         return
       }
       const d = Number(creditDays)
       if (!Number.isInteger(d) || d < 0 || d > 365) {
-        alert('Los días de plazo deben ser un número entero entre 0 y 365.')
+        setFormErr('Los días de plazo deben ser un número entero entre 0 y 365.')
         return
       }
     }
 
-    // Validar cantidades, costos y vencimientos requeridos
+    if (taxStatus !== 'sin_iva') {
+      if (hasCustomTax && (!Number.isFinite(Number(customTax)) || Number(customTax) < 0)) {
+        setFormErr('El valor manual del IVA debe ser un número válido mayor o igual a 0.')
+        return
+      }
+      if (!Number.isFinite(Number(taxRate)) || Number(taxRate) < 0 || Number(taxRate) > 100) {
+        setFormErr('La tarifa de IVA debe estar entre 0% y 100%.')
+        return
+      }
+      if (computedVat <= 0) {
+        setFormErr('Con tratamiento fiscal con IVA debes indicar una tarifa o monto de IVA mayor a 0 (o seleccionar Sin IVA).')
+        return
+      }
+      if (taxIncluded && computedVat > itemsSum) {
+        setFormErr('El IVA incluido no puede superar el valor total bruto de los artículos.')
+        return
+      }
+      if (computedSubtotal <= 0) {
+        setFormErr('La base gravable de la compra debe ser mayor a cero cuando existe IVA.')
+        return
+      }
+    }
+
     for (const item of cart) {
       if (
         !item.product_id ||
@@ -320,17 +452,17 @@ export default function Purchases({ onNavigate }: { onNavigate?: (page: string) 
         !Number.isFinite(item.cost) ||
         item.cost < 0
       ) {
-        alert(`Revisa la cantidad y el costo de "${item.product_name}".`)
+        setFormErr(`Revisa la cantidad y el costo de "${item.product_name}".`)
         return
       }
       const prod = products.find(p => p.id === item.product_id)
       if (prod?.tracks_expiry) {
         if (!item.expiry_date || !/^\d{4}-\d{2}-\d{2}$/.test(item.expiry_date)) {
-          alert(`El producto "${item.product_name}" maneja vencimiento: indica la fecha de vencimiento del lote en el carrito.`)
+          setFormErr(`El producto "${item.product_name}" maneja vencimiento: indica la fecha de vencimiento del lote en el carrito.`)
           return
         }
         if (item.expiry_date < localToday()) {
-          alert(`La fecha de vencimiento de "${item.product_name}" ya pasó.`)
+          setFormErr(`La fecha de vencimiento de "${item.product_name}" ya pasó.`)
           return
         }
       }
@@ -348,28 +480,20 @@ export default function Purchases({ onNavigate }: { onNavigate?: (page: string) 
         ...(item.expiry_date ? { lot_code: item.lot_code || '', expiry_date: item.expiry_date } : {}),
       }))
 
-      const rpcArgs: Record<string, unknown> = {
+      const { error } = await supabase.rpc('registrar_compra_con_iva', {
         p_supplier_id: supplierId || null,
         p_items: itemsPayload,
-      }
-      if (paymentMethod !== 'efectivo') {
-        rpcArgs.p_payment_method = paymentMethod
-      }
-      if (paymentMethod === 'credito') {
-        rpcArgs.p_credit_days = Math.floor(Number(creditDays))
-      }
-
-      const { error } = await supabase.rpc('registrar_compra', rpcArgs)
+        p_payment_method: paymentMethod,
+        p_credit_days: paymentMethod === 'credito' ? Math.floor(Number(creditDays)) : null,
+        p_tax: taxStatus === 'sin_iva' ? 0 : computedVat,
+        p_tax_status: taxStatus,
+        p_tax_rate: taxStatus === 'sin_iva' ? null : parsedRate,
+        p_tax_included: taxStatus === 'sin_iva' ? false : taxIncluded,
+      })
 
       if (error) {
-        if (paymentMethod !== 'efectivo' && /could not find the function|schema cache|p_payment_method|Forma de pago de compra inválida|purchases_payment_method_check/i.test(error.message || '')) {
-          alert('Para usar pago por Tarjeta, Transferencia o Crédito, ejecuta primero el script SQL 20261101_mejoras_compras_costo_promedio.sql en Supabase (SQL Editor).')
-          return
-        }
-        alert(
-          'No se pudo registrar la compra.\n\n' +
-          error.message +
-          (error.code ? '\nCódigo: ' + error.code : '')
+        setFormErr(
+          error.message + (error.code ? ` (Código: ${error.code})` : '')
         )
         return
       }
@@ -384,82 +508,127 @@ export default function Purchases({ onNavigate }: { onNavigate?: (page: string) 
       setCost('')
       setLotCode('')
       setExpiry('')
+      setTaxStatus('sin_iva')
+      setTaxRate('19')
+      setTaxIncluded(false)
+      setCustomTax('')
       setDraftNotice('')
+      setFormErr('')
 
       await load()
+      const taxSummary =
+        taxStatus === 'sin_iva'
+          ? ''
+          : ` · IVA ${TAX_STATUS_META[taxStatus].short.toLowerCase()} (${money(computedVat)})`
       if (paymentMethod === 'credito') {
-        flash('Compra a crédito registrada. Quedó en Cuentas por pagar sin descontar dinero de caja.')
+        flash(`Compra a crédito registrada${taxSummary}. Quedó en Cuentas por pagar sin descontar dinero de caja.`)
       } else if (paymentMethod === 'tarjeta' || paymentMethod === 'transferencia') {
-        flash(`Compra registrada por ${PAYMENT_LABEL[paymentMethod].toLowerCase()}. No descontó efectivo de Caja.`)
+        flash(`Compra registrada por ${PAYMENT_LABEL[paymentMethod].toLowerCase()}${taxSummary}. No descontó efectivo de Caja.`)
       } else {
-        flash('Compra en efectivo registrada correctamente.')
+        flash(`Compra en efectivo registrada correctamente${taxSummary}.`)
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      alert('Error al registrar la compra: ' + message)
+      setFormErr('Error al registrar la compra: ' + message)
     } finally {
       setSaving(false)
     }
   }
 
-  async function handleCancel(purchase: Purchase) {
-    if (readOnly || cancellingId || saving) return
-    if (purchase.status === 'anulada') return
+  async function confirmCancelPurchase() {
+    if (!cancelTarget || readOnly || cancellingId || saving) return
+    if (cancelTarget.status === 'anulada') return
 
-    const method = purchase.payment_method || 'efectivo'
-    const impactText =
-      method === 'credito'
-        ? 'Esta acción revertirá las existencias, el costo promedio y anulará la deuda pendiente con el proveedor (si no tiene pagos aplicados).'
-        : method === 'efectivo'
-          ? 'Esta acción revertirá las existencias, el costo promedio y devolverá el monto a Caja.'
-          : `Esta acción revertirá las existencias, el costo promedio y el asiento contable de bancos (${PAYMENT_LABEL[method] ?? method}), sin tocar el efectivo de Caja.`
-
-    const confirmed = window.confirm(
-      '¿Estás seguro de anular esta compra?\n\n' +
-      'Proveedor: ' + (purchase.supplier_name || 'Proveedor general') + '\n' +
-      'Total: ' + money(purchase.total) + '\n\n' +
-      impactText
-    )
-
-    if (!confirmed) return
-
-    setCancellingId(purchase.id)
+    setCancellingId(cancelTarget.id)
+    setCancelErr('')
 
     try {
       const { error } = await supabase.rpc('anular_compra', {
-        p_purchase_id: purchase.id,
+        p_purchase_id: cancelTarget.id,
       })
 
       if (error) {
-        alert(
-          'No se pudo anular la compra.\n\n' +
-          error.message +
-          (error.code ? '\nCódigo: ' + error.code : '')
+        setCancelErr(
+          error.message + (error.code ? ` (Código: ${error.code})` : '')
         )
         return
       }
 
+      setCancelTarget(null)
       await load()
-      flash('Compra anulada correctamente. Se revirtieron las existencias y los saldos asociados.')
+      flash('Compra anulada correctamente. Se revirtieron existencias, asientos contables, IVA y saldos asociados.')
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      alert('Error al anular la compra: ' + message)
+      setCancelErr('Error al anular la compra: ' + message)
     } finally {
       setCancellingId(null)
     }
   }
 
+  async function openViewPurchase(purchase: Purchase) {
+    setViewTarget(purchase)
+    setViewAdjustments([])
+    setLoadingAdj(true)
+    const { data, error } = await supabase
+      .from('purchase_iva_adjustments')
+      .select('*')
+      .eq('purchase_id', purchase.id)
+      .order('created_at', { ascending: false })
+    if (!error && Array.isArray(data)) {
+      setViewAdjustments(data as PurchaseIvaAdjustment[])
+    }
+    setLoadingAdj(false)
+  }
+
+  function openClassifyModal(purchase: Purchase) {
+    setClassifyTarget(purchase)
+    setClassifyNewStatus('descontable')
+    setClassifyReason('')
+    setClassifyErr('')
+  }
+
+  async function handleClassifySubmit() {
+    if (!classifyTarget || classifying || !canClassifyVat) return
+    setClassifying(true)
+    setClassifyErr('')
+
+    const { error } = await supabase.rpc('clasificar_iva_compra', {
+      p_purchase_id: classifyTarget.id,
+      p_new_status: classifyNewStatus,
+      p_reason: classifyReason.trim() || null,
+    })
+
+    setClassifying(false)
+    if (error) {
+      setClassifyErr(error.message + (error.code ? ` (Código: ${error.code})` : ''))
+      return
+    }
+
+    const code = 'CMP-' + classifyTarget.id.slice(0, 8).toUpperCase()
+    setClassifyTarget(null)
+    await load()
+    flash(`IVA de ${code} reclasificado a "${TAX_STATUS_META[classifyNewStatus].short}" y contabilizado correctamente.`)
+  }
+
   function exportExcel() {
-    if (purchases.length === 0) return
-    const rows = purchases.map(p => {
+    if (filteredPurchases.length === 0) return
+    const rows = filteredPurchases.map(p => {
       const method = p.payment_method || 'efectivo'
       const summary = (p.items || []).map(i => `${i.product_name} x${i.quantity}`).join(' | ')
+      const vat = Number(p.tax || 0)
+      const base = p.subtotal != null ? Number(p.subtotal) : Math.max(0, Number(p.total || 0) - vat)
+      const tStatus = (p.tax_status || (vat > 0 ? 'descontable' : 'sin_iva')) as PurchaseTaxStatus
+      const recCost = p.recognized_cost != null ? Number(p.recognized_cost) : (tStatus === 'costo' ? Number(p.total || 0) : base)
       return [
         'CMP-' + p.id.slice(0, 8).toUpperCase(),
         p.created_at ? new Date(p.created_at).toLocaleString() : '',
         p.supplier_name || 'Proveedor general',
         PAYMENT_LABEL[method] ?? method,
         p.due_date || '',
+        base,
+        vat,
+        TAX_STATUS_META[tStatus]?.short ?? tStatus,
+        recCost,
         Number(p.total) || 0,
         p.status,
         summary,
@@ -467,7 +636,20 @@ export default function Purchases({ onNavigate }: { onNavigate?: (page: string) 
     })
     downloadCsv(
       `compras_${localToday()}.csv`,
-      ['Comprobante', 'Fecha', 'Proveedor', 'Condición de pago', 'Vencimiento', 'Total', 'Estado', 'Artículos'],
+      [
+        'Comprobante',
+        'Fecha',
+        'Proveedor',
+        'Condición de pago',
+        'Vencimiento',
+        'Base',
+        'IVA',
+        'Estado IVA',
+        'Costo reconocido',
+        'Total',
+        'Estado',
+        'Artículos',
+      ],
       rows
     )
   }
@@ -476,7 +658,23 @@ export default function Purchases({ onNavigate }: { onNavigate?: (page: string) 
     if (saving) return
     setShowForm(false)
     setDraftNotice('')
+    setFormErr('')
   }
+
+  const filteredPurchases = purchases.filter(p => {
+    const tStatus = (p.tax_status || (Number(p.tax || 0) > 0 ? 'descontable' : 'sin_iva')) as PurchaseTaxStatus
+    if (taxFilter !== 'all' && tStatus !== taxFilter) return false
+    const q = searchQuery.trim().toLowerCase()
+    if (!q) return true
+    const code = 'cmp-' + p.id.slice(0, 8).toLowerCase()
+    const sup = (p.supplier_name || 'proveedor general').toLowerCase()
+    const itemsText = (p.items || []).map(i => i.product_name).join(' ').toLowerCase()
+    return code.includes(q) || sup.includes(q) || itemsText.includes(q)
+  })
+
+  const pendingVatCount = purchases.filter(
+    p => p.status === 'recibida' && p.tax_status === 'pendiente'
+  ).length
 
   const parsedDays = Math.max(0, Math.min(365, Math.floor(Number(creditDays) || 0)))
   const viewSupplier = viewTarget ? suppliers.find(s => s.id === viewTarget.supplier_id) : undefined
@@ -562,11 +760,68 @@ export default function Purchases({ onNavigate }: { onNavigate?: (page: string) 
         </div>
       )}
 
+      {loadError && (
+        <div className="flex items-center justify-between gap-2 text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2 mb-4 text-xs">
+          <span>{loadError}</span>
+          <button onClick={() => setLoadError('')} className="p-0.5 hover:opacity-70"><X className="w-3.5 h-3.5" /></button>
+        </div>
+      )}
+
       {notice && (
         <div className="text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 mb-4 text-xs">
           {notice}
         </div>
       )}
+
+      {pendingVatCount > 0 && (
+        <div className="flex items-center justify-between gap-2 text-amber-900 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-4 text-xs">
+          <span>
+            Tienes <strong>{pendingVatCount}</strong> compra(s) recibida(s) con <strong>IVA pendiente por clasificar</strong> (descontable vs. mayor valor del costo).
+          </span>
+          <button
+            type="button"
+            onClick={() => setTaxFilter(taxFilter === 'pendiente' ? 'all' : 'pendiente')}
+            className="shrink-0 font-semibold underline hover:text-amber-950"
+          >
+            {taxFilter === 'pendiente' ? 'Ver todas' : 'Filtrar pendientes'}
+          </button>
+        </div>
+      )}
+
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 mb-4">
+        <div className="relative flex-1 max-w-md">
+          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+          <input
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            placeholder="Buscar por #CMP, proveedor o producto..."
+            className="w-full pl-9 pr-3 py-2 rounded-lg border border-slate-300 text-sm bg-white"
+          />
+        </div>
+
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {([
+            ['all', 'Todas'],
+            ['sin_iva', 'Sin IVA'],
+            ['descontable', 'Descontable'],
+            ['pendiente', 'Pendiente'],
+            ['costo', 'Al costo'],
+          ] as const).map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setTaxFilter(key)}
+              className={`px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+                taxFilter === key
+                  ? 'bg-slate-800 text-white border-slate-800'
+                  : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
 
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden overflow-x-auto">
         <table className="w-full text-sm">
@@ -576,14 +831,16 @@ export default function Purchases({ onNavigate }: { onNavigate?: (page: string) 
               <th className="text-left px-4 py-3 font-medium">Proveedor</th>
               <th className="text-left px-4 py-3 font-medium">Pago / Condición</th>
               <th className="text-left px-4 py-3 font-medium">Artículos</th>
-              <th className="text-left px-4 py-3 font-medium">Total</th>
+              <th className="text-right px-4 py-3 font-medium">Base / IVA</th>
+              <th className="text-left px-4 py-3 font-medium">Tratamiento IVA</th>
+              <th className="text-right px-4 py-3 font-medium">Total</th>
               <th className="text-left px-4 py-3 font-medium">Estado</th>
               <th className="text-right px-4 py-3 font-medium">Acciones</th>
             </tr>
           </thead>
 
           <tbody className="divide-y divide-slate-100">
-            {purchases.map(purchase => {
+            {filteredPurchases.map(purchase => {
               const annulled = purchase.status === 'anulada'
               const cancelling = cancellingId === purchase.id
               const method = purchase.payment_method || 'efectivo'
@@ -591,13 +848,21 @@ export default function Purchases({ onNavigate }: { onNavigate?: (page: string) 
               const itemCount = Array.isArray(purchase.items)
                 ? purchase.items.reduce((s, it) => s + (Number(it.quantity) || 0), 0)
                 : 0
+              const vatAmt = Number(purchase.tax || 0)
+              const baseAmt =
+                purchase.subtotal != null
+                  ? Number(purchase.subtotal)
+                  : Math.max(0, Number(purchase.total || 0) - vatAmt)
+              const tStatus = (purchase.tax_status || (vatAmt > 0 ? 'descontable' : 'sin_iva')) as PurchaseTaxStatus
+              const taxMeta = TAX_STATUS_META[tStatus] || TAX_STATUS_META.sin_iva
 
               return (
                 <tr key={purchase.id} className="hover:bg-slate-50">
                   <td className="px-4 py-3 text-slate-600 whitespace-nowrap">
-                    {purchase.created_at
-                      ? new Date(purchase.created_at).toLocaleDateString()
-                      : '—'}
+                    <div>{purchase.created_at ? new Date(purchase.created_at).toLocaleDateString() : '—'}</div>
+                    <span className="text-[11px] font-mono text-slate-400">
+                      CMP-{purchase.id.slice(0, 8).toUpperCase()}
+                    </span>
                   </td>
 
                   <td className="px-4 py-3 font-medium text-slate-800">
@@ -625,7 +890,20 @@ export default function Purchases({ onNavigate }: { onNavigate?: (page: string) 
                     {(purchase.items || []).length} prod. · {itemCount} und.
                   </td>
 
-                  <td className="px-4 py-3 text-slate-800 font-medium whitespace-nowrap tabular-nums">
+                  <td className="px-4 py-3 text-right whitespace-nowrap tabular-nums">
+                    <div className="text-xs font-medium text-slate-700">{money(baseAmt)}</div>
+                    <div className="text-[11px] text-slate-500">
+                      {vatAmt > 0 ? `IVA ${money(vatAmt)}` : 'Sin IVA'}
+                    </div>
+                  </td>
+
+                  <td className="px-4 py-3 whitespace-nowrap">
+                    <span className={`inline-block text-[11px] font-medium px-2 py-0.5 rounded border ${taxMeta.cls}`}>
+                      {taxMeta.short}
+                    </span>
+                  </td>
+
+                  <td className="px-4 py-3 text-right text-slate-800 font-medium whitespace-nowrap tabular-nums">
                     {money(purchase.total)}
                   </td>
 
@@ -645,9 +923,20 @@ export default function Purchases({ onNavigate }: { onNavigate?: (page: string) 
                   </td>
 
                   <td className="px-4 py-3 text-right">
-                    <div className="inline-flex items-center justify-end gap-2">
+                    <div className="inline-flex items-center justify-end gap-1.5">
+                      {canClassifyVat && !annulled && purchase.status === 'recibida' && tStatus === 'pendiente' && (
+                        <button
+                          onClick={() => openClassifyModal(purchase)}
+                          className="inline-flex items-center gap-1 rounded-lg bg-amber-50 border border-amber-300 hover:bg-amber-100 px-2.5 py-1.5 text-xs font-semibold text-amber-900 whitespace-nowrap"
+                          title="Definir si el IVA pendiente es descontable o mayor valor del costo"
+                        >
+                          <CheckCircle2 className="w-3 h-3" />
+                          Clasificar IVA
+                        </button>
+                      )}
+
                       <button
-                        onClick={() => setViewTarget(purchase)}
+                        onClick={() => void openViewPurchase(purchase)}
                         className="inline-flex items-center gap-1 rounded-lg bg-slate-100 hover:bg-slate-200 px-2.5 py-1.5 text-xs font-medium text-slate-700 whitespace-nowrap"
                       >
                         <Share2 className="w-3 h-3" />
@@ -656,7 +945,10 @@ export default function Purchases({ onNavigate }: { onNavigate?: (page: string) 
 
                       {!readOnly && !annulled && (
                         <button
-                          onClick={() => void handleCancel(purchase)}
+                          onClick={() => {
+                            setCancelErr('')
+                            setCancelTarget(purchase)
+                          }}
                           disabled={Boolean(cancellingId) || saving || loading}
                           className="inline-flex items-center gap-1 rounded-lg border border-red-200 px-2.5 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
                           title="Anular compra"
@@ -671,17 +963,17 @@ export default function Purchases({ onNavigate }: { onNavigate?: (page: string) 
               )
             })}
 
-            {!loading && purchases.length === 0 && (
+            {!loading && filteredPurchases.length === 0 && (
               <tr>
-                <td colSpan={7} className="px-4 py-8 text-center text-slate-400">
-                  No hay compras registradas
+                <td colSpan={9} className="px-4 py-8 text-center text-slate-400">
+                  {purchases.length === 0 ? 'No hay compras registradas' : 'No hay compras que coincidan con el filtro'}
                 </td>
               </tr>
             )}
 
             {loading && (
               <tr>
-                <td colSpan={7} className="px-4 py-8 text-center text-slate-400">
+                <td colSpan={9} className="px-4 py-8 text-center text-slate-400">
                   Cargando compras...
                 </td>
               </tr>
@@ -697,7 +989,7 @@ export default function Purchases({ onNavigate }: { onNavigate?: (page: string) 
           onClick={() => setViewTarget(null)}
         >
           <div
-            className="bg-white rounded-xl p-6 w-full max-w-md max-h-[90vh] overflow-y-auto"
+            className="bg-white rounded-xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto"
             onClick={e => e.stopPropagation()}
           >
             <div className="flex items-center justify-between mb-1">
@@ -716,7 +1008,7 @@ export default function Purchases({ onNavigate }: { onNavigate?: (page: string) 
               </p>
             )}
 
-            <div className="border border-slate-200 rounded-lg p-3 space-y-2 mb-3 max-h-56 overflow-y-auto">
+            <div className="border border-slate-200 rounded-lg p-3 space-y-2 mb-3 max-h-52 overflow-y-auto">
               {(viewTarget.items || []).map((it, idx) => (
                 <div key={idx} className="flex justify-between gap-2 text-sm">
                   <div className="min-w-0">
@@ -734,6 +1026,80 @@ export default function Purchases({ onNavigate }: { onNavigate?: (page: string) 
                 </div>
               ))}
             </div>
+
+            {(() => {
+              const vat = Number(viewTarget.tax || 0)
+              const base =
+                viewTarget.subtotal != null
+                  ? Number(viewTarget.subtotal)
+                  : Math.max(0, Number(viewTarget.total || 0) - vat)
+              const tStatus = (viewTarget.tax_status || (vat > 0 ? 'descontable' : 'sin_iva')) as PurchaseTaxStatus
+              const recCost =
+                viewTarget.recognized_cost != null
+                  ? Number(viewTarget.recognized_cost)
+                  : tStatus === 'costo'
+                    ? Number(viewTarget.total || 0)
+                    : base
+              return (
+                <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 mb-3 space-y-1.5 text-xs">
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Tratamiento fiscal:</span>
+                    <span className="font-semibold text-slate-800">{TAX_STATUS_META[tStatus]?.label || tStatus}</span>
+                  </div>
+                  <div className="flex justify-between tabular-nums">
+                    <span className="text-slate-500">Base gravable / subtotal:</span>
+                    <span className="font-medium text-slate-800">{money(base)}</span>
+                  </div>
+                  <div className="flex justify-between tabular-nums">
+                    <span className="text-slate-500">
+                      IVA compra{viewTarget.tax_rate ? ` (${viewTarget.tax_rate}%${viewTarget.tax_included ? ' incl.' : ''})` : ''}:
+                    </span>
+                    <span className="font-medium text-slate-800">{money(vat)}</span>
+                  </div>
+                  <div className="flex justify-between tabular-nums">
+                    <span className="text-slate-500">Costo reconocido en inventario:</span>
+                    <span className="font-semibold text-slate-900">{money(recCost)}</span>
+                  </div>
+                  {(Number(viewTarget.iva_cost_inventory || 0) > 0 || Number(viewTarget.iva_cost_expense || 0) > 0) && (
+                    <div className="pt-1 border-t border-slate-200 flex justify-between tabular-nums text-[11px] text-indigo-800">
+                      <span>IVA capitalizado / costo ventas:</span>
+                      <span>
+                        Inv: {money(viewTarget.iva_cost_inventory || 0)} · Costo vtas: {money(viewTarget.iva_cost_expense || 0)}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )
+            })()}
+
+            {(loadingAdj || viewAdjustments.length > 0) && (
+              <div className="border border-slate-200 rounded-lg p-3 mb-3 space-y-2">
+                <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                  Trazabilidad de reclasificaciones de IVA
+                </p>
+                {loadingAdj ? (
+                  <p className="text-xs text-slate-400">Consultando historial...</p>
+                ) : (
+                  viewAdjustments.map(adj => (
+                    <div key={adj.id} className="text-xs border-t border-slate-100 pt-1.5 first:border-t-0 first:pt-0">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-medium text-slate-800">
+                          {adj.from_status} → {adj.to_status}
+                        </span>
+                        <span className="font-mono tabular-nums font-semibold text-slate-800">
+                          {money(adj.tax_amount)} ({adj.status})
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-500">
+                        {new Date(adj.created_at).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
+                        {adj.created_by_name ? ` · ${adj.created_by_name}` : ''}
+                        {adj.reason ? ` · "${adj.reason}"` : ''}
+                      </p>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
 
             <div className="flex justify-between items-center pb-3 mb-3 border-b border-slate-100">
               <span className="font-bold text-slate-800">Total compra:</span>
@@ -796,6 +1162,12 @@ export default function Purchases({ onNavigate }: { onNavigate?: (page: string) 
             {draftNotice && (
               <div className="text-xs text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 mb-3">
                 {draftNotice}
+              </div>
+            )}
+
+            {formErr && (
+              <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2 mb-3">
+                {formErr}
               </div>
             )}
 
@@ -1038,16 +1410,131 @@ export default function Purchases({ onNavigate }: { onNavigate?: (page: string) 
                 )}
               </div>
 
-              <p className="text-[11px] text-slate-400">
-                El costo del producto se actualiza con promedio ponderado según el stock actual.
-              </p>
+              <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 space-y-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <label className="text-xs font-semibold text-slate-700">
+                    Tratamiento fiscal del IVA (NIIF / DIAN)
+                  </label>
+                  <select
+                    value={taxStatus}
+                    onChange={e => {
+                      const next = e.target.value as PurchaseTaxStatus
+                      setTaxStatus(next)
+                      if (next === 'sin_iva') {
+                        setCustomTax('')
+                        setTaxIncluded(false)
+                      }
+                    }}
+                    disabled={saving}
+                    className="px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-800"
+                  >
+                    <option value="sin_iva">Sin IVA / Excluida</option>
+                    <option value="descontable">IVA Descontable</option>
+                    <option value="pendiente">IVA Pendiente por clasificar</option>
+                    <option value="costo">IVA al Costo (mayor valor)</option>
+                  </select>
+                </div>
 
-              <div className="flex justify-between items-center pt-2 border-t border-slate-100">
-                <span className="font-bold text-slate-800">Total:</span>
-                <span className="font-bold text-slate-800 text-lg tabular-nums">
-                  {money(total)}
-                </span>
+                <p className="text-[11px] text-slate-500">
+                  {TAX_STATUS_META[taxStatus].hint}
+                </p>
+
+                {taxStatus !== 'sin_iva' && (
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1">
+                    <div>
+                      <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                        Tarifa IVA (%)
+                      </label>
+                      <div className="flex gap-1">
+                        {(['19', '5'] as const).map(r => (
+                          <button
+                            key={r}
+                            type="button"
+                            disabled={saving}
+                            onClick={() => {
+                              setTaxRate(r)
+                              setCustomTax('')
+                            }}
+                            className={`px-2 py-1.5 rounded border text-xs font-medium ${
+                              taxRate === r && !hasCustomTax
+                                ? 'bg-slate-800 text-white border-slate-800'
+                                : 'bg-white text-slate-700 border-slate-300'
+                            }`}
+                          >
+                            {r}%
+                          </button>
+                        ))}
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          step="0.01"
+                          value={taxRate}
+                          onChange={e => {
+                            setTaxRate(e.target.value)
+                            setCustomTax('')
+                          }}
+                          disabled={saving}
+                          aria-label="Tarifa IVA personalizada"
+                          className="w-full min-w-0 px-2 py-1.5 rounded border border-slate-300 text-xs bg-white text-right tabular-nums"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                        Monto IVA (opcional)
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={customTax}
+                        onChange={e => setCustomTax(e.target.value)}
+                        disabled={saving}
+                        placeholder={String(computedVat)}
+                        className="w-full px-2.5 py-1.5 rounded border border-slate-300 text-xs bg-white text-right tabular-nums"
+                      />
+                    </div>
+
+                    <div className="flex items-end pb-1">
+                      <label className="inline-flex items-center gap-2 text-xs text-slate-700 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={taxIncluded}
+                          onChange={e => setTaxIncluded(e.target.checked)}
+                          disabled={saving}
+                          className="rounded border-slate-300"
+                        />
+                        <span>IVA incluido en precios</span>
+                      </label>
+                    </div>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-slate-200 text-xs tabular-nums">
+                  <div>
+                    <span className="block text-[10px] text-slate-400 uppercase">Base gravable</span>
+                    <span className="font-semibold text-slate-800">{money(computedSubtotal)}</span>
+                  </div>
+                  <div>
+                    <span className="block text-[10px] text-slate-400 uppercase">IVA compra</span>
+                    <span className="font-semibold text-slate-800">{money(computedVat)}</span>
+                  </div>
+                  <div>
+                    <span className="block text-[10px] text-slate-400 uppercase">Costo inv.</span>
+                    <span className="font-semibold text-indigo-800">{money(recognizedInventoryCost)}</span>
+                  </div>
+                  <div className="text-right">
+                    <span className="block text-[10px] text-slate-400 uppercase">Total pagar</span>
+                    <span className="font-bold text-slate-900">{money(computedTotal)}</span>
+                  </div>
+                </div>
               </div>
+
+              <p className="text-[11px] text-slate-400">
+                El costo del producto se actualiza con promedio ponderado según el stock actual y el costo reconocido en inventario.
+              </p>
 
               <button
                 onClick={() => void handleSubmit()}
@@ -1058,8 +1545,190 @@ export default function Purchases({ onNavigate }: { onNavigate?: (page: string) 
                 {saving
                   ? 'Registrando...'
                   : paymentMethod === 'credito'
-                    ? 'Registrar compra a crédito'
-                    : `Registrar compra (${PAYMENT_LABEL[paymentMethod]})`}
+                    ? `Registrar compra a crédito · ${money(computedTotal)}`
+                    : `Registrar compra (${PAYMENT_LABEL[paymentMethod]}) · ${money(computedTotal)}`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Clasificar IVA pendiente */}
+      {classifyTarget && canClassifyVat && (
+        <div
+          className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4"
+          onClick={() => !classifying && setClassifyTarget(null)}
+        >
+          <div
+            className="bg-white rounded-xl p-6 w-full max-w-md space-y-4"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between">
+              <h2 className="font-bold text-slate-800">
+                Clasificar IVA · CMP-{classifyTarget.id.slice(0, 8).toUpperCase()}
+              </h2>
+              <button
+                onClick={() => !classifying && setClassifyTarget(null)}
+                className="p-1 rounded hover:bg-slate-100"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs space-y-1 tabular-nums">
+              <div className="flex justify-between">
+                <span className="text-slate-500">Proveedor:</span>
+                <span className="font-medium text-slate-800">{classifyTarget.supplier_name || 'Proveedor general'}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Base gravable:</span>
+                <span className="font-medium text-slate-800">{money(classifyTarget.subtotal || 0)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">IVA pendiente por clasificar:</span>
+                <span className="font-bold text-amber-800">{money(classifyTarget.tax || 0)}</span>
+              </div>
+            </div>
+
+            {classifyErr && (
+              <div className="flex items-start gap-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                <span>{classifyErr}</span>
+              </div>
+            )}
+
+            <div className="space-y-2">
+              <label className="block text-xs font-medium text-slate-600">
+                Destino fiscal definitivo del IVA
+              </label>
+              <label className={`block p-3 rounded-lg border cursor-pointer text-xs ${
+                classifyNewStatus === 'descontable' ? 'border-emerald-500 bg-emerald-50/50' : 'border-slate-200'
+              }`}>
+                <div className="flex items-center gap-2 font-semibold text-slate-800">
+                  <input
+                    type="radio"
+                    name="classifyStatus"
+                    checked={classifyNewStatus === 'descontable'}
+                    onChange={() => setClassifyNewStatus('descontable')}
+                    disabled={classifying}
+                  />
+                  <span>IVA Descontable (DIAN Formulario 300)</span>
+                </div>
+                <p className="text-[11px] text-slate-500 mt-1 pl-5">
+                  Reclasifica de IVA pendiente a IVA descontable en el período actual sin modificar el costo del inventario.
+                </p>
+              </label>
+
+              <label className={`block p-3 rounded-lg border cursor-pointer text-xs ${
+                classifyNewStatus === 'costo' ? 'border-indigo-500 bg-indigo-50/50' : 'border-slate-200'
+              }`}>
+                <div className="flex items-center gap-2 font-semibold text-slate-800">
+                  <input
+                    type="radio"
+                    name="classifyStatus"
+                    checked={classifyNewStatus === 'costo'}
+                    onChange={() => setClassifyNewStatus('costo')}
+                    disabled={classifying}
+                  />
+                  <span>Mayor valor del costo (Inventario / Costo de ventas)</span>
+                </div>
+                <p className="text-[11px] text-slate-500 mt-1 pl-5">
+                  Lleva proporcionalmente el IVA a inventario (unidades disponibles) y costo de ventas (unidades ya vendidas). No es descontable en DIAN.
+                </p>
+              </label>
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-slate-600 mb-1">
+                Nota o soporte de clasificación (opcional)
+              </label>
+              <input
+                type="text"
+                maxLength={240}
+                value={classifyReason}
+                onChange={e => setClassifyReason(e.target.value)}
+                disabled={classifying}
+                placeholder="Ej: Factura electrónica validada en DIAN / régimen común"
+                className="w-full px-3 py-2 rounded-lg border border-slate-300 text-xs"
+              />
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setClassifyTarget(null)}
+                disabled={classifying}
+                className="flex-1 py-2 rounded-lg border border-slate-200 text-xs font-medium text-slate-600 hover:bg-slate-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleClassifySubmit()}
+                disabled={classifying}
+                className="flex-1 py-2 rounded-lg bg-slate-800 text-white text-xs font-semibold hover:bg-slate-700 disabled:opacity-50"
+              >
+                {classifying ? 'Reclasificando...' : 'Confirmar reclasificación'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Confirmar anulación de compra */}
+      {cancelTarget && (
+        <div
+          className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4"
+          onClick={() => !cancellingId && setCancelTarget(null)}
+        >
+          <div
+            className="bg-white rounded-xl p-6 w-full max-w-md space-y-4"
+            onClick={e => e.stopPropagation()}
+          >
+            <h2 className="font-bold text-slate-800">
+              ¿Anular compra CMP-{cancelTarget.id.slice(0, 8).toUpperCase()}?
+            </h2>
+
+            <div className="text-xs text-slate-600 space-y-1.5">
+              <p>
+                Proveedor: <strong>{cancelTarget.supplier_name || 'Proveedor general'}</strong> · Total:{' '}
+                <strong className="tabular-nums">{money(cancelTarget.total)}</strong>
+                {Number(cancelTarget.tax || 0) > 0 && (
+                  <> (incluye IVA {money(cancelTarget.tax || 0)} · {TAX_STATUS_META[(cancelTarget.tax_status || 'descontable') as PurchaseTaxStatus]?.short})</>
+                )}
+              </p>
+              <p className="text-slate-500">
+                {(cancelTarget.payment_method || 'efectivo') === 'credito'
+                  ? 'Revertirá existencias, costo promedio, asientos contables (incluyendo reclasificaciones de IVA) y anulará la deuda pendiente si no tiene pagos aplicados.'
+                  : (cancelTarget.payment_method || 'efectivo') === 'efectivo'
+                    ? 'Revertirá existencias, costo promedio, asientos contables e IVA, y devolverá el monto a Caja.'
+                    : 'Revertirá existencias, costo promedio, asientos contables e IVA sin tocar el efectivo de Caja.'}
+              </p>
+            </div>
+
+            {cancelErr && (
+              <div className="flex items-start gap-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                <span>{cancelErr}</span>
+              </div>
+            )}
+
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setCancelTarget(null)}
+                disabled={Boolean(cancellingId)}
+                className="flex-1 py-2 rounded-lg border border-slate-200 text-xs font-medium text-slate-600 hover:bg-slate-50"
+              >
+                Volver
+              </button>
+              <button
+                type="button"
+                onClick={() => void confirmCancelPurchase()}
+                disabled={Boolean(cancellingId)}
+                className="flex-1 py-2 rounded-lg bg-red-600 text-white text-xs font-semibold hover:bg-red-700 disabled:opacity-50"
+              >
+                {cancellingId ? 'Anulando...' : 'Sí, anular compra'}
               </button>
             </div>
           </div>

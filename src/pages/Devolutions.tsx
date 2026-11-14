@@ -75,6 +75,7 @@ export default function Devolutions({
   const [docModal, setDocModal] = useState<DocData | null>(null)
   const [voidTarget, setVoidTarget] = useState<PurchaseDevolution | null>(null)
   const [voiding, setVoiding] = useState(false)
+  const [voidErr, setVoidErr] = useState('')
 
   useEffect(() => {
     void load()
@@ -218,25 +219,41 @@ export default function Devolutions({
 
   const returnablePurchaseItems = useMemo(() => {
     if (!selectedPurchase) return []
-    const map = new Map<string, { product_id: string; product_name: string; bought: number; amount: number }>()
+    const map = new Map<string, { product_id: string; product_name: string; bought: number; amount: number; explicitTax: number }>()
     for (const it of selectedPurchase.items || []) {
-      const cur = map.get(it.product_id) ?? { product_id: it.product_id, product_name: it.product_name, bought: 0, amount: 0 }
+      const cur = map.get(it.product_id) ?? { product_id: it.product_id, product_name: it.product_name, bought: 0, amount: 0, explicitTax: 0 }
       const q = Number(it.quantity) || 0
       const sub = Number(it.subtotal) || q * (Number(it.cost) || 0)
+      const t = Number(it.tax_amount || 0)
       cur.bought += q
       cur.amount += sub
+      cur.explicitTax += t
       map.set(it.product_id, cur)
     }
+    const purTax = Number(selectedPurchase.tax || 0)
+    const purSub = Number(selectedPurchase.subtotal || 0)
     return Array.from(map.values())
       .map(x => {
-        const returned = purDevolutions
-          .filter(d => d.status === 'activa' && d.purchase_id === selectedPurchase.id && d.product_id === x.product_id)
-          .reduce((s, d) => s + Number(d.quantity), 0)
+        const boughtTax =
+          x.explicitTax > 0
+            ? Math.round(x.explicitTax * 100) / 100
+            : purTax > 0 && purSub > 0
+              ? Math.round(purTax * (x.amount / purSub) * 100) / 100
+              : 0
+        const activeDevs = purDevolutions.filter(
+          d => d.status === 'activa' && d.purchase_id === selectedPurchase.id && d.product_id === x.product_id
+        )
+        const returned = activeDevs.reduce((s, d) => s + Number(d.quantity), 0)
+        const returnedAmt = activeDevs.reduce((s, d) => s + Number(d.subtotal ?? d.amount), 0)
+        const returnedTax = activeDevs.reduce((s, d) => s + Number(d.tax_amount ?? 0), 0)
         const currentStock = Number(productMap.get(x.product_id)?.stock ?? 0)
         const remainingFromPurchase = x.bought - returned
         const maxReturnable = Math.min(remainingFromPurchase, Math.max(0, currentStock))
         return {
           ...x,
+          boughtTax,
+          returnedAmt,
+          returnedTax,
           remainingFromPurchase,
           currentStock,
           maxReturnable,
@@ -248,7 +265,21 @@ export default function Devolutions({
 
   const selectedPurItem = returnablePurchaseItems.find(x => x.product_id === purForm.product_id)
   const purQty = parseFloat(purForm.quantity) || 0
-  const purPreview = selectedPurItem ? Math.round(selectedPurItem.unitCost * purQty * 100) / 100 : 0
+  const purFiscalPreview = useMemo(() => {
+    if (!selectedPurItem || purQty <= 0) {
+      return { base: 0, tax: 0, total: 0, invCredit: 0 }
+    }
+    const isFullRemaining = Math.abs(purQty - selectedPurItem.remainingFromPurchase) <= 0.0001
+    const base = isFullRemaining
+      ? Math.max(0, Math.round((selectedPurItem.amount - selectedPurItem.returnedAmt) * 100) / 100)
+      : Math.round((purQty * (selectedPurItem.amount / selectedPurItem.bought)) * 100) / 100
+    const tax = isFullRemaining
+      ? Math.max(0, Math.round((selectedPurItem.boughtTax - selectedPurItem.returnedTax) * 100) / 100)
+      : Math.round((purQty * (selectedPurItem.boughtTax / selectedPurItem.bought)) * 100) / 100
+    const total = Math.round((base + tax) * 100) / 100
+    const invCredit = selectedPurchase?.tax_status === 'costo' ? total : base
+    return { base, tax, total, invCredit }
+  }, [selectedPurItem, selectedPurchase?.tax_status, purQty])
 
   async function handleSubmitPurReturn(e: React.FormEvent) {
     e.preventDefault()
@@ -272,22 +303,22 @@ export default function Devolutions({
     setShowPurForm(false)
     setPurForm(EMPTY_PUR_FORM)
     setPurQuery('')
-    setMsg({ ok: true, text: 'Devolución a proveedor registrada correctamente.' })
+    setMsg({ ok: true, text: 'Devolución a proveedor registrada correctamente con trazabilidad fiscal y de lotes.' })
     await load()
   }
 
   async function handleVoidPurDevolution() {
     if (!voidTarget || voiding || readOnly || !isManager) return
     setVoiding(true)
+    setVoidErr('')
     const { error } = await supabase.rpc('anular_devolucion_compra', { p_dev_id: voidTarget.id })
     setVoiding(false)
     if (error) {
-      setMsg({ ok: false, text: 'No se pudo anular: ' + error.message })
-      setVoidTarget(null)
+      setVoidErr(error.message)
       return
     }
     setVoidTarget(null)
-    setMsg({ ok: true, text: 'Devolución a proveedor anulada; stock y saldos restaurados.' })
+    setMsg({ ok: true, text: 'Devolución a proveedor anulada; stock, lotes, IVA y saldos restaurados.' })
     await load()
   }
 
@@ -349,6 +380,10 @@ export default function Devolutions({
   }
 
   function openPurDevDoc(d: PurchaseDevolution) {
+    const base = Number(d.subtotal ?? d.amount)
+    const vat = Number(d.tax_amount ?? 0)
+    const invCred = Number(d.inventory_credit ?? d.amount)
+    const vatLabel = d.tax_status_snapshot || 'sin_iva'
     setDocModal({
       title: 'DEVOLUCIÓN A PROVEEDOR',
       number: 'DVP-' + d.id.slice(0, 8).toUpperCase(),
@@ -358,10 +393,11 @@ export default function Devolutions({
       partyName: d.supplier_name || 'Proveedor general',
       partyLines: [
         `Compra origen: CMP-${d.purchase_id.slice(0, 8).toUpperCase()}`,
+        `Base: ${money(base)} · IVA (${vatLabel}): ${money(vat)} · Crédito inventario: ${money(invCred)}`,
         `Motivo: ${d.reason}`,
       ],
       paymentLabel: `Aplicación: ${PUR_REFUND_LABEL[d.refund_method] || d.refund_method}`,
-      unitColLabel: 'Costo',
+      unitColLabel: 'Costo inv.',
       lines: [{ name: d.product_name, quantity: Number(d.quantity), price: Number(d.unit_cost), subtotal: Number(d.amount) }],
       total: Number(d.amount),
       footer: 'Soporte de devolución de mercancía a proveedor.',
@@ -393,7 +429,7 @@ export default function Devolutions({
     } else {
       downloadCsv(
         `devoluciones_proveedores_${today}.csv`,
-        ['Código', 'Fecha', 'Compra', 'Proveedor', 'Producto', 'Cantidad', 'Costo unitario', 'Monto', 'Aplicación', 'Estado', 'Motivo'],
+        ['Código', 'Fecha', 'Compra', 'Proveedor', 'Producto', 'Cantidad', 'Costo unitario', 'Base', 'IVA', 'Estado IVA', 'Crédito inv.', 'Total', 'Aplicación', 'Estado', 'Motivo'],
         filteredPurDevs.map(d => [
           'DVP-' + d.id.slice(0, 8).toUpperCase(),
           new Date(d.created_at).toLocaleString(),
@@ -402,6 +438,10 @@ export default function Devolutions({
           d.product_name,
           Number(d.quantity),
           Number(d.unit_cost),
+          Number(d.subtotal ?? d.amount),
+          Number(d.tax_amount ?? 0),
+          d.tax_status_snapshot || 'sin_iva',
+          Number(d.inventory_credit ?? d.amount),
           Number(d.amount),
           PUR_REFUND_LABEL[d.refund_method] || d.refund_method,
           d.status,
@@ -606,58 +646,76 @@ export default function Devolutions({
                     <th className="text-left px-4 py-3 font-medium">Compra / Proveedor</th>
                     <th className="text-left px-4 py-3 font-medium">Producto</th>
                     <th className="text-right px-4 py-3 font-medium">Cant.</th>
-                    <th className="text-right px-4 py-3 font-medium">Monto</th>
+                    <th className="text-right px-4 py-3 font-medium">Base / IVA / Inv.</th>
+                    <th className="text-right px-4 py-3 font-medium">Total</th>
                     <th className="text-left px-4 py-3 font-medium">Aplicación</th>
                     <th className="text-left px-4 py-3 font-medium">Motivo</th>
                     <th className="text-left px-4 py-3 font-medium">Acciones</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {filteredPurDevs.map(d => (
-                    <tr key={d.id} className="hover:bg-slate-50">
-                      <td className="px-4 py-3 text-slate-600 whitespace-nowrap">{new Date(d.created_at).toLocaleDateString()}</td>
-                      <td className="px-4 py-3">
-                        <p className={`font-medium ${d.status === 'anulada' ? 'text-slate-400 line-through' : 'text-slate-800'}`}>
-                          {d.supplier_name || 'Proveedor general'}
-                        </p>
-                        <p className="text-xs text-slate-400 font-mono">CMP-{d.purchase_id.slice(0, 8).toUpperCase()}</p>
-                      </td>
-                      <td className={`px-4 py-3 font-medium ${d.status === 'anulada' ? 'text-slate-400 line-through' : 'text-slate-800'}`}>
-                        {d.product_name}
-                      </td>
-                      <td className="px-4 py-3 text-right text-slate-700">{d.quantity}</td>
-                      <td className={`px-4 py-3 text-right font-semibold whitespace-nowrap ${d.status === 'anulada' ? 'text-slate-400 line-through' : 'text-emerald-700'}`}>
-                        {money(d.amount)}
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className="text-xs px-2 py-0.5 rounded bg-slate-100 text-slate-700 whitespace-nowrap">
-                          {PUR_REFUND_LABEL[d.refund_method] || d.refund_method}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-slate-500 max-w-[12rem] truncate">{d.reason}</td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-1.5">
-                          <button
-                            onClick={() => openPurDevDoc(d)}
-                            className="flex items-center gap-1 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 px-2.5 py-1.5 rounded whitespace-nowrap"
-                          >
-                            <Share2 className="w-3 h-3" /> Nota
-                          </button>
-                          {!readOnly && d.status === 'activa' && (
+                  {filteredPurDevs.map(d => {
+                    const base = Number(d.subtotal ?? d.amount)
+                    const vat = Number(d.tax_amount ?? 0)
+                    const invCredit = Number(d.inventory_credit ?? d.amount)
+                    const taxSnap = d.tax_status_snapshot || (vat > 0 ? 'descontable' : 'sin_iva')
+                    return (
+                      <tr key={d.id} className="hover:bg-slate-50">
+                        <td className="px-4 py-3 text-slate-600 whitespace-nowrap">{new Date(d.created_at).toLocaleDateString()}</td>
+                        <td className="px-4 py-3">
+                          <p className={`font-medium ${d.status === 'anulada' ? 'text-slate-400 line-through' : 'text-slate-800'}`}>
+                            {d.supplier_name || 'Proveedor general'}
+                          </p>
+                          <p className="text-xs text-slate-400 font-mono">CMP-{d.purchase_id.slice(0, 8).toUpperCase()}</p>
+                        </td>
+                        <td className={`px-4 py-3 font-medium ${d.status === 'anulada' ? 'text-slate-400 line-through' : 'text-slate-800'}`}>
+                          {d.product_name}
+                        </td>
+                        <td className="px-4 py-3 text-right text-slate-700 tabular-nums">{d.quantity}</td>
+                        <td className="px-4 py-3 text-right whitespace-nowrap tabular-nums">
+                          <div className="text-xs text-slate-700">
+                            {money(base)}{vat > 0 ? ` + IVA ${money(vat)}` : ''}
+                          </div>
+                          <div className="text-[11px] text-slate-500">
+                            {taxSnap} · Inv: {money(invCredit)}
+                          </div>
+                        </td>
+                        <td className={`px-4 py-3 text-right font-semibold whitespace-nowrap tabular-nums ${d.status === 'anulada' ? 'text-slate-400 line-through' : 'text-emerald-700'}`}>
+                          {money(d.amount)}
+                        </td>
+                        <td className="px-4 py-3">
+                          <span className="text-xs px-2 py-0.5 rounded bg-slate-100 text-slate-700 whitespace-nowrap">
+                            {PUR_REFUND_LABEL[d.refund_method] || d.refund_method}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-slate-500 max-w-[12rem] truncate">{d.reason}</td>
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-1.5">
                             <button
-                              onClick={() => setVoidTarget(d)}
-                              className="flex items-center gap-1 text-xs font-medium text-red-600 hover:bg-red-50 px-2 py-1.5 rounded whitespace-nowrap"
+                              onClick={() => openPurDevDoc(d)}
+                              className="flex items-center gap-1 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 px-2.5 py-1.5 rounded whitespace-nowrap"
                             >
-                              <Ban className="w-3.5 h-3.5" /> Anular
+                              <Share2 className="w-3 h-3" /> Nota
                             </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                            {!readOnly && d.status === 'activa' && (
+                              <button
+                                onClick={() => {
+                                  setVoidErr('')
+                                  setVoidTarget(d)
+                                }}
+                                className="flex items-center gap-1 text-xs font-medium text-red-600 hover:bg-red-50 px-2 py-1.5 rounded whitespace-nowrap"
+                              >
+                                <Ban className="w-3.5 h-3.5" /> Anular
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })}
                   {filteredPurDevs.length === 0 && (
                     <tr>
-                      <td colSpan={8} className="px-4 py-8 text-center text-slate-400">
+                      <td colSpan={9} className="px-4 py-8 text-center text-slate-400">
                         No hay devoluciones a proveedores registradas
                       </td>
                     </tr>
@@ -880,16 +938,37 @@ export default function Devolutions({
                     step="any"
                     value={purForm.quantity}
                     onChange={e => setPurForm({ ...purForm, quantity: e.target.value })}
-                    className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm"
+                    className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm tabular-nums"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-medium text-slate-500 mb-1">Valor al costo</label>
-                  <div className="px-3 py-2 rounded-lg bg-slate-50 border border-slate-200 text-sm font-bold text-slate-800">
-                    {money(purPreview)}
+                  <label className="block text-xs font-medium text-slate-500 mb-1">Total nota crédito</label>
+                  <div className="px-3 py-2 rounded-lg bg-slate-50 border border-slate-200 text-sm font-bold text-slate-800 tabular-nums">
+                    {money(purFiscalPreview.total)}
                   </div>
                 </div>
               </div>
+
+              {selectedPurItem && (
+                <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 space-y-1.5 text-xs tabular-nums">
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Tratamiento IVA compra:</span>
+                    <span className="font-semibold text-slate-800">{selectedPurchase?.tax_status || 'sin_iva'}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">Base proporcional:</span>
+                    <span className="font-medium text-slate-800">{money(purFiscalPreview.base)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-500">IVA proporcional:</span>
+                    <span className="font-medium text-slate-800">{money(purFiscalPreview.tax)}</span>
+                  </div>
+                  <div className="flex justify-between pt-1 border-t border-slate-200">
+                    <span className="text-slate-500">Crédito descontado de inventario:</span>
+                    <span className="font-semibold text-indigo-800">{money(purFiscalPreview.invCredit)}</span>
+                  </div>
+                </div>
+              )}
 
               {selectedPurchase && (
                 <div>
@@ -935,11 +1014,28 @@ export default function Devolutions({
       {/* MODAL: Anular devolución a proveedor */}
       {voidTarget && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => !voiding && setVoidTarget(null)}>
-          <div className="bg-white rounded-xl p-6 w-full max-w-sm space-y-4" onClick={e => e.stopPropagation()}>
+          <div className="bg-white rounded-xl p-6 w-full max-w-md space-y-4" onClick={e => e.stopPropagation()}>
             <h2 className="font-bold text-slate-800">¿Anular devolución a proveedor?</h2>
             <p className="text-sm text-slate-600">
-              Las <strong>{voidTarget.quantity}</strong> unidad(es) de <strong>{voidTarget.product_name}</strong> volverán a tu stock y se revertirá el movimiento en {PUR_REFUND_LABEL[voidTarget.refund_method]}.
+              Las <strong className="tabular-nums">{voidTarget.quantity}</strong> unidad(es) de <strong>{voidTarget.product_name}</strong> volverán a tu stock (y a sus lotes exactos si aplica) y se revertirá el movimiento en {PUR_REFUND_LABEL[voidTarget.refund_method]}.
             </p>
+            <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs space-y-1 tabular-nums">
+              <div className="flex justify-between">
+                <span className="text-slate-500">Base / IVA ({voidTarget.tax_status_snapshot || 'sin_iva'}):</span>
+                <span className="font-medium text-slate-800">
+                  {money(voidTarget.subtotal ?? voidTarget.amount)} + {money(voidTarget.tax_amount ?? 0)}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Total a revertir:</span>
+                <span className="font-bold text-slate-900">{money(voidTarget.amount)}</span>
+              </div>
+            </div>
+            {voidErr && (
+              <p className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                {voidErr}
+              </p>
+            )}
             <div className="flex gap-2">
               <button
                 onClick={() => setVoidTarget(null)}

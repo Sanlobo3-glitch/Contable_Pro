@@ -3575,7 +3575,8 @@ function createMockSupabase(silent = false): SupabaseClient {
         prod.tracks_expiry = Boolean(args.p_on)
         return { data: null, error: null }
       }
-      case 'registrar_compra': {
+      case 'registrar_compra':
+      case 'registrar_compra_con_iva': {
         const items: Row[] = Array.isArray(args.p_items) ? args.p_items : []
         if (!items.length) return { data: null, error: { message: 'La compra debe tener al menos un producto' } }
         const method = String(args.p_payment_method || 'efectivo')
@@ -3587,7 +3588,13 @@ function createMockSupabase(silent = false): SupabaseClient {
         if (method === 'credito' && !sup) {
           return { data: null, error: { message: 'Selecciona un proveedor para comprar a crédito' } }
         }
-        const normalized = items.map(it => {
+        let taxStatus = String(args.p_tax_status || 'sin_iva')
+        if (!['sin_iva', 'descontable', 'pendiente', 'costo'].includes(taxStatus)) {
+          return { data: null, error: { message: 'Estado tributario de IVA inválido' } }
+        }
+        const taxIncluded = Boolean(args.p_tax_included)
+        const taxRate = args.p_tax_rate != null ? Number(args.p_tax_rate) : null
+        const rawItems = items.map(it => {
           const prod = prods.find(p => p.id === it.product_id)
           const qty = Number(it.quantity) || 0
           const cost = Number(it.cost) || 0
@@ -3595,13 +3602,58 @@ function createMockSupabase(silent = false): SupabaseClient {
             product_id: it.product_id,
             product_name: prod?.name || it.product_name || 'Producto',
             quantity: qty,
-            cost,
+            rawCost: cost,
+            rawSub: Math.round(qty * cost * 100) / 100,
+            lot_code: it.expiry_date ? (it.lot_code || 'S/L') : undefined,
+            expiry_date: it.expiry_date || undefined,
+          }
+        })
+        const itemsSum = Math.round(rawItems.reduce((s, i) => s + i.rawSub, 0) * 100) / 100
+        let vat = 0
+        if (args.p_tax != null) {
+          vat = Math.round(Number(args.p_tax) * 100) / 100
+        } else if (taxRate != null && taxRate > 0 && itemsSum > 0) {
+          vat = taxIncluded
+            ? Math.round((itemsSum - itemsSum / (1 + taxRate / 100)) * 100) / 100
+            : Math.round((itemsSum * (taxRate / 100)) * 100) / 100
+        }
+        const total = taxIncluded ? itemsSum : Math.round((itemsSum + vat) * 100) / 100
+        const subtotal = taxIncluded ? Math.round((total - vat) * 100) / 100 : itemsSum
+        if (vat <= 0) {
+          vat = 0
+          taxStatus = 'sin_iva'
+        } else if (taxStatus === 'sin_iva') {
+          return { data: null, error: { message: 'Una compra con IVA > 0 requiere estado descontable, pendiente o costo' } }
+        }
+        const recognizedCost = taxStatus === 'costo' ? total : subtotal
+
+        let remBase = subtotal
+        let remTax = vat
+        const normalized = rawItems.map((it, idx) => {
+          const prod = prods.find(p => p.id === it.product_id)
+          const isLast = idx === rawItems.length - 1
+          const lineBase = isLast ? remBase : (itemsSum > 0 ? Math.round(subtotal * (it.rawSub / itemsSum) * 100) / 100 : 0)
+          const lineTax = isLast ? remTax : (itemsSum > 0 ? Math.round(vat * (it.rawSub / itemsSum) * 100) / 100 : 0)
+          remBase = Math.round((remBase - lineBase) * 100) / 100
+          remTax = Math.round((remTax - lineTax) * 100) / 100
+          const invAdd = lineBase + (taxStatus === 'costo' ? lineTax : 0)
+          const unitBaseCost = it.quantity > 0 ? Math.round((lineBase / it.quantity) * 10000) / 10000 : it.rawCost
+          const effUnitCost = it.quantity > 0 ? Math.round((invAdd / it.quantity) * 10000) / 10000 : it.rawCost
+          return {
+            product_id: it.product_id,
+            product_name: it.product_name,
+            quantity: it.quantity,
+            cost: unitBaseCost,
+            unit_base_cost: unitBaseCost,
+            tax_amount: lineTax,
+            recognized_unit_cost: effUnitCost,
             prev_cost: Number(prod?.cost) || 0,
-            subtotal: Math.round(qty * cost * 100) / 100,
+            subtotal: lineBase,
+            line_total: Math.round((lineBase + lineTax) * 100) / 100,
             ...(it.expiry_date ? { lot_code: it.lot_code || 'S/L', expiry_date: it.expiry_date } : {}),
           }
         })
-        const total = Math.round(normalized.reduce((s, i) => s + i.subtotal, 0) * 100) / 100
+
         let days: number | null = null
         let dueDate: string | null = null
         if (method === 'credito' && sup) {
@@ -3631,6 +3683,12 @@ function createMockSupabase(silent = false): SupabaseClient {
           supplier_name: sup?.name || null,
           items: normalized,
           total,
+          subtotal,
+          tax: vat,
+          tax_rate: taxRate,
+          tax_included: taxIncluded,
+          tax_status: taxStatus,
+          recognized_cost: recognizedCost,
           status: 'recibida',
           payment_method: method,
           due_date: dueDate,
@@ -3644,9 +3702,10 @@ function createMockSupabase(silent = false): SupabaseClient {
             const oldStock = Number(prod.stock) || 0
             const oldCost = Number(prod.cost) || 0
             const newStock = oldStock + it.quantity
+            const invAdd = Number(it.subtotal) + (taxStatus === 'costo' ? Number(it.tax_amount || 0) : 0)
             prod.cost = oldStock > 0 && newStock > 0
-              ? Math.round(((oldStock * oldCost) + (it.quantity * it.cost)) / newStock * 100) / 100
-              : Math.round(it.cost * 100) / 100
+              ? Math.round(((oldStock * oldCost) + invAdd) / newStock * 100) / 100
+              : Math.round((Number(it.recognized_unit_cost) || it.cost) * 100) / 100
             prod.stock = newStock
             getTable('kardex').unshift({
               id: genId(),
@@ -3655,8 +3714,9 @@ function createMockSupabase(silent = false): SupabaseClient {
               type: 'entrada',
               quantity: it.quantity,
               balance: prod.stock,
-              reference_type: 'compra',
+              reference_type: 'purchase',
               reference_id: purchaseId,
+              seq_verified: true,
               created_at: nowIso(),
             })
           }
@@ -3701,7 +3761,8 @@ function createMockSupabase(silent = false): SupabaseClient {
             const oldStock = Number(prod.stock) || 0
             const oldCost = Number(prod.cost) || 0
             const qty = Number(it.quantity) || 0
-            const itemTotal = Number(it.subtotal) || qty * (Number(it.cost) || 0)
+            const lineBase = Number(it.subtotal) || qty * (Number(it.cost) || 0)
+            const itemTotal = lineBase + (p.tax_status === 'costo' ? Number(it.tax_amount || 0) : 0)
             const newStock = Math.max(0, oldStock - qty)
             if (newStock > 0) {
               const rev = Math.round(((oldStock * oldCost) - itemTotal) / newStock * 100) / 100
@@ -3717,10 +3778,17 @@ function createMockSupabase(silent = false): SupabaseClient {
               type: 'salida',
               quantity: qty,
               balance: prod.stock,
-              reference_type: 'anulacion_compra',
+              reference_type: 'purchase',
               reference_id: p.id,
+              seq_verified: true,
               created_at: nowIso(),
             })
+          }
+        }
+        for (const adj of getTable('purchase_iva_adjustments')) {
+          if (adj.purchase_id === p.id && adj.status === 'aplicado') {
+            adj.status = 'reversado'
+            adj.reversed_at = nowIso()
           }
         }
         p.status = 'anulada'
@@ -4094,13 +4162,32 @@ function createMockSupabase(silent = false): SupabaseClient {
         const prodItems = items.filter(x => x.product_id === args.p_product_id)
         const bought = prodItems.reduce((acc, x) => acc + (Number(x.quantity) || 0), 0)
         const boughtAmt = prodItems.reduce((acc, x) => acc + (Number(x.subtotal) || (Number(x.quantity) * Number(x.cost)) || 0), 0)
+        const boughtTaxExpl = prodItems.reduce((acc, x) => acc + (Number(x.tax_amount) || 0), 0)
+        const boughtTax = boughtTaxExpl > 0
+          ? Math.round(boughtTaxExpl * 100) / 100
+          : Number(pur.tax || 0) > 0 && Number(pur.subtotal || 0) > 0
+            ? Math.round(Number(pur.tax) * (boughtAmt / Number(pur.subtotal)) * 100) / 100
+            : 0
         if (bought <= 0) return { data: null, error: { message: 'Ese producto no pertenece a la compra seleccionada' } }
-        const returned = getTable('purchase_devolutions')
+        const activeProdDevs = getTable('purchase_devolutions')
           .filter(d => d.purchase_id === pur.id && d.product_id === args.p_product_id && d.status === 'activa')
-          .reduce((acc, d) => acc + (Number(d.quantity) || 0), 0)
-        if (qty > bought - returned) return { data: null, error: { message: `Solo quedan ${bought - returned} unidad(es) disponibles para devolver` } }
-        const unitCost = Math.round((boughtAmt / bought) * 100) / 100
-        const amount = Math.round((qty * boughtAmt / bought) * 100) / 100
+        const returned = activeProdDevs.reduce((acc, d) => acc + (Number(d.quantity) || 0), 0)
+        const returnedAmt = activeProdDevs.reduce((acc, d) => acc + Number(d.subtotal ?? d.amount ?? 0), 0)
+        const returnedTax = activeProdDevs.reduce((acc, d) => acc + Number(d.tax_amount ?? 0), 0)
+        if (qty > bought - returned + 0.0001) {
+          return { data: null, error: { message: `Solo quedan ${bought - returned} unidad(es) disponibles para devolver` } }
+        }
+        const isLast = Math.abs((returned + qty) - bought) <= 0.0001
+        const devBase = isLast
+          ? Math.max(0, Math.round((boughtAmt - returnedAmt) * 100) / 100)
+          : Math.round((qty * boughtAmt / bought) * 100) / 100
+        const devTax = isLast
+          ? Math.max(0, Math.round((boughtTax - returnedTax) * 100) / 100)
+          : Math.round((qty * boughtTax / bought) * 100) / 100
+        const amount = Math.round((devBase + devTax) * 100) / 100
+        const taxSnap = String(pur.tax_status || (Number(pur.tax || 0) > 0 ? 'descontable' : 'sin_iva'))
+        const invCredit = taxSnap === 'costo' ? amount : devBase
+        const unitCost = Math.round((invCredit / qty) * 100) / 100
         const refund = String(args.p_refund_method || pur.payment_method || 'efectivo')
         if (refund === 'credito') {
           if (pur.payment_method !== 'credito') {
@@ -4126,7 +4213,7 @@ function createMockSupabase(silent = false): SupabaseClient {
         const oldCost = Number(prod.cost) || 0
         const newStock = oldStock - qty
         if (newStock > 0) {
-          const revCost = Math.round(((oldStock * oldCost) - amount) / newStock * 100) / 100
+          const revCost = Math.round(((oldStock * oldCost) - invCredit) / newStock * 100) / 100
           if (revCost > 0) prod.cost = revCost
         }
         prod.stock = newStock
@@ -4141,6 +4228,10 @@ function createMockSupabase(silent = false): SupabaseClient {
           quantity: qty,
           unit_cost: unitCost,
           amount,
+          subtotal: devBase,
+          tax_amount: devTax,
+          tax_status_snapshot: taxSnap,
+          inventory_credit: invCredit,
           refund_method: refund,
           reason,
           status: 'activa',
@@ -4183,9 +4274,10 @@ function createMockSupabase(silent = false): SupabaseClient {
         const oldCost = Number(prod.cost) || 0
         const qty = Number(d.quantity) || 0
         const amt = Number(d.amount) || 0
+        const invAmt = Number(d.inventory_credit ?? d.amount) || 0
         const newStock = oldStock + qty
         prod.cost = oldStock > 0 && newStock > 0
-          ? Math.round(((oldStock * oldCost) + amt) / newStock * 100) / 100
+          ? Math.round(((oldStock * oldCost) + invAmt) / newStock * 100) / 100
           : Math.round((Number(d.unit_cost) || 0) * 100) / 100
         prod.stock = newStock
         d.status = 'anulada'
@@ -7381,6 +7473,179 @@ function createMockSupabase(silent = false): SupabaseClient {
             expenses: { items: expItems, total: Math.round(totExp * 10000) / 10000 },
             operating_profit: opProfit,
             net_income: opProfit,
+          },
+          error: null,
+        }
+      }
+      case 'clasificar_iva_compra': {
+        const pur = getTable('purchases').find(x => x.id === args.p_purchase_id)
+        if (!pur) return { data: null, error: { message: 'Compra no encontrada' } }
+        if (pur.status !== 'recibida') return { data: null, error: { message: 'Solo se puede clasificar el IVA de compras recibidas' } }
+        if (pur.tax_status !== 'pendiente') {
+          return { data: null, error: { message: `La compra tiene estado "${pur.tax_status}" (solo se reclasifican pendientes)` } }
+        }
+        const newStatus = String(args.p_new_status || '')
+        if (newStatus !== 'descontable' && newStatus !== 'costo') {
+          return { data: null, error: { message: 'El nuevo estado fiscal debe ser descontable o costo' } }
+        }
+        const devs = getTable('purchase_devolutions').filter(d => d.purchase_id === pur.id && d.status === 'activa')
+        const devTax = devs.reduce((s, d) => s + Number(d.tax_amount || 0), 0)
+        const netTax = Math.max(0, Math.round((Number(pur.tax || 0) - devTax) * 100) / 100)
+        let invAmt = 0
+        let expAmt = 0
+        if (newStatus === 'costo') {
+          const items: Row[] = Array.isArray(pur.items) ? pur.items : []
+          for (const it of items) {
+            const prod = prods.find(p => p.id === it.product_id)
+            const bought = Number(it.quantity || 0)
+            const devQty = devs.filter(d => d.product_id === it.product_id).reduce((s, d) => s + Number(d.quantity || 0), 0)
+            const netQty = Math.max(0, bought - devQty)
+            const lineTax = Number(it.tax_amount || 0) || (Number(pur.subtotal || 0) > 0 ? netTax * (Number(it.subtotal || 0) / Number(pur.subtotal)) : 0)
+            if (prod && netQty > 0) {
+              const inStock = Math.min(netQty, Math.max(0, Number(prod.stock || 0)))
+              const toInv = Math.round(lineTax * (inStock / netQty) * 100) / 100
+              const toExp = Math.round((lineTax - toInv) * 100) / 100
+              invAmt += toInv
+              expAmt += toExp
+              if (Number(prod.stock || 0) > 0 && toInv > 0) {
+                prod.cost = Math.round((((Number(prod.stock) * Number(prod.cost || 0)) + toInv) / Number(prod.stock)) * 100) / 100
+              }
+            } else {
+              expAmt += lineTax
+            }
+          }
+          pur.recognized_cost = Math.round((Number(pur.subtotal || 0) + netTax) * 100) / 100
+          pur.iva_cost_inventory = Math.round(invAmt * 100) / 100
+          pur.iva_cost_expense = Math.round(expAmt * 100) / 100
+        }
+        pur.tax_status = newStatus
+        pur.iva_classified_at = nowIso()
+        pur.iva_classification_note = args.p_reason || null
+        getTable('purchase_iva_adjustments').unshift({
+          id: genId(),
+          company_id: pur.company_id || DEMO_COMPANY_ID,
+          purchase_id: pur.id,
+          from_status: 'pendiente',
+          to_status: newStatus,
+          tax_amount: netTax,
+          amount_to_inventory: Math.round(invAmt * 100) / 100,
+          amount_to_expense: Math.round(expAmt * 100) / 100,
+          reason: args.p_reason || null,
+          status: 'aplicado',
+          created_by_name: 'Administrador Demo',
+          created_at: nowIso(),
+        })
+        return { data: pur.id, error: null }
+      }
+      case 'dian_calcular_formulario_300': {
+        const startMs = args.p_start_date ? new Date(String(args.p_start_date)).getTime() : 0
+        const endMs = args.p_end_date ? new Date(String(args.p_end_date)).getTime() : Number.MAX_SAFE_INTEGER
+        const inRange = (iso?: string) => {
+          const t = iso ? new Date(iso).getTime() : 0
+          return t >= startMs && t < endMs
+        }
+        const periodSales = sales.filter(s => s.status !== 'anulada' && inRange(s.created_at))
+        const ing19 = periodSales.filter(s => Number(s.tax_rate || 0) === 19).reduce((a, s) => a + Number(s.subtotal ?? (Number(s.total) - Number(s.tax_amount || 0))), 0)
+        const ing5 = periodSales.filter(s => Number(s.tax_rate || 0) === 5).reduce((a, s) => a + Number(s.subtotal ?? (Number(s.total) - Number(s.tax_amount || 0))), 0)
+        const ingExcl = periodSales.filter(s => Number(s.tax_rate || 0) === 0).reduce((a, s) => a + Number(s.subtotal ?? s.total), 0)
+        const ivaGen19 = periodSales.filter(s => Number(s.tax_rate || 0) === 19).reduce((a, s) => a + Number(s.tax_amount || 0), 0)
+        const ivaGen5 = periodSales.filter(s => Number(s.tax_rate || 0) === 5).reduce((a, s) => a + Number(s.tax_amount || 0), 0)
+        const devVentas = getTable('devolutions').filter(d => inRange(d.created_at)).reduce((a, d) => a + Number(d.amount || 0), 0)
+
+        const allPurchases = getTable('purchases')
+        const periodPurchases = allPurchases.filter(p => p.status === 'recibida' && inRange(p.created_at))
+        let compDesc = 0
+        let ivaDesc = 0
+        let compPend = 0
+        let ivaPend = 0
+        let compCosto = 0
+        let ivaCosto = 0
+        let compSinIva = 0
+
+        for (const p of periodPurchases) {
+          const vat = Number(p.tax || 0)
+          const base = Number(p.subtotal ?? (Number(p.total || 0) - vat))
+          const st = String(p.tax_status || (vat > 0 ? 'descontable' : 'sin_iva'))
+          if (st === 'descontable' && !p.iva_classified_at) {
+            compDesc += base
+            ivaDesc += vat
+          } else if (st === 'pendiente') {
+            compPend += base
+            ivaPend += vat
+          } else if (st === 'costo') {
+            compCosto += base
+            ivaCosto += vat
+          } else if (st === 'sin_iva') {
+            compSinIva += base
+          }
+        }
+
+        const adjs = getTable('purchase_iva_adjustments').filter(a => a.status === 'aplicado' && a.to_status === 'descontable' && inRange(a.created_at))
+        for (const adj of adjs) {
+          const p = allPurchases.find(x => x.id === adj.purchase_id && x.status === 'recibida')
+          if (!p) continue
+          const priorDevs = getTable('purchase_devolutions')
+            .filter(pd => pd.purchase_id === p.id && pd.status === 'activa' && pd.tax_status_snapshot === 'pendiente' && new Date(pd.created_at).getTime() <= new Date(adj.created_at).getTime())
+            .reduce((s, pd) => s + Number(pd.subtotal ?? pd.amount ?? 0), 0)
+          compDesc += Math.max(0, Number(p.subtotal ?? (Number(p.total || 0) - Number(p.tax || 0))) - priorDevs)
+          ivaDesc += Number(adj.tax_amount || 0)
+        }
+
+        const periodDevs = getTable('purchase_devolutions').filter(pd => pd.status === 'activa' && inRange(pd.created_at))
+        let devBaseDesc = 0
+        let devIvaDesc = 0
+        for (const pd of periodDevs) {
+          const p = allPurchases.find(x => x.id === pd.purchase_id && x.status === 'recibida')
+          if (!p) continue
+          const base = Number(pd.subtotal ?? pd.amount ?? 0)
+          const vat = Number(pd.tax_amount ?? 0)
+          const snap = String(pd.tax_status_snapshot || 'sin_iva')
+          if (snap === 'descontable') {
+            devBaseDesc += base
+            devIvaDesc += vat
+          } else if (snap === 'pendiente' && p.tax_status === 'pendiente') {
+            compPend = Math.max(0, compPend - base)
+            ivaPend = Math.max(0, ivaPend - vat)
+          } else if (p.tax_status === 'costo') {
+            compCosto = Math.max(0, compCosto - base)
+            ivaCosto = Math.max(0, ivaCosto - vat)
+          } else if (p.tax_status === 'sin_iva') {
+            compSinIva = Math.max(0, compSinIva - base)
+          }
+        }
+
+        const compGravNeto = Math.max(0, compDesc - devBaseDesc)
+        const ivaDescNeto = Math.max(0, ivaDesc - devIvaDesc)
+        const totalGen = ivaGen19 + ivaGen5
+        const saldoPagar = totalGen >= ivaDescNeto ? totalGen - ivaDescNeto : 0
+        const saldoFavor = ivaDescNeto > totalGen ? ivaDescNeto - totalGen : 0
+        const ingBrutos = ing19 + ing5 + ingExcl
+
+        return {
+          data: {
+            casilla_30_ingresos_gravados_19: Math.round(ing19),
+            casilla_31_ingresos_gravados_5: Math.round(ing5),
+            casilla_28_ingresos_excluidos: Math.round(ingExcl),
+            casilla_41_total_ingresos_brutos: Math.round(ingBrutos),
+            casilla_43_devoluciones_ventas: Math.round(devVentas),
+            casilla_42_total_ingresos_netos: Math.round(ingBrutos - devVentas),
+            casilla_59_iva_generado_19: Math.round(ivaGen19),
+            casilla_60_iva_generado_5: Math.round(ivaGen5),
+            casilla_65_total_iva_generado: Math.round(totalGen),
+            casilla_66_compras_gravadas: Math.round(compGravNeto),
+            casilla_74_iva_descontable_compras: Math.round(ivaDescNeto),
+            casilla_83_total_iva_descontable: Math.round(ivaDescNeto),
+            casilla_84_saldo_a_pagar: Math.round(saldoPagar),
+            casilla_85_saldo_a_favor: Math.round(saldoFavor),
+            compras_sin_iva_base: Math.round(compSinIva),
+            compras_iva_pendiente_base: Math.round(compPend),
+            iva_compras_pendiente: Math.round(ivaPend),
+            compras_iva_costo_base: Math.round(compCosto),
+            iva_compras_costo: Math.round(ivaCosto),
+            devoluciones_compras_iva_descontable: Math.round(devIvaDesc),
+            compras_sin_contabilizar_count: 0,
+            devoluciones_compra_sin_contabilizar_count: 0,
+            es_borrador_no_conciliado: ivaPend > 0,
           },
           error: null,
         }

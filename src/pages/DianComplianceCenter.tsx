@@ -17,10 +17,12 @@ import {
   BookOpen,
   ArrowUpRight,
   ShieldCheck,
+  X,
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
-import { useAuth, canViewAccounting } from '../lib/auth'
-import { useCurrency, formatMoney, fmtDate } from '../lib/currency'
+import { useAuth, canViewAccounting, isReadOnly } from '../lib/auth'
+import { useCurrency } from '../lib/currency'
+import type { Purchase } from '../types'
 import {
   getFormulario300,
   getFormulario350,
@@ -49,6 +51,15 @@ const EMPTY_F300: Form300Data = {
   casilla_83_total_iva_descontable: 0,
   casilla_84_saldo_a_pagar: 0,
   casilla_85_saldo_a_favor: 0,
+  compras_sin_iva_base: 0,
+  compras_iva_pendiente_base: 0,
+  iva_compras_pendiente: 0,
+  compras_iva_costo_base: 0,
+  iva_compras_costo: 0,
+  devoluciones_compras_iva_descontable: 0,
+  compras_sin_contabilizar_count: 0,
+  devoluciones_compra_sin_contabilizar_count: 0,
+  es_borrador_no_conciliado: false,
 }
 
 const EMPTY_F350: Form350Data = {
@@ -75,19 +86,32 @@ interface Props {
 
 export default function DianComplianceCenter({ onNavigate }: Props = {}) {
   const { user } = useAuth()
-  const { fmt: money, currency } = useCurrency()
+  const { fmt: money } = useCurrency()
   const isCpa = canViewAccounting(user?.role)
+  const canClassifyVat =
+    !isReadOnly(user) &&
+    ['admin', 'dueno', 'admin_empresa', 'gerente', 'contador'].includes(user?.role || '')
 
   const [activeTab, setActiveTab] = useState<DianTab>('muisca')
   const [formType, setFormType] = useState<FormType>('300')
   const [selectedYear, setSelectedYear] = useState<number>(new Date().getFullYear())
   const [selectedPeriod, setSelectedPeriod] = useState<number>(1) // Bimestre 1 o Mes 1
   const [loading, setLoading] = useState(false)
+  const [formError, setFormError] = useState('')
   const [copyNotice, setCopyNotice] = useState('')
+  const [reloadSeq, setReloadSeq] = useState(0)
 
   // Datos Formulario 300 y 350
   const [f300, setF300] = useState<Form300Data>(EMPTY_F300)
   const [f350, setF350] = useState<Form350Data>(EMPTY_F350)
+
+  // Compras pendientes de clasificación IVA (visibles para Contador / Admin / Gerente)
+  const [pendingPurchases, setPendingPurchases] = useState<Purchase[]>([])
+  const [classifyTarget, setClassifyTarget] = useState<Purchase | null>(null)
+  const [classifyStatus, setClassifyStatus] = useState<'descontable' | 'costo'>('descontable')
+  const [classifyReason, setClassifyReason] = useState('')
+  const [classifying, setClassifying] = useState(false)
+  const [classifyErr, setClassifyErr] = useState('')
 
   // Datos Exógena
   const [exogenaForm, setExogenaForm] = useState<string>('1001')
@@ -95,8 +119,6 @@ export default function DianComplianceCenter({ onNavigate }: Props = {}) {
 
   // Certificados
   const [certType, setCertType] = useState<'retefuente' | 'reteiva' | 'reteica'>('retefuente')
-  const [certSearch, setCertSearch] = useState('')
-  const [certSupplier, setCertSupplier] = useState<any>(null)
   const [companyConfig, setCompanyConfig] = useState<any>(null)
 
   useEffect(() => {
@@ -108,37 +130,55 @@ export default function DianComplianceCenter({ onNavigate }: Props = {}) {
   // Calcular fechas según período seleccionado
   const dateRange = useMemo(() => {
     if (formType === '300') {
-      // Bimestral: período 1 = Ene-Feb, 2 = Mar-Abr, etc.
       const startMonth = (selectedPeriod - 1) * 2
       const start = new Date(selectedYear, startMonth, 1)
       const end = new Date(selectedYear, startMonth + 2, 1)
       return { start, end, label: `Bimestre ${selectedPeriod} (${start.toLocaleDateString('es-CO', { month: 'short' })} - ${new Date(selectedYear, startMonth + 1, 1).toLocaleDateString('es-CO', { month: 'short' })})` }
     } else {
-      // Mensual: período 1 a 12
       const start = new Date(selectedYear, selectedPeriod - 1, 1)
       const end = new Date(selectedYear, selectedPeriod, 1)
       return { start, end, label: start.toLocaleDateString('es-CO', { month: 'long', year: 'numeric' }) }
     }
   }, [formType, selectedYear, selectedPeriod])
 
-  // Cargar datos del formulario activo
+  // Cargar datos del formulario activo y compras pendientes de IVA
   useEffect(() => {
     let alive = true
     async function loadForm() {
       setLoading(true)
+      setFormError('')
       const coId = user?.company_id || null
-      if (formType === '300') {
-        const data = await getFormulario300(coId, dateRange.start, dateRange.end)
-        if (alive) setF300(data)
-      } else {
-        const data = await getFormulario350(coId, dateRange.start, dateRange.end)
-        if (alive) setF350(data)
+      try {
+        if (formType === '300') {
+          const [data, pendRes] = await Promise.all([
+            getFormulario300(coId, dateRange.start, dateRange.end),
+            supabase
+              .from('purchases')
+              .select('*')
+              .eq('status', 'recibida')
+              .eq('tax_status', 'pendiente')
+              .order('created_at', { ascending: false })
+              .limit(50),
+          ])
+          if (alive) {
+            setF300(data)
+            setPendingPurchases((pendRes.data || []) as Purchase[])
+          }
+        } else {
+          const data = await getFormulario350(coId, dateRange.start, dateRange.end)
+          if (alive) setF350(data)
+        }
+      } catch (err) {
+        if (alive) {
+          setFormError(err instanceof Error ? err.message : String(err))
+        }
+      } finally {
+        if (alive) setLoading(false)
       }
-      setLoading(false)
     }
     void loadForm()
     return () => { alive = false }
-  }, [formType, dateRange, user?.company_id])
+  }, [formType, dateRange, user?.company_id, reloadSeq])
 
   // Cargar datos de exógena cuando se active la pestaña
   useEffect(() => {
@@ -154,6 +194,28 @@ export default function DianComplianceCenter({ onNavigate }: Props = {}) {
     return () => { alive = false }
   }, [activeTab, selectedYear, exogenaForm, user?.company_id])
 
+  async function handleClassifySubmit() {
+    if (!classifyTarget || classifying || !canClassifyVat) return
+    setClassifying(true)
+    setClassifyErr('')
+    const { error } = await supabase.rpc('clasificar_iva_compra', {
+      p_purchase_id: classifyTarget.id,
+      p_new_status: classifyStatus,
+      p_reason: classifyReason.trim() || null,
+    })
+    setClassifying(false)
+    if (error) {
+      setClassifyErr(error.message)
+      return
+    }
+    const code = 'CMP-' + classifyTarget.id.slice(0, 8).toUpperCase()
+    setClassifyTarget(null)
+    setClassifyReason('')
+    setCopyNotice(`IVA de ${code} reclasificado a "${classifyStatus}". Formulario 300 actualizado.`)
+    setTimeout(() => setCopyNotice(''), 4000)
+    setReloadSeq(s => s + 1)
+  }
+
   function handleCopyBoxes() {
     let text = ''
     if (formType === '300') {
@@ -167,11 +229,16 @@ export default function DianComplianceCenter({ onNavigate }: Props = {}) {
         `Casilla 59 (IVA Generado 19%): ${f300.casilla_59_iva_generado_19}\n` +
         `Casilla 60 (IVA Generado 5%): ${f300.casilla_60_iva_generado_5}\n` +
         `Casilla 65 (Total IVA Generado): ${f300.casilla_65_total_iva_generado}\n` +
-        `Casilla 66 (Compras Gravadas): ${f300.casilla_66_compras_gravadas}\n` +
-        `Casilla 74 (IVA Descontable Compras): ${f300.casilla_74_iva_descontable_compras}\n` +
+        `Casilla 66 (Compras Gravadas Descontables): ${f300.casilla_66_compras_gravadas}\n` +
+        `Casilla 74 (IVA Descontable Compras Neto): ${f300.casilla_74_iva_descontable_compras}\n` +
         `Casilla 83 (Total IVA Descontable): ${f300.casilla_83_total_iva_descontable}\n` +
         `Casilla 84 (Saldo a Pagar): ${f300.casilla_84_saldo_a_pagar}\n` +
-        `Casilla 85 (Saldo a Favor): ${f300.casilla_85_saldo_a_favor}`
+        `Casilla 85 (Saldo a Favor): ${f300.casilla_85_saldo_a_favor}\n` +
+        `--- Desglose informativo compras ---\n` +
+        `IVA pendiente por clasificar: ${f300.iva_compras_pendiente ?? 0} (Base ${f300.compras_iva_pendiente_base ?? 0})\n` +
+        `IVA al costo (no descontable): ${f300.iva_compras_costo ?? 0} (Base ${f300.compras_iva_costo_base ?? 0})\n` +
+        `Compras sin IVA: ${f300.compras_sin_iva_base ?? 0}\n` +
+        `IVA descontable devuelto: ${f300.devoluciones_compras_iva_descontable ?? 0}`
     } else {
       text = `=== BORRADOR FORMULARIO 350 DIAN (RETENCIÓN) ===\n` +
         `Casilla 46 (Honorarios Base): ${f350.casilla_46_honorarios_base} | Casilla 47 (Retención): ${f350.casilla_47_honorarios_ret}\n` +
@@ -192,12 +259,10 @@ export default function DianComplianceCenter({ onNavigate }: Props = {}) {
       {/* Encabezado */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div>
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] font-bold uppercase tracking-wider px-2.5 py-0.5 rounded-full bg-indigo-100 text-indigo-800">
-              Cumplimiento Tributario Colombia · NIIF
-            </span>
-          </div>
-          <h1 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight mt-1 flex items-center gap-2">
+          <p className="text-[11px] font-bold uppercase tracking-wider text-indigo-700">
+            Cumplimiento Tributario Colombia · NIIF
+          </p>
+          <h1 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight mt-0.5 flex items-center gap-2">
             <ShieldCheck className="w-6 h-6 text-indigo-600" />
             Centro Tributario DIAN
           </h1>
@@ -361,6 +426,13 @@ export default function DianComplianceCenter({ onNavigate }: Props = {}) {
             </button>
           </div>
 
+          {formError && (
+            <div className="p-3 bg-red-50 border border-red-200 text-red-800 text-xs rounded-xl flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+              <span>{formError}</span>
+            </div>
+          )}
+
           {copyNotice && (
             <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs rounded-xl flex items-center gap-2">
               <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
@@ -376,7 +448,10 @@ export default function DianComplianceCenter({ onNavigate }: Props = {}) {
                   <h3 className="font-bold text-sm tracking-wide">
                     FORMULARIO 300 · DECLARACIÓN DEL IMPUESTO SOBRE LAS VENTAS (IVA)
                   </h3>
-                  <p className="text-xs text-slate-400 mt-0.5">Período: {dateRange.label} {selectedYear}</p>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Período: {dateRange.label} {selectedYear}
+                    {loading ? ' · Calculando...' : ''}
+                  </p>
                 </div>
                 <span className="text-xs font-mono font-bold text-amber-400 bg-amber-400/20 px-2.5 py-1 rounded-md border border-amber-400/30">
                   DIAN MUISCA
@@ -386,8 +461,7 @@ export default function DianComplianceCenter({ onNavigate }: Props = {}) {
               <div className="p-6 space-y-6">
                 {/* Sección Ingresos */}
                 <div>
-                  <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider mb-2.5 flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full bg-indigo-600"></span>
+                  <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider mb-2.5">
                     Sección Ingresos (Bases Gravables)
                   </h4>
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
@@ -426,7 +500,7 @@ export default function DianComplianceCenter({ onNavigate }: Props = {}) {
                     <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between">
                       <div>
                         <span className="text-[10px] font-bold text-slate-400 font-mono">CASILLA 42</span>
-                        <p className="font-semibold text-slate-800">Total ingresos netos</p>
+                        <p className="font-semibold text-slate-800">Total ingresos netos (menos dev. {money(f300.casilla_43_devoluciones_ventas)})</p>
                       </div>
                       <span className="text-base font-black text-slate-900 tabular-nums">
                         {money(f300.casilla_42_total_ingresos_netos)}
@@ -437,16 +511,15 @@ export default function DianComplianceCenter({ onNavigate }: Props = {}) {
 
                 {/* Sección Impuesto Generado y Descontable */}
                 <div>
-                  <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider mb-2.5 flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full bg-emerald-600"></span>
+                  <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider mb-2.5">
                     Liquidación del Impuesto (Generado vs Descontable)
                   </h4>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs">
                     <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl">
-                      <span className="text-[10px] font-bold text-slate-400 block font-mono">CASILLA 59</span>
-                      <span className="text-xs font-medium text-slate-700">A la tarifa general (19%)</span>
+                      <span className="text-[10px] font-bold text-slate-400 block font-mono">CASILLA 59 + 60</span>
+                      <span className="text-xs font-medium text-slate-700">IVA generado (19% / 5%)</span>
                       <p className="text-base font-bold text-slate-900 mt-1 tabular-nums">
-                        {money(f300.casilla_59_iva_generado_19)}
+                        {money(f300.casilla_59_iva_generado_19 + f300.casilla_60_iva_generado_5)}
                       </p>
                     </div>
                     <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl">
@@ -457,21 +530,138 @@ export default function DianComplianceCenter({ onNavigate }: Props = {}) {
                       </p>
                     </div>
                     <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl">
-                      <span className="text-[10px] font-bold text-slate-400 block font-mono">CASILLA 83</span>
-                      <span className="text-xs font-medium text-slate-700">Total IVA descontable (compras)</span>
-                      <p className="text-base font-bold text-indigo-700 mt-1 tabular-nums">
-                        {money(f300.casilla_83_total_iva_descontable)}
+                      <span className="text-[10px] font-bold text-slate-400 block font-mono">CASILLA 66</span>
+                      <span className="text-xs font-medium text-slate-700">Compras gravadas descontables</span>
+                      <p className="text-base font-bold text-slate-900 mt-1 tabular-nums">
+                        {money(f300.casilla_66_compras_gravadas)}
+                      </p>
+                    </div>
+                    <div className="p-3 bg-indigo-50/60 border border-indigo-200 rounded-xl">
+                      <span className="text-[10px] font-bold text-indigo-700 block font-mono">CASILLAS 74 · 83</span>
+                      <span className="text-xs font-medium text-slate-700">IVA descontable neto en compras</span>
+                      <p className="text-base font-bold text-indigo-800 mt-1 tabular-nums">
+                        {money(f300.casilla_74_iva_descontable_compras)}
                       </p>
                     </div>
                   </div>
                 </div>
 
-                {/* Resultado a Pagar / a Favor */}
-                {f300.casilla_74_iva_descontable_compras === 0 && (
-                  <div className="p-3 bg-amber-50 border border-amber-300 rounded-xl text-xs text-amber-900">
-                    <strong>IVA descontable no disponible.</strong> Las compras aún no registran IVA, por eso las casillas 66, 74 y 83 salen en 0 y el saldo a pagar queda sobreestimado. No declare con este saldo sin verificarlo.
+                {/* Desglose fiscal informativo de compras del período */}
+                <div>
+                  <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider mb-2.5">
+                    Desglose Fiscal de Compras del Período (Control NIIF)
+                  </h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs tabular-nums">
+                    <div className="p-3 bg-amber-50/70 border border-amber-200 rounded-xl">
+                      <span className="text-[10px] font-bold text-amber-800 block uppercase">IVA pendiente por clasificar</span>
+                      <p className="text-base font-bold text-amber-900 mt-1">{money(f300.iva_compras_pendiente ?? 0)}</p>
+                      <span className="text-[11px] text-amber-700">Base: {money(f300.compras_iva_pendiente_base ?? 0)}</span>
+                    </div>
+                    <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl">
+                      <span className="text-[10px] font-bold text-slate-500 block uppercase">IVA al costo (no desc.)</span>
+                      <p className="text-base font-bold text-slate-900 mt-1">{money(f300.iva_compras_costo ?? 0)}</p>
+                      <span className="text-[11px] text-slate-500">Base: {money(f300.compras_iva_costo_base ?? 0)}</span>
+                    </div>
+                    <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl">
+                      <span className="text-[10px] font-bold text-slate-500 block uppercase">Compras sin IVA</span>
+                      <p className="text-base font-bold text-slate-900 mt-1">{money(f300.compras_sin_iva_base ?? 0)}</p>
+                      <span className="text-[11px] text-slate-500">Excluidas / No gravadas</span>
+                    </div>
+                    <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl">
+                      <span className="text-[10px] font-bold text-slate-500 block uppercase">IVA desc. devuelto</span>
+                      <p className="text-base font-bold text-slate-900 mt-1">{money(f300.devoluciones_compras_iva_descontable ?? 0)}</p>
+                      <span className="text-[11px] text-slate-500">Deducido de Casilla 74</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Alertas condicionales reales de borrador / pendientes */}
+                {f300.es_borrador_no_conciliado && (
+                  <div className="p-3.5 bg-amber-50 border border-amber-300 rounded-xl text-xs text-amber-950 space-y-1.5">
+                    <p className="font-bold">
+                      Borrador preliminar pendiente de conciliación fiscal y contable:
+                    </p>
+                    <ul className="list-disc pl-5 space-y-0.5 text-amber-900">
+                      {(f300.iva_compras_pendiente ?? 0) > 0 && (
+                        <li>
+                          Hay <strong className="tabular-nums">{money(f300.iva_compras_pendiente ?? 0)}</strong> en compras con <strong>IVA pendiente por clasificar</strong> (no se suman a Casilla 74 hasta clasificarlas como descontables).
+                        </li>
+                      )}
+                      {(f300.compras_sin_contabilizar_count ?? 0) > 0 && (
+                        <li>
+                          Hay <strong>{f300.compras_sin_contabilizar_count}</strong> compra(s) del período sin asiento contable activo en <code>acc_entries</code>.
+                        </li>
+                      )}
+                      {(f300.devoluciones_compra_sin_contabilizar_count ?? 0) > 0 && (
+                        <li>
+                          Hay <strong>{f300.devoluciones_compra_sin_contabilizar_count}</strong> devolución(es) a proveedor sin asiento contable activo.
+                        </li>
+                      )}
+                      {(f300.iva_compras_pendiente ?? 0) === 0 &&
+                        (f300.compras_sin_contabilizar_count ?? 0) === 0 &&
+                        (f300.devoluciones_compra_sin_contabilizar_count ?? 0) === 0 && (
+                          <li>
+                            La contabilidad automática no está activa o no está conciliada aún para este período.
+                          </li>
+                      )}
+                    </ul>
+                    {onNavigate && isCpa && (
+                      <button
+                        type="button"
+                        onClick={() => onNavigate('accounting')}
+                        className="inline-flex items-center gap-1 font-semibold underline text-amber-950 hover:text-amber-800 pt-1"
+                      >
+                        Ir a Mesa del Contador / Conciliación <ArrowUpRight className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                   </div>
                 )}
+
+                {/* Compras pendientes de clasificación IVA (accesible para Contador y Gerencia) */}
+                {pendingPurchases.length > 0 && canClassifyVat && (
+                  <div className="border border-amber-200 rounded-xl overflow-hidden">
+                    <div className="bg-amber-50 px-4 py-2.5 border-b border-amber-200 flex items-center justify-between gap-2">
+                      <span className="text-xs font-bold text-amber-950">
+                        Compras con IVA pendiente por clasificar ({pendingPurchases.length})
+                      </span>
+                      <span className="text-[11px] text-amber-800">
+                        Define si el IVA es descontable en F300 o mayor valor del costo
+                      </span>
+                    </div>
+                    <div className="divide-y divide-slate-100 max-h-64 overflow-y-auto">
+                      {pendingPurchases.map(p => (
+                        <div key={p.id} className="px-4 py-2.5 flex items-center justify-between gap-3 text-xs hover:bg-slate-50">
+                          <div className="min-w-0">
+                            <p className="font-semibold text-slate-800 truncate">
+                              CMP-{p.id.slice(0, 8).toUpperCase()} · {p.supplier_name || 'Proveedor general'}
+                            </p>
+                            <p className="text-[11px] text-slate-500">
+                              {new Date(p.created_at).toLocaleDateString()} · Base: <span className="tabular-nums">{money(p.subtotal ?? 0)}</span> · Total: <span className="tabular-nums">{money(p.total)}</span>
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-3 shrink-0">
+                            <span className="font-mono tabular-nums font-bold text-amber-800">
+                              IVA {money(p.tax ?? 0)}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setClassifyTarget(p)
+                                setClassifyStatus('descontable')
+                                setClassifyReason('')
+                                setClassifyErr('')
+                              }}
+                              className="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold whitespace-nowrap"
+                            >
+                              Clasificar IVA
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 <div className="p-4 bg-slate-900 text-white rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div>
                     <span className="text-[10px] font-mono uppercase tracking-widest text-amber-400 font-bold">
@@ -775,7 +965,8 @@ export default function DianComplianceCenter({ onNavigate }: Props = {}) {
               <span className="font-bold text-slate-900 text-sm">Cuentas de IVA (2408)</span>
               <p className="text-slate-600 leading-relaxed">
                 • <strong>240801 (IVA Generado):</strong> Alimenta automáticamente la Casilla 59 del Formulario 300 y el Formato 1006.<br />
-                • <strong>240802 (IVA Descontable):</strong> Alimenta la Casilla 74 del Formulario 300 y el Formato 1005.
+                • <strong>240802 (IVA Descontable — <code>iva_descontable</code>):</strong> Alimenta las Casillas 66, 74 y 83 del Formulario 300 y el Formato 1005.<br />
+                • <strong>IVA Pendiente por clasificar (<code>iva_pendiente</code>):</strong> Cuenta puente de activo débito hasta su reclasificación a descontable o al costo.
               </p>
             </div>
 
@@ -801,6 +992,119 @@ export default function DianComplianceCenter({ onNavigate }: Props = {}) {
                 • <strong>1305 (Clientes Nacionales):</strong> Formato 1008 (Saldos de cuentas por cobrar al 31 de diciembre).<br />
                 • <strong>2205 (Proveedores Nacionales):</strong> Formato 1009 (Saldos de pasivos al 31 de diciembre).
               </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Clasificar IVA pendiente desde Centro Tributario DIAN */}
+      {classifyTarget && canClassifyVat && (
+        <div
+          className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4"
+          onClick={() => !classifying && setClassifyTarget(null)}
+        >
+          <div
+            className="bg-white rounded-xl p-6 w-full max-w-md space-y-4"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between">
+              <h2 className="font-bold text-slate-800">
+                Clasificar IVA · CMP-{classifyTarget.id.slice(0, 8).toUpperCase()}
+              </h2>
+              <button
+                type="button"
+                onClick={() => !classifying && setClassifyTarget(null)}
+                className="p-1 rounded hover:bg-slate-100"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs space-y-1 tabular-nums">
+              <div className="flex justify-between">
+                <span className="text-slate-500">Proveedor:</span>
+                <span className="font-medium text-slate-800">{classifyTarget.supplier_name || 'Proveedor general'}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">Base gravable:</span>
+                <span className="font-medium text-slate-800">{money(classifyTarget.subtotal || 0)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500">IVA pendiente:</span>
+                <span className="font-bold text-amber-800">{money(classifyTarget.tax || 0)}</span>
+              </div>
+            </div>
+
+            {classifyErr && (
+              <div className="text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                {classifyErr}
+              </div>
+            )}
+
+            <div className="space-y-2 text-xs">
+              <label className={`block p-3 rounded-lg border cursor-pointer ${
+                classifyStatus === 'descontable' ? 'border-emerald-500 bg-emerald-50/50' : 'border-slate-200'
+              }`}>
+                <div className="flex items-center gap-2 font-semibold text-slate-800">
+                  <input
+                    type="radio"
+                    name="dianClassifyStatus"
+                    checked={classifyStatus === 'descontable'}
+                    onChange={() => setClassifyStatus('descontable')}
+                    disabled={classifying}
+                  />
+                  <span>IVA Descontable (Formulario 300 Casilla 74)</span>
+                </div>
+              </label>
+
+              <label className={`block p-3 rounded-lg border cursor-pointer ${
+                classifyStatus === 'costo' ? 'border-indigo-500 bg-indigo-50/50' : 'border-slate-200'
+              }`}>
+                <div className="flex items-center gap-2 font-semibold text-slate-800">
+                  <input
+                    type="radio"
+                    name="dianClassifyStatus"
+                    checked={classifyStatus === 'costo'}
+                    onChange={() => setClassifyStatus('costo')}
+                    disabled={classifying}
+                  />
+                  <span>Mayor valor del costo (Inventario / Costo de ventas)</span>
+                </div>
+              </label>
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-slate-600 mb-1">
+                Motivo / soporte contable (opcional)
+              </label>
+              <input
+                type="text"
+                maxLength={240}
+                value={classifyReason}
+                onChange={e => setClassifyReason(e.target.value)}
+                disabled={classifying}
+                placeholder="Ej: Factura electrónica validada en DIAN"
+                className="w-full px-3 py-2 rounded-lg border border-slate-300 text-xs"
+              />
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setClassifyTarget(null)}
+                disabled={classifying}
+                className="flex-1 py-2 rounded-lg border border-slate-200 text-xs font-medium text-slate-600 hover:bg-slate-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleClassifySubmit()}
+                disabled={classifying}
+                className="flex-1 py-2 rounded-lg bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800 disabled:opacity-50"
+              >
+                {classifying ? 'Reclasificando...' : 'Confirmar reclasificación'}
+              </button>
             </div>
           </div>
         </div>

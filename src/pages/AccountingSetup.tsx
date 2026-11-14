@@ -4,7 +4,15 @@ import { useAuth, canViewAccounting } from '../lib/auth'
 import { CheckCircle2, AlertTriangle } from 'lucide-react'
 import { fmtNum } from '../lib/currency'
 
-interface Account { id: string; code: string; name: string; is_postable: boolean; active: boolean }
+interface Account {
+  id: string
+  code: string
+  name: string
+  type: string
+  nature: string
+  is_postable: boolean
+  active: boolean
+}
 interface Settings { start_date: string | null; active: boolean; timezone: string; map: Record<string, string> }
 interface Recon { code: string; label: string; operational: number; accounting: number; difference: number; note: string }
 
@@ -15,6 +23,10 @@ const KEYS: [string, string][] = [
   ['impuestos', 'Impuestos por pagar'],
   ['costo_ventas', 'Costo de ventas'],
   ['inventario', 'Inventario de mercancías'],
+]
+const VAT_KEYS: [string, string][] = [
+  ['iva_descontable', 'IVA descontable en compras (Activo / Débito · ej. 1.1.05)'],
+  ['iva_pendiente', 'IVA por clasificar en compras (Activo / Débito · ej. 1.1.06)'],
 ]
 const OPT: [string, string][] = [
   ['devoluciones', 'Devoluciones en ventas (si no eliges, se usa Ingresos por ventas)'],
@@ -40,7 +52,7 @@ export default function AccountingSetup() {
 
   async function load() {
     const [a, s] = await Promise.all([
-      supabase.from('acc_accounts').select('id, code, name, is_postable, active').order('code'),
+      supabase.from('acc_accounts').select('id, code, name, type, nature, is_postable, active').order('code'),
       supabase.from('acc_settings').select('*').maybeSingle(),
     ])
     setAccounts(((a.data as Account[]) || []).filter(x => x.is_postable && x.active))
@@ -55,12 +67,16 @@ export default function AccountingSetup() {
 
   const fail = (text: string) => setMsg({ ok: false, text })
   const complete = KEYS.every(([k]) => map[k])
+  const vatAssetAccounts = accounts.filter(a => a.type === 'activo' && a.nature === 'debito')
+  const vatConfigured = Boolean(map.iva_descontable && map.iva_pendiente)
+  const reconOkCount = recon.filter(r => Math.abs(Number(r.difference)) < 0.005).length
+  const reconDiffCount = recon.length - reconOkCount
 
   async function save() {
     setBusy(true)
     const { error } = await supabase.rpc('acc_save_settings', { p_map: map })
     setBusy(false)
-    if (error) fail(error.message); else { setMsg({ ok: true, text: 'Cuentas guardadas' }); void load() }
+    if (error) fail(error.message); else { setMsg({ ok: true, text: 'Cuentas guardadas correctamente.' }); void load() }
   }
 
   async function executeToggle(active: boolean) {
@@ -106,9 +122,21 @@ export default function AccountingSetup() {
         <h1 className="text-xl font-bold text-slate-800">Configuración contable</h1>
         <p className="text-sm text-slate-500 mt-1">Relaciona tus operaciones con las cuentas y activa la contabilidad automática.</p>
       </div>
-      {msg && <p className={`text-sm px-3 py-2 rounded-lg ${msg.ok ? 'text-emerald-700 bg-emerald-50' : 'text-red-600 bg-red-50'}`}>{msg.text}</p>}
+      {msg && <p className={`text-sm px-3 py-2 rounded-lg ${msg.ok ? 'text-emerald-700 bg-emerald-50 border border-emerald-200' : 'text-red-700 bg-red-50 border border-red-200'}`}>{msg.text}</p>}
 
       {accounts.length === 0 && <p className="text-sm text-amber-800 bg-amber-50 px-3 py-2 rounded-lg">Primero crea tu plan de cuentas en Contabilidad.</p>}
+
+      {settings?.active && !vatConfigured && (
+        <div className="flex items-start gap-2.5 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-xs text-amber-900">
+          <AlertTriangle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+          <div>
+            <p className="font-semibold">Falta parametrizar cuentas de IVA en compras</p>
+            <p className="mt-0.5 text-amber-800">
+              Con la contabilidad activa, las compras con IVA descontable o por clasificar, sus reclasificaciones y devoluciones se detienen hasta configurar <strong>iva_descontable</strong> e <strong>iva_pendiente</strong> (sin cuentas de respaldo automáticas).
+            </p>
+          </div>
+        </div>
+      )}
 
       <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-3">
         <h2 className="text-sm font-semibold text-slate-800">1. Cuentas por operación</h2>
@@ -121,6 +149,30 @@ export default function AccountingSetup() {
             </select>
           </div>
         ))}
+
+        <div className="pt-2 border-t border-slate-100 space-y-3">
+          <div>
+            <p className="text-xs font-semibold text-slate-800">IVA en compras (NIIF / DIAN estricto)</p>
+            <p className="text-[11px] text-slate-500 mt-0.5">
+              Solo admite cuentas activas imputables de tipo <strong>activo</strong> y naturaleza <strong>débito</strong>. Si falta alguna, la compra o reclasificación con ese tratamiento fiscal se bloqueará para proteger la partida doble.
+            </p>
+          </div>
+          {vatAssetAccounts.length === 0 && accounts.length > 0 && (
+            <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+              No se encontraron cuentas imputables de tipo Activo / Débito en tu plan de cuentas. Crea o activa las subcuentas de impuestos descontables (ej. 1.1.05 y 1.1.06) en Contabilidad.
+            </p>
+          )}
+          {VAT_KEYS.map(([k, label]) => (
+            <div key={k}>
+              <label className="block text-xs text-slate-500 mb-1">{label}</label>
+              <select value={map[k] || ''} onChange={e => setMap({ ...map, [k]: e.target.value })} className={input}>
+                <option value="">Sin configurar (bloquea compras con este tratamiento)</option>
+                {vatAssetAccounts.map(a => <option key={a.id} value={a.id}>{a.code} · {a.name}</option>)}
+              </select>
+            </div>
+          ))}
+        </div>
+
         <p className="text-xs font-medium text-slate-700 pt-2 border-t border-slate-100">Opcionales: si faltan, esos movimientos no se bloquean, quedan pendientes en la conciliación</p>
         {OPT.map(([k, label]) => (
           <div key={k}>
@@ -138,10 +190,11 @@ export default function AccountingSetup() {
         <h2 className="text-sm font-semibold text-slate-800">2. Reglas que se aplicarán</h2>
         <ul className="text-xs text-slate-600 space-y-1.5 list-disc list-inside">
           <li><strong>Venta:</strong> débito a Caja (efectivo) o Bancos (tarjeta/transferencia) por el total (si es fiado, a Clientes por cobrar, cuenta que se elige en Cartera); crédito a Ingresos por la base y a Impuestos por el IVA. Además, costo de ventas contra inventario (cantidad × costo promedio del producto).</li>
-          <li><strong>Compra:</strong> débito a Inventario y crédito a Caja (efectivo), Bancos (tarjeta/transferencia) o Proveedores por pagar si es a crédito (cuenta que se elige en Cuentas por pagar). Al abonar al proveedor, baja Proveedores por pagar contra Caja o Bancos.</li>
+          <li><strong>Compra:</strong> débito a Inventario por el costo reconocido (base gravable, o base + IVA si el tratamiento es <em>IVA al costo</em>) y débito a la cuenta configurada de <em>IVA descontable</em> o <em>IVA por clasificar</em> cuando corresponda; crédito a Caja, Bancos o Proveedores por pagar por el total de factura.</li>
+          <li><strong>Reclasificación de IVA pendiente:</strong> al clasificar una compra pendiente como <em>Descontable</em>, traslada el saldo neto a IVA descontable y habilita la casilla 74 del Formulario 300 en la fecha de clasificación; al llevarla a <em>Costo</em>, distribuye el IVA pendiente entre Inventario (unidades disponibles) y Costo de ventas (unidades ya vendidas).</li>
           <li><strong>Gastos operativos:</strong> débito a la cuenta propia configurada en la categoría del gasto (o a Gastos generales si la categoría usa la predeterminada); crédito a Caja (efectivo) o Bancos (tarjeta/transferencia).</li>
           <li><strong>Anulaciones:</strong> se crea un asiento de reversión; el original se conserva.</li>
-          <li><strong>Devoluciones:</strong> en ventas baja el ingreso (y el IVA proporcional) contra Caja, Bancos o Cartera según la forma de reembolso, y la mercancía vuelve a Inventario; en compras sale de Inventario contra Cuentas por pagar, Caja o Bancos.</li>
+          <li><strong>Devoluciones:</strong> en ventas baja el ingreso (y el IVA proporcional) contra Caja, Bancos o Cartera según la forma de reembolso, y la mercancía vuelve a Inventario; en compras acredita Inventario (y la cuenta IVA correspondiente si aplica) contra Cuentas por pagar, Caja o Bancos.</li>
           <li><strong>Caja manual y arqueos:</strong> ingresos y sobrantes contra Otros ingresos; egresos y faltantes contra Gastos. <strong>Ajustes de stock:</strong> contra la cuenta de ajustes, a costo actual.</li>
         </ul>
       </div>
@@ -155,7 +208,7 @@ export default function AccountingSetup() {
         </div>
         <label className="block text-xs text-slate-500">Fecha de inicio contable (los documentos anteriores no se contabilizan solos)</label>
         <input type="date" value={start} onChange={e => setStart(e.target.value)} className={input} />
-        {!complete && <p className="text-xs text-amber-800">Falta configurar todas las cuentas para poder activar.</p>}
+        {!complete && <p className="text-xs text-amber-800">Falta configurar todas las cuentas principales para poder activar.</p>}
 
         {confirmActivate ? (
           <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 space-y-2">
@@ -190,8 +243,16 @@ export default function AccountingSetup() {
       </div>
 
       <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-3">
-        <div className="flex items-center justify-between gap-2">
-          <h2 className="text-sm font-semibold text-slate-800">4. Conciliación</h2>
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div>
+            <h2 className="text-sm font-semibold text-slate-800">4. Conciliación</h2>
+            {recon.length > 0 && (
+              <p className="text-[11px] text-slate-500 mt-0.5 tabular-nums">
+                {reconOkCount} de {recon.length} partidas cuadradas
+                {reconDiffCount > 0 ? ` · ${reconDiffCount} con diferencia por revisar` : ''}
+              </p>
+            )}
+          </div>
           <div className="flex gap-2">
             <button onClick={reconcile} disabled={busy || !settings?.start_date} className="text-xs font-medium bg-slate-800 text-white px-3 py-1.5 rounded-lg disabled:opacity-40">Conciliar</button>
             <button onClick={() => setConfirmPostPending(true)} disabled={busy || !settings?.active} className="text-xs font-medium text-slate-700 border border-slate-200 px-3 py-1.5 rounded-lg disabled:opacity-40">Contabilizar pendientes</button>

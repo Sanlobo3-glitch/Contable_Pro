@@ -1,53 +1,38 @@
-# CUARTA REVISIÓN TÉCNICA — CIERRE DE BLOQUEOS DE IVA EN COMPRAS
+# QUINTA REVISIÓN TÉCNICA — CORRECCIÓN DE SECUENCIA HISTÓRICA EN `kardex` (IVA EN COMPRAS)
 
-Revisión técnica de solo lectura completada sobre `origin/main:Lee` (commit `b5271b8`, tercera revisión) y sus migraciones propuestas `000062` y `000063`, contrastada contra las definiciones reales en la base y el repositorio (`supabase/migrations/20261105000001_separar_admin_global_y_manager_empresa.sql`, `20261112000058_validar_empresa_funciones_dian.sql` y metadatos en vivo).
+Revisión técnica de solo lectura sobre `Lee` (v4, commit `dfc040b`) y las migraciones propuestas `20261113000062` y `20261113000063`, contrastada contra `supabase/migrations/20261101_mejoras_compras_costo_promedio.sql`, `20261101_gastos_y_devoluciones_completas.sql`, `20261103000013_tesoreria_centros_costo_ordenes_compra.sql`, `20261105000001_separar_admin_global_y_manager_empresa.sql` y `20261113000061_consolidar_blindaje_caja_multipagos_contabilidad.sql`.
 
-No se ejecutó SQL en Supabase, no se modificaron archivos de aplicación o migraciones, ni se realizaron despliegues.
+No se ejecutó SQL en Supabase, no se modificaron migraciones ni código de aplicación y no se realizaron despliegues.
 
 ---
 
-### 1. Diagnóstico de cada bloqueo
+### 1. Diagnóstico del bloqueo crítico en la secuencia histórica de `kardex`
 
-#### Bloqueo 1 — Administrador de plataforma (`is_platform_admin()`), RLS y prueba #22
-1. **Cómo se determina `is_platform_admin()` en la base real (`20261105000001_separar_admin_global_y_manager_empresa.sql`):**
-   - Requiere `auth.uid() IS NOT NULL`.
-   - Devuelve `true` **únicamente** si:
-     - `public.profiles` tiene `id = auth.uid() AND active = TRUE AND lower(btrim(coalesce(email, ''))) = 'sanlobo3@hotmail.com'`, **o**
-     - `public.platform_admins` tiene `user_id = auth.uid() AND active = TRUE`.
-   - El valor `profiles.role = 'admin'` **por sí solo no otorga** `is_platform_admin() = true` (y tampoco satisface `is_company_manager()`, que solo reconoce `'dueno'`, `'admin_empresa'` y `'gerente'`).
-2. **Defecto real en RLS de `000062` y `000063`:**
-   - En `Lee` v3, tanto `purchase_iva_adjustments` (`platform_admin_purchase_iva_adjustments_all`) como `purchase_devolution_lots` (`platform_admin_purchase_dev_lots_all`) crean políticas `FOR ALL TO authenticated` para `public.is_platform_admin() and company_id = current_company_id()`.
-   - Eso habilita a quien cumpla `is_platform_admin()` a ejecutar `INSERT/UPDATE/DELETE` directos vía PostgREST/SQL sobre tablas de auditoría fiscal y trazabilidad de lotes, saltándose `clasificar_iva_compra`, `registrar_devolucion_compra` y la generación de asientos `acc_*`.
-   - **Corrección:** Eliminar ambas políticas `FOR ALL`, dejar exclusivamente política `FOR SELECT TO authenticated` (`company_id = (select public.current_company_id())`) y aplicar `REVOKE INSERT, UPDATE, DELETE ... FROM public, anon, authenticated; GRANT SELECT ... TO authenticated;` en ambas tablas.
-3. **Defecto real en la prueba #22 de `Lee` v3:**
-   - Solo hacía `UPDATE public.profiles SET role = 'admin' WHERE id = v_uid_dueno` sin comprobar `is_platform_admin() = true`, confundiendo `role = 'admin'` con administrador de plataforma.
-   - Se ejecutaba con rol `postgres` (que omite RLS) y nunca verificaba `SELECT` / mutaciones directas sobre `purchase_iva_adjustments` ni `purchase_devolution_lots` bajo `SET LOCAL ROLE authenticated`.
+#### Problema comprobado en `Lee` v4 (`ALTER TABLE public.kardex ADD COLUMN IF NOT EXISTS seq bigserial;`)
+1. **El backfill de `bigserial` sigue orden físico de disco (heap scan), no orden cronológico:**
+   - Al añadir `seq bigserial` sobre una tabla `public.kardex` existente, PostgreSQL rellena la columna secuencialmente recorriendo las páginas físicas del heap (afectadas por `VACUUM`, actualizaciones `HOT`, reutilización de tuplas muertas y `CLUSTER`).
+   - En consecuencia, una venta, ajuste o segunda compra histórica posterior a una compra `P_old` puede quedar en una página física anterior y recibir un `seq` **menor** que el de `P_old`.
+   - Cuando `clasificar_iva_compra(..., 'costo')`, `anular_compra`, `registrar_devolucion_compra` o `anular_devolucion_compra` evalúan `k.seq > v_k_seq` sobre registros pre-migración, obtienen falsos negativos (`0` movimientos posteriores) y permiten reclasificar al costo, devolver o anular compras antiguas cuyas unidades ya fueron vendidas, ajustadas o mezcladas.
+2. **Invalidez de `kardex.created_at = now()` como respaldo intratransaccional:**
+   - Dentro de una misma transacción SQL, `now()` es constante para todas las sentencias. Usar `created_at` no distingue si una venta ocurrió antes o después de otra compra en la misma transacción.
+3. **Brechas adicionales detectadas en `Lee` v4:**
+   - En el guardián temporal de `registrar_devolucion_compra` dentro de `000062`, faltaba por completo la validación de movimientos posteriores en `kardex` para `tracks_expiry = false` y se mantenía un bloque `exception when others then null;` que silenciaba errores contables.
+   - En `registrar_devolucion_compra` de `000063`, el filtro `and k.type = 'salida'` ignoraba compras o ajustes positivos posteriores en `kardex` (`ajustar_stock` con aumento de inventario) que alteran el costo promedio antes de devolver.
 
-#### Bloqueo 2 — Formulario 300 (`dian_calcular_formulario_300`) y prueba #20
-1. **Defecto real en Step 3 (`v_dev_base_pend` / `v_dev_iva_pend`) en `Lee` v3:**
-   - En `Lee` v3, la consulta de devoluciones pendientes resta `pd.subtotal` y `pd.tax_amount` cuando `pd.tax_status_snapshot = 'pendiente'` y `p.status = 'recibida'`, **sin filtrar `and p.tax_status = 'pendiente'`**.
-   - **Falla demostrada:** Si la compra `P1` (`pendiente`, IVA `190`) tuvo una devolución `D1` (`38`, `tax_status_snapshot = 'pendiente'`) en el período 1 y luego `P1` fue reclasificada a `'descontable'` (en el mismo período o en uno posterior), `P1` ya no aporta `190` a `v_iva_pend_compras` (`p.tax_status = 'pendiente'`), pero `D1` sigue restándose en `v_dev_iva_pend` y **descuenta `38` al IVA pendiente de otras compras pendientes** del mismo período.
-   - Además, `v_compras_costo_base`, `v_iva_costo_compras` y `v_compras_sin_iva` en Step 1 no descontaban las devoluciones activas de compras en estado `'costo'` o `'sin_iva'`.
-2. **Insuficiencia de la prueba #20 en `Lee` v3:**
-   - Solo validaba `casilla_74_iva_descontable_compras > 0` sobre la ventana actual de `Inversiones Bogota CV`, sin aislar movimientos previos ni demostrar importes exactos para los 6 casos exigidos (descontable en período, reclasificada mismo período, reclasificada período posterior, devolución previa a reclasificación, devolución posterior a reclasificación, anulada + reclasificación revertida).
-
-#### Bloqueo 3 — Conciliación (`acc_reconcile()`) y prueba #21
-1. **Omisión silenciosa de categorías:**
-   - `compras_reclasificacion_inv`, `devoluciones_compra_inv`, `iva_compras_costo_gasto`, `iva_compras_descontable` e `iva_compras_pendiente` estaban condicionadas a `if a > 0 or b <> 0`. Si alguna categoría vale `0` (o falla al emitirse), desaparece del resultado y la prueba pasa en falso.
-   - **Corrección:** Emitir siempre todas las categorías principales de ventas, compras, reclasificaciones, devoluciones, IVA (`costo_gasto`, `descontable`, `pendiente`), caja e inventario.
-2. **Ocultamiento de diferencias negativas (`greatest(0, ...)`) y desfase `start_date`:**
-   - En `iva_compras_descontable` e `iva_compras_pendiente`, `a := greatest(0, a - v_dev_desc)` oculta saldos operativos negativos si hay devoluciones sin compra correspondiente.
-   - Además, `v_dev_desc` y `v_dev_pend` exigían `(p.created_at at time zone tz)::date >= s.start_date`, mientras `acc_post_purchase_devolution` contabiliza cualquier devolución con `d.created_at >= s.start_date` aunque la compra origen fuera `< s.start_date`. Esto provocaba un falso descuadre igual al IVA devuelto en compras anteriores a `start_date`.
-   - **Corrección:** Quitar `greatest(0, ...)` y quitar el filtro `(p.created_at)::date >= s.start_date` en `v_dev_desc` / `v_dev_pend` (manteniendo `(pd.created_at)::date >= s.start_date`, alineado con `e.entry_date >= s.start_date`).
-3. **Prueba #21 permisiva:** No exigía presencia obligatoria de todas las categorías, no aislaba ni calculaba deltas frente a línea base histórica existente, ni probaba la frontera `created_at < s.start_date`.
-
-#### Bloqueo 4 — Orden intratransaccional en `kardex` y anulación de devoluciones (`000062` / `000063`)
-1. **Defecto intratransaccional con `kardex.created_at` en `Lee` v3:**
-   - `clasificar_iva_compra(..., 'costo')`, `anular_compra` y `registrar_devolucion_compra` filtraban `k.created_at >= coalesce(v_k_ts, v_pur.created_at)` para productos `tracks_expiry = false`.
-   - En PostgreSQL, `kardex.created_at` (`now()`) es constante durante toda una transacción. Si dentro de una misma transacción ocurre: `Compra P1 (5u) -> Venta S1 (5u) -> Compra P2 (10u)`, todas comparten el mismo `created_at` y al intentar devolver o anular **`P2`**, la venta **`S1`** (que ocurrió **antes** de `P2`) satisface `k.created_at >= v_k_ts` y bloquea falsamente a `P2`.
-   - **Corrección:** Agregar `seq bigserial` en `public.kardex` (`000062`) con índice `(company_id, product_id, seq)` y comparar estrictamente por `k.seq > v_k_seq` (con respaldo `k.created_at > v_pur.created_at` solo si `v_k_seq is null`).
-2. **Trazabilidad al anular devoluciones sin lotes (`anular_devolucion_compra` en `000063`):**
-   - Para `tracks_expiry = false`, `anular_devolucion_compra` no verificaba si hubo movimientos posteriores en `kardex` (`k.seq > v_dev_seq`) tras la devolución que alteraron el inventario o el costo promedio. Se incorpora esa validación estricta junto con los bloqueos ya existentes (compra origen anulada, cambio de `tax_status`, o insuficiencia en `purchase_devolution_lots` para `tracks_expiry = true`).
+#### Estrategia segura implementada (`seq` + `seq_verified` + secuencia `kardex_seq` + trigger)
+1. **Separación estricta entre historial no verificable y movimientos nuevos:**
+   - Se agregan `seq bigint` (sin `bigserial` ni `DEFAULT`) y `seq_verified boolean not null default false` en `public.kardex`.
+   - Todo registro preexistente —incluso si recibió algún `seq` durante una ejecución previa— queda marcado con `seq_verified = false` (orden histórico no reconstruible).
+2. **Secuencia monotónica garantizada por trigger (`BEFORE INSERT OR UPDATE`):**
+   - Se crea la secuencia `public.kardex_seq`, sincronizada de forma idempotente únicamente hacia adelante por encima de `coalesce(max(seq), 0)`.
+   - El trigger `trg_kardex_assign_seq` (`public._kardex_assign_seq()`, `SECURITY DEFINER`):
+     - En `INSERT`: asigna incondicionalmente `new.seq := nextval('public.kardex_seq')` y `new.seq_verified := true`, garantizando orden estricto entre transacciones e intratransaccional para `registrar_compra`, `registrar_venta`, `registrar_venta_multipago`, `ajustar_stock` y devoluciones sin modificar funciones ajenas.
+     - En `UPDATE`: prohíbe promover `old.seq_verified = false` a `true` y prohíbe alterar `seq` de registros verificados.
+3. **Bloqueo determinista de operaciones automáticas sin orden verificable (`tracks_expiry = false`):**
+   - `clasificar_iva_compra(..., 'costo')`, `anular_compra`, `registrar_devolucion_compra` (`000062` y `000063`) y `anular_devolucion_compra` (`000063`) exigen `v_k_cnt > 0`, `v_k_verified = true`, `v_k_seq is not null` y verifican `k.seq_verified = true and k.seq > v_k_seq` sin respaldo por `created_at`.
+   - Toda compra o devolución histórica (`seq_verified = false`) sin control de lote queda bloqueada para esas operaciones automáticas; los productos `tracks_expiry = true` mantienen su trazabilidad exacta por `product_lots`, `sale_lot_moves` y `purchase_devolution_lots`, y `clasificar_iva_compra(..., 'descontable')` conserva su operación fiscal directa.
+4. **Conservación íntegra de los cierres de la cuarta revisión:**
+   - RLS de solo lectura (`SELECT`) en `purchase_iva_adjustments` y `purchase_devolution_lots` sin políticas `FOR ALL` para `is_platform_admin()`, aislamiento estricto de `dian_calcular_formulario_300` (y filtro `p.tax_status = 'pendiente'` en `v_dev_*_pend`), emisión obligatoria de categorías en `acc_reconcile()` y preservación de firmas `registrar_compra` (2, 3, 4 y 8 parámetros).
 
 ---
 
@@ -57,12 +42,12 @@ No se ejecutó SQL en Supabase, no se modificaron archivos de aplicación o migr
 
 ```sql
 -- ============================================================================
--- MIGRACIÓN 20261113000062: FASE A — IVA EN COMPRAS, TRAZABILIDAD CON
--- SECUENCIA MONOTÓNICA EN KARDEX, RLS RESTRINGIDO, FORMULARIO 300 Y CONCILIACIÓN
+-- MIGRACIÓN 20261113000062: FASE A — IVA EN COMPRAS, SECUENCIA VERIFICABLE
+-- EN KARDEX (seq + seq_verified + trigger), RLS RESTRINGIDO, FORMULARIO 300 Y CONCILIACIÓN
 -- Idempotente, sin BEGIN/COMMIT propios.
 -- ============================================================================
 
--- 1. Extensiones aditivas en public.purchases y secuencia monotónica en public.kardex
+-- 1. Extensiones aditivas en public.purchases y secuencia verificable en public.kardex
 alter table public.purchases add column if not exists tax_rate numeric;
 alter table public.purchases add column if not exists tax_included boolean not null default false;
 alter table public.purchases add column if not exists tax_status text not null default 'sin_iva';
@@ -73,10 +58,64 @@ alter table public.purchases add column if not exists iva_classified_at timestam
 alter table public.purchases add column if not exists iva_classified_by uuid;
 alter table public.purchases add column if not exists iva_classification_note text;
 
-alter table public.kardex add column if not exists seq bigserial;
+alter table public.kardex add column if not exists seq bigint;
+alter table public.kardex add column if not exists seq_verified boolean not null default false;
+alter table public.kardex alter column seq drop default;
+
+create sequence if not exists public.kardex_seq as bigint start with 1 increment by 1;
+revoke all on sequence public.kardex_seq from public, anon, authenticated;
+grant all on sequence public.kardex_seq to postgres, service_role;
+
+do $$
+declare
+  v_max_seq bigint;
+  v_cur_val bigint;
+  v_is_called boolean;
+  v_target bigint;
+begin
+  select coalesce(max(seq), 0) into v_max_seq from public.kardex;
+  select last_value, is_called into v_cur_val, v_is_called from public.kardex_seq;
+  v_target := greatest(
+    v_max_seq + 1,
+    case when coalesce(v_is_called, false) then v_cur_val + 1 else v_cur_val end
+  );
+  perform setval('public.kardex_seq', v_target, false);
+end $$;
+
+create or replace function public._kardex_assign_seq()
+returns trigger
+language plpgsql
+security definer
+set search_path to ''
+as $function$
+begin
+  if tg_op = 'INSERT' then
+    new.seq := nextval('public.kardex_seq');
+    new.seq_verified := true;
+    return new;
+  end if;
+
+  if tg_op = 'UPDATE' then
+    if not coalesce(old.seq_verified, false) and coalesce(new.seq_verified, false) then
+      raise exception 'No se permite marcar como verificable un registro histórico de kardex';
+    end if;
+    if coalesce(old.seq_verified, false) and coalesce(new.seq_verified, false) and new.seq is distinct from old.seq then
+      raise exception 'No se permite alterar la secuencia verificada de kardex';
+    end if;
+    return new;
+  end if;
+
+  return new;
+end
+$function$;
+
+drop trigger if exists trg_kardex_assign_seq on public.kardex;
+create trigger trg_kardex_assign_seq
+  before insert or update on public.kardex
+  for each row execute function public._kardex_assign_seq();
 
 create index if not exists idx_kardex_company_prod_seq
-  on public.kardex(company_id, product_id, seq);
+  on public.kardex(company_id, product_id, seq_verified, seq);
 
 do $$
 begin
@@ -964,6 +1003,8 @@ declare
   v_item record;
   v_prod public.products%rowtype;
   v_k_seq bigint;
+  v_k_cnt int := 0;
+  v_k_verified boolean := false;
   v_other_moves int;
   v_returned_qty numeric := 0;
   v_returned_tax numeric := 0;
@@ -1165,19 +1206,22 @@ begin
         v_qty_inv := v_lot_rem;
         v_qty_cogs := v_lot_sold;
       else
-        select max(seq) into v_k_seq
+        select count(*), coalesce(bool_and(seq_verified), false), max(seq)
+        into v_k_cnt, v_k_verified, v_k_seq
         from public.kardex
         where company_id = v_co and product_id = v_prod.id
-          and reference_type = 'purchase' and reference_id = v_pur.id;
+          and reference_type = 'purchase' and reference_id = v_pur.id and type = 'entrada';
+
+        if v_k_cnt = 0 or not v_k_verified or v_k_seq is null then
+          raise exception 'Compra histórica o sin secuencia verificable en kardex para "%": orden cronológico anterior a la migración no reconstruible; reclasifica manualmente.', v_prod.name;
+        end if;
 
         select count(*) into v_other_moves
         from public.kardex k
         where k.company_id = v_co
           and k.product_id = v_prod.id
-          and (
-            (v_k_seq is not null and k.seq > v_k_seq)
-            or (v_k_seq is null and k.created_at > v_pur.created_at)
-          )
+          and k.seq_verified = true
+          and k.seq > v_k_seq
           and not (
             k.reference_type = 'purchase_devolution'
             and exists (
@@ -1348,6 +1392,8 @@ declare
   v_rev_date date;
   v_lot_count int := 0;
   v_k_seq bigint;
+  v_k_cnt int := 0;
+  v_k_verified boolean := false;
   v_other_moves int := 0;
 begin
   v_co := public._ctx(array['admin', 'dueno']);
@@ -1450,19 +1496,22 @@ begin
         raise exception 'No se puede anular: ya se vendió o dio de baja parte de los lotes de "%" de esta compra', v_prod.name;
       end if;
     else
-      select max(seq) into v_k_seq
+      select count(*), coalesce(bool_and(seq_verified), false), max(seq)
+      into v_k_cnt, v_k_verified, v_k_seq
       from public.kardex
       where company_id = v_co and product_id = v_prod.id
-        and reference_type = 'purchase' and reference_id = v_purchase.id;
+        and reference_type = 'purchase' and reference_id = v_purchase.id and type = 'entrada';
+
+      if v_k_cnt = 0 or not v_k_verified or v_k_seq is null then
+        raise exception 'No se puede anular "%": compra histórica o sin secuencia verificable en kardex (orden cronológico no reconstruible)', v_prod.name;
+      end if;
 
       select count(*) into v_other_moves
       from public.kardex k
       where k.company_id = v_co
         and k.product_id = v_prod.id
-        and (
-          (v_k_seq is not null and k.seq > v_k_seq)
-          or (v_k_seq is null and k.created_at > v_purchase.created_at)
-        )
+        and k.seq_verified = true
+        and k.seq > v_k_seq
         and not (
           k.reference_type = 'purchase_devolution'
           and exists (
@@ -1579,6 +1628,7 @@ declare
   v_co uuid := public._ctx(array['admin', 'dueno']);
   v_pur public.purchases%rowtype;
   v_prod public.products%rowtype;
+  v_s public.acc_settings%rowtype;
   v_bought numeric := 0;
   v_bought_amt numeric := 0;
   v_returned numeric := 0;
@@ -1593,6 +1643,10 @@ declare
   v_lot_avail numeric := 0;
   v_left numeric := 0;
   v_take numeric := 0;
+  v_k_seq bigint;
+  v_k_cnt int := 0;
+  v_k_verified boolean := false;
+  v_other_moves int := 0;
   r_lot record;
 begin
   if p_quantity is null or p_quantity <= 0 then
@@ -1686,6 +1740,34 @@ begin
       update public.product_lots set qty_remaining = qty_remaining - v_take where id = r_lot.id;
       v_left := v_left - v_take;
     end loop;
+  else
+    select count(*), coalesce(bool_and(seq_verified), false), max(seq)
+    into v_k_cnt, v_k_verified, v_k_seq
+    from public.kardex
+    where company_id = v_co and product_id = v_prod.id
+      and reference_type = 'purchase' and reference_id = p_purchase_id and type = 'entrada';
+
+    if v_k_cnt = 0 or not v_k_verified or v_k_seq is null then
+      raise exception 'No se puede devolver "%" sin control de lote: compra histórica o sin secuencia verificable en kardex', v_prod.name;
+    end if;
+
+    select count(*) into v_other_moves
+    from public.kardex k
+    where k.company_id = v_co
+      and k.product_id = v_prod.id
+      and k.seq_verified = true
+      and k.seq > v_k_seq
+      and not (
+        k.reference_type = 'purchase_devolution'
+        and exists (
+          select 1 from public.purchase_devolutions pd
+          where pd.id = k.reference_id and pd.purchase_id = p_purchase_id
+        )
+      );
+
+    if v_other_moves > 0 then
+      raise exception 'No se puede devolver "%" sin control de lote: existen ventas, ajustes o compras posteriores en kardex', v_prod.name;
+    end if;
   end if;
 
   v_new := v_prod.stock - p_quantity;
@@ -1719,11 +1801,10 @@ begin
     values (v_co, 'ingreso', v_amount, 'Devolución a proveedor - ' || v_prod.name, 'purchase_devolution', v_id);
   end if;
 
-  begin
+  select * into v_s from public.acc_settings where company_id = v_co;
+  if v_s.company_id is not null and v_s.active and v_s.start_date is not null then
     perform public.acc_post_purchase_devolution(v_id);
-  exception when others then
-    null;
-  end;
+  end if;
 
   return v_id;
 end
@@ -2426,6 +2507,9 @@ end
 $function$;
 
 -- 15. Endurecimiento de privilegios (REVOKE / GRANT)
+revoke all on function public._kardex_assign_seq() from public, anon, authenticated;
+grant execute on function public._kardex_assign_seq() to postgres, service_role;
+
 revoke all on function public._acc_resolve_purchase_vat_account(uuid, text) from public, anon, authenticated;
 grant execute on function public._acc_resolve_purchase_vat_account(uuid, text) to postgres, service_role;
 
@@ -2467,7 +2551,7 @@ grant execute on function public.acc_reconcile() to authenticated, service_role;
 
 select public.sql_registrar_migracion(
   '20261113000062_fase_a_iva_compras_contabilidad',
-  'Fase A IVA compras: cuentas estrictas, kardex.seq, RLS solo lectura en ajustes, reclasificación, Form 300 y conciliación',
+  'Fase A IVA compras: cuentas estrictas, kardex.seq verificable, RLS solo lectura en ajustes, reclasificación, Form 300 y conciliación',
   '20261113000062_fase_a_iva_compras_contabilidad.sql'
 );
 ```
@@ -2479,7 +2563,7 @@ select public.sql_registrar_migracion(
 ```sql
 -- ============================================================================
 -- MIGRACIÓN 20261113000063: DEVOLUCIONES PARCIALES DE COMPRAS CON IVA,
--- TRAZABILIDAD EXACTA DE LOTES Y SECUENCIA MONOTÓNICA KARDEX
+-- TRAZABILIDAD EXACTA DE LOTES Y SECUENCIA VERIFICABLE EN KARDEX
 -- Dependencia obligatoria: 20261113000062_fase_a_iva_compras_contabilidad.
 -- Idempotente, sin BEGIN/COMMIT propios.
 -- ============================================================================
@@ -2493,7 +2577,11 @@ begin
   ) or not exists (
     select 1 from information_schema.columns
     where table_schema = 'public' and table_name = 'kardex' and column_name = 'seq'
-  ) or to_regclass('public.purchase_iva_adjustments') is null then
+  ) or not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'kardex' and column_name = 'seq_verified'
+  ) or to_regclass('public.kardex_seq') is null
+    or to_regclass('public.purchase_iva_adjustments') is null then
     raise exception 'Dependencia faltante: aplica primero la migración 20261113000062 antes de ejecutar 000063.';
   end if;
 end $$;
@@ -2700,7 +2788,9 @@ declare
   v_left numeric := 0;
   v_take numeric := 0;
   v_k_seq bigint;
-  v_other_exits int := 0;
+  v_k_cnt int := 0;
+  v_k_verified boolean := false;
+  v_other_moves int := 0;
   v_taken_lots jsonb := '[]'::jsonb;
   r_lot record;
   r_taken record;
@@ -2821,20 +2911,22 @@ begin
       v_left := v_left - v_take;
     end loop;
   else
-    select max(seq) into v_k_seq
+    select count(*), coalesce(bool_and(seq_verified), false), max(seq)
+    into v_k_cnt, v_k_verified, v_k_seq
     from public.kardex
     where company_id = v_co and product_id = v_prod.id
-      and reference_type = 'purchase' and reference_id = p_purchase_id;
+      and reference_type = 'purchase' and reference_id = p_purchase_id and type = 'entrada';
 
-    select count(*) into v_other_exits
+    if v_k_cnt = 0 or not v_k_verified or v_k_seq is null then
+      raise exception 'No se puede devolver "%" sin control de lote: compra histórica o sin secuencia verificable en kardex (orden cronológico no reconstruible)', v_prod.name;
+    end if;
+
+    select count(*) into v_other_moves
     from public.kardex k
     where k.company_id = v_co
       and k.product_id = v_prod.id
-      and k.type = 'salida'
-      and (
-        (v_k_seq is not null and k.seq > v_k_seq)
-        or (v_k_seq is null and k.created_at > v_pur.created_at)
-      )
+      and k.seq_verified = true
+      and k.seq > v_k_seq
       and not (
         k.reference_type = 'purchase_devolution'
         and exists (
@@ -2843,8 +2935,8 @@ begin
         )
       );
 
-    if v_other_exits > 0 then
-      raise exception 'No se puede devolver "%" sin control de lote: existen ventas o salidas posteriores en kardex que impiden confirmar que estas unidades provienen de esta compra', v_prod.name;
+    if v_other_moves > 0 then
+      raise exception 'No se puede devolver "%" sin control de lote: existen ventas, ajustes o compras posteriores en kardex que alteran trazabilidad o costo promedio', v_prod.name;
     end if;
   end if;
 
@@ -2919,6 +3011,8 @@ declare
   v_rev_date date;
   v_restored_sum numeric := 0;
   v_dev_seq bigint;
+  v_dev_cnt int := 0;
+  v_dev_verified boolean := false;
   v_other_moves int := 0;
   r_dl record;
   v_lot public.product_lots%rowtype;
@@ -2999,19 +3093,22 @@ begin
       where id = v_lot.id;
     end loop;
   else
-    select max(seq) into v_dev_seq
+    select count(*), coalesce(bool_and(seq_verified), false), max(seq)
+    into v_dev_cnt, v_dev_verified, v_dev_seq
     from public.kardex
     where company_id = v_co and product_id = v_prod.id
       and reference_type = 'purchase_devolution' and reference_id = d.id and type = 'salida';
+
+    if v_dev_cnt = 0 or not v_dev_verified or v_dev_seq is null then
+      raise exception 'No se puede anular la devolución de "%" sin control de lote: registro histórico o sin secuencia verificable en kardex', v_prod.name;
+    end if;
 
     select count(*) into v_other_moves
     from public.kardex k
     where k.company_id = v_co
       and k.product_id = v_prod.id
-      and (
-        (v_dev_seq is not null and k.seq > v_dev_seq)
-        or (v_dev_seq is null and k.created_at > d.created_at)
-      );
+      and k.seq_verified = true
+      and k.seq > v_dev_seq;
 
     if v_other_moves > 0 then
       raise exception 'No se puede anular la devolución de "%" sin control de lote: existen movimientos posteriores en kardex que alteraron el inventario o costo promedio', v_prod.name;
@@ -3056,7 +3153,7 @@ grant execute on function public.anular_devolucion_compra(uuid) to authenticated
 
 select public.sql_registrar_migracion(
   '20261113000063_devoluciones_compra_con_iva',
-  'Devoluciones parciales con IVA, RLS solo lectura en purchase_devolution_lots, kardex.seq y anulación blindada',
+  'Devoluciones parciales con IVA, RLS solo lectura en purchase_devolution_lots, kardex.seq verificable y anulación blindada',
   '20261113000063_devoluciones_compra_con_iva.sql'
 );
 ```
@@ -3092,6 +3189,7 @@ DECLARE
   v_prod_notrack uuid;
   v_prod_notrack_dev uuid;
   v_prod_notrack_seq uuid;
+  v_prod_hist1 uuid; v_prod_hist2 uuid; v_prod_hist3 uuid; v_prod_hist4 uuid;
 
   -- Cuentas
   v_acc_desc uuid;
@@ -3114,7 +3212,11 @@ DECLARE
 
   -- Identificadores de casos
   v_p1 uuid; v_p2 uuid; v_p3 uuid; v_p4 uuid; v_p5 uuid;
-  v_p_pre_old uuid; v_s_pre uuid; v_p_post_seq uuid;
+  v_p_pre_old uuid; v_s_pre uuid; v_p_post_seq uuid; v_p_new_adj uuid;
+  v_p_hist_sale uuid; v_s_hist uuid;
+  v_p_hist_pur uuid; v_p_hist_pur2 uuid;
+  v_p_hist_adj uuid; v_p_hist_mig uuid; v_dev_hist uuid;
+  v_seq1 bigint; v_seq2 bigint; v_seq3 bigint;
   v_p_dev_nl uuid; v_dev_nl uuid;
   v_p_dev_nl_blk uuid; v_dev_nl_blk uuid;
   v_p_dev_lote uuid; v_dev_lote uuid;
@@ -3136,7 +3238,8 @@ DECLARE
   v_dev_after_start uuid;
 
   -- Conteo no duplicidad / cero cambios parciales
-  v_cnt_before int; v_stock_before numeric; v_cost_before numeric;
+  v_cnt_before int; v_k_cnt_b int; v_acc_e_b int; v_acc_l_b int; v_dev_cnt_b int;
+  v_stock_before numeric; v_cost_before numeric;
   v_cnt_orig int; v_cnt_rev int; v_cnt_activos int; v_orig_entry_id uuid;
   v_other_pur uuid; v_other_lot uuid; v_other_adj uuid; v_other_dev uuid;
 BEGIN
@@ -3211,23 +3314,173 @@ BEGIN
   END;
   PERFORM public.acc_save_settings(jsonb_build_object('iva_descontable', v_acc_desc::text, 'iva_pendiente', v_acc_pend::text));
 
-  -- 2. CAPTURA DE LÍNEA BASE DE acc_reconcile() (antes de crear datos de prueba)
-  v_seen_cats := array[]::text[];
-  FOR v_rec IN SELECT * FROM public.acc_reconcile() LOOP
-    v_seen_cats := array_append(v_seen_cats, v_rec.code);
-    v_base_op := jsonb_set(v_base_op, array[v_rec.code], to_jsonb(v_rec.operational));
-    v_base_acc := jsonb_set(v_base_acc, array[v_rec.code], to_jsonb(v_rec.accounting));
-    v_base_diff := jsonb_set(v_base_diff, array[v_rec.code], to_jsonb(v_rec.difference));
-  END LOOP;
-  FOR v_cnt_before IN 1..array_length(v_req_cats, 1) LOOP
-    IF NOT (v_req_cats[v_cnt_before] = ANY(v_seen_cats)) THEN
-      RAISE EXCEPTION 'FAIL #21-cat-base: faltó categoría obligatoria % en acc_reconcile()', v_req_cats[v_cnt_before];
-    END IF;
-  END LOOP;
+  -- ==========================================================================
+  -- PRUEBAS DE SECUENCIA HISTÓRICA vs NUEVA EN KARDEX (SIN CAMBIOS PARCIALES)
+  -- Se ejecutan ANTES de capturar la línea base de acc_reconcile()
+  -- ==========================================================================
 
-  -- ==========================================================================
-  -- PRUEBA DE ORDEN INTRATRANSACCIONAL CON kardex.seq (Compra1 -> Venta1 -> Compra2 en 1 tx)
-  -- ==========================================================================
+  -- H1. Compra histórica con venta posterior y seq invertido por heap scan (seq_verified = false)
+  INSERT INTO public.products (company_id, name, price, cost, stock, tracks_expiry)
+  VALUES (v_co, 'SKU Hist Sale', 300, 0, 0, false) RETURNING id INTO v_prod_hist1;
+  v_p_hist_sale := public.registrar_compra(v_sup, jsonb_build_array(jsonb_build_object('product_id', v_prod_hist1, 'quantity', 10, 'cost', 100)), 'efectivo', null, 190, 'pendiente', 19, false);
+  v_s_hist := public.registrar_venta(null, jsonb_build_array(jsonb_build_object('product_id', v_prod_hist1, 'quantity', 3, 'price', 250)), 'efectivo');
+  UPDATE public.kardex SET seq_verified = false, seq = 9001 WHERE product_id = v_prod_hist1 AND reference_id = v_p_hist_sale;
+  UPDATE public.kardex SET seq_verified = false, seq = 1001 WHERE product_id = v_prod_hist1 AND reference_id = v_s_hist;
+
+  SELECT stock, cost INTO v_stock_before, v_cost_before FROM public.products WHERE id = v_prod_hist1;
+  SELECT count(*) INTO v_k_cnt_b FROM public.kardex WHERE company_id = v_co;
+  SELECT count(*) INTO v_acc_e_b FROM public.acc_entries WHERE company_id = v_co;
+  SELECT count(*) INTO v_acc_l_b FROM public.acc_lines WHERE company_id = v_co;
+
+  BEGIN
+    PERFORM public.clasificar_iva_compra(v_p_hist_sale, 'costo', 'Hist sale');
+    RAISE EXCEPTION 'FAIL-H1a: permitió reclasificar al costo compra histórica con venta posterior';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%Compra histórica o sin secuencia verificable%' THEN RAISE; END IF;
+  END;
+  BEGIN
+    PERFORM public.anular_compra(v_p_hist_sale);
+    RAISE EXCEPTION 'FAIL-H1b: permitió anular compra histórica con venta posterior';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%compra histórica o sin secuencia verificable%' THEN RAISE; END IF;
+  END;
+  BEGIN
+    PERFORM public.registrar_devolucion_compra(v_p_hist_sale, v_prod_hist1, 1, 'Hist sale dev', 'efectivo');
+    RAISE EXCEPTION 'FAIL-H1c: permitió devolver compra histórica con venta posterior';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%compra histórica o sin secuencia verificable%' THEN RAISE; END IF;
+  END;
+  IF (SELECT stock FROM public.products WHERE id = v_prod_hist1) <> v_stock_before
+     OR (SELECT cost FROM public.products WHERE id = v_prod_hist1) <> v_cost_before
+     OR (SELECT count(*) FROM public.kardex WHERE company_id = v_co) <> v_k_cnt_b
+     OR (SELECT count(*) FROM public.acc_entries WHERE company_id = v_co) <> v_acc_e_b
+     OR (SELECT count(*) FROM public.acc_lines WHERE company_id = v_co) <> v_acc_l_b THEN
+    RAISE EXCEPTION 'FAIL-H1-atom: dejó cambios parciales tras bloqueo histórico H1';
+  END IF;
+
+  -- H2. Compra histórica con segunda compra posterior y seq invertido (seq_verified = false)
+  INSERT INTO public.products (company_id, name, price, cost, stock, tracks_expiry)
+  VALUES (v_co, 'SKU Hist Pur', 300, 0, 0, false) RETURNING id INTO v_prod_hist2;
+  v_p_hist_pur := public.registrar_compra(v_sup, jsonb_build_array(jsonb_build_object('product_id', v_prod_hist2, 'quantity', 5, 'cost', 100)), 'efectivo', null, 95, 'pendiente', 19, false);
+  v_p_hist_pur2 := public.registrar_compra(v_sup, jsonb_build_array(jsonb_build_object('product_id', v_prod_hist2, 'quantity', 5, 'cost', 200)), 'efectivo', null, 0, 'sin_iva', 0, false);
+  UPDATE public.kardex SET seq_verified = false, seq = 9002 WHERE product_id = v_prod_hist2 AND reference_id = v_p_hist_pur;
+  UPDATE public.kardex SET seq_verified = false, seq = 1002 WHERE product_id = v_prod_hist2 AND reference_id = v_p_hist_pur2;
+
+  SELECT stock, cost INTO v_stock_before, v_cost_before FROM public.products WHERE id = v_prod_hist2;
+  SELECT count(*) INTO v_k_cnt_b FROM public.kardex WHERE company_id = v_co;
+  SELECT count(*) INTO v_acc_e_b FROM public.acc_entries WHERE company_id = v_co;
+  SELECT count(*) INTO v_acc_l_b FROM public.acc_lines WHERE company_id = v_co;
+
+  BEGIN
+    PERFORM public.clasificar_iva_compra(v_p_hist_pur, 'costo', 'Hist pur');
+    RAISE EXCEPTION 'FAIL-H2a: permitió reclasificar compra histórica con recompra posterior';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%Compra histórica o sin secuencia verificable%' THEN RAISE; END IF;
+  END;
+  BEGIN
+    PERFORM public.anular_compra(v_p_hist_pur);
+    RAISE EXCEPTION 'FAIL-H2b: permitió anular compra histórica con recompra posterior';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%compra histórica o sin secuencia verificable%' THEN RAISE; END IF;
+  END;
+  BEGIN
+    PERFORM public.registrar_devolucion_compra(v_p_hist_pur, v_prod_hist2, 1, 'Hist pur dev', 'efectivo');
+    RAISE EXCEPTION 'FAIL-H2c: permitió devolver compra histórica con recompra posterior';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%compra histórica o sin secuencia verificable%' THEN RAISE; END IF;
+  END;
+  IF (SELECT stock FROM public.products WHERE id = v_prod_hist2) <> v_stock_before
+     OR (SELECT cost FROM public.products WHERE id = v_prod_hist2) <> v_cost_before
+     OR (SELECT count(*) FROM public.kardex WHERE company_id = v_co) <> v_k_cnt_b
+     OR (SELECT count(*) FROM public.acc_entries WHERE company_id = v_co) <> v_acc_e_b
+     OR (SELECT count(*) FROM public.acc_lines WHERE company_id = v_co) <> v_acc_l_b THEN
+    RAISE EXCEPTION 'FAIL-H2-atom: dejó cambios parciales tras bloqueo histórico H2';
+  END IF;
+
+  -- H3. Compra histórica con ajuste de stock posterior (ajustar_stock, seq_verified = false)
+  INSERT INTO public.products (company_id, name, price, cost, stock, tracks_expiry)
+  VALUES (v_co, 'SKU Hist Adj', 300, 0, 0, false) RETURNING id INTO v_prod_hist3;
+  v_p_hist_adj := public.registrar_compra(v_sup, jsonb_build_array(jsonb_build_object('product_id', v_prod_hist3, 'quantity', 5, 'cost', 100)), 'efectivo', null, 95, 'pendiente', 19, false);
+  PERFORM public.ajustar_stock(v_prod_hist3, 8, 'Ajuste histórico posterior');
+  UPDATE public.kardex SET seq_verified = false, seq = 9003 WHERE product_id = v_prod_hist3 AND reference_id = v_p_hist_adj;
+  UPDATE public.kardex SET seq_verified = false, seq = 1003 WHERE product_id = v_prod_hist3 AND reference_type = 'ajuste';
+
+  SELECT stock, cost INTO v_stock_before, v_cost_before FROM public.products WHERE id = v_prod_hist3;
+  SELECT count(*) INTO v_k_cnt_b FROM public.kardex WHERE company_id = v_co;
+  SELECT count(*) INTO v_acc_e_b FROM public.acc_entries WHERE company_id = v_co;
+  SELECT count(*) INTO v_acc_l_b FROM public.acc_lines WHERE company_id = v_co;
+
+  BEGIN
+    PERFORM public.clasificar_iva_compra(v_p_hist_adj, 'costo', 'Hist adj');
+    RAISE EXCEPTION 'FAIL-H3a: permitió reclasificar compra histórica con ajuste posterior';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%Compra histórica o sin secuencia verificable%' THEN RAISE; END IF;
+  END;
+  BEGIN
+    PERFORM public.anular_compra(v_p_hist_adj);
+    RAISE EXCEPTION 'FAIL-H3b: permitió anular compra histórica con ajuste posterior';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%compra histórica o sin secuencia verificable%' THEN RAISE; END IF;
+  END;
+  BEGIN
+    PERFORM public.registrar_devolucion_compra(v_p_hist_adj, v_prod_hist3, 1, 'Hist adj dev', 'efectivo');
+    RAISE EXCEPTION 'FAIL-H3c: permitió devolver compra histórica con ajuste posterior';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%compra histórica o sin secuencia verificable%' THEN RAISE; END IF;
+  END;
+  IF (SELECT stock FROM public.products WHERE id = v_prod_hist3) <> v_stock_before
+     OR (SELECT cost FROM public.products WHERE id = v_prod_hist3) <> v_cost_before
+     OR (SELECT count(*) FROM public.kardex WHERE company_id = v_co) <> v_k_cnt_b
+     OR (SELECT count(*) FROM public.acc_entries WHERE company_id = v_co) <> v_acc_e_b
+     OR (SELECT count(*) FROM public.acc_lines WHERE company_id = v_co) <> v_acc_l_b THEN
+    RAISE EXCEPTION 'FAIL-H3-atom: dejó cambios parciales tras bloqueo histórico H3';
+  END IF;
+
+  -- H4. Compra histórica sin movimientos visibles, pero con seq asignado en migración (seq_verified = false)
+  INSERT INTO public.products (company_id, name, price, cost, stock, tracks_expiry)
+  VALUES (v_co, 'SKU Hist Mig', 300, 0, 0, false) RETURNING id INTO v_prod_hist4;
+  v_p_hist_mig := public.registrar_compra(v_sup, jsonb_build_array(jsonb_build_object('product_id', v_prod_hist4, 'quantity', 5, 'cost', 100)), 'efectivo', null, 95, 'pendiente', 19, false);
+  UPDATE public.kardex SET seq_verified = false, seq = 9004 WHERE product_id = v_prod_hist4 AND reference_id = v_p_hist_mig;
+
+  BEGIN
+    UPDATE public.kardex SET seq_verified = true WHERE product_id = v_prod_hist4 AND reference_id = v_p_hist_mig;
+    RAISE EXCEPTION 'FAIL-H4-trg: trigger permitió promover seq_verified de false a true';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%No se permite marcar como verificable%' THEN RAISE; END IF;
+  END;
+
+  SELECT stock, cost INTO v_stock_before, v_cost_before FROM public.products WHERE id = v_prod_hist4;
+  SELECT count(*) INTO v_k_cnt_b FROM public.kardex WHERE company_id = v_co;
+  SELECT count(*) INTO v_acc_e_b FROM public.acc_entries WHERE company_id = v_co;
+  SELECT count(*) INTO v_acc_l_b FROM public.acc_lines WHERE company_id = v_co;
+
+  BEGIN
+    PERFORM public.clasificar_iva_compra(v_p_hist_mig, 'costo', 'Hist mig');
+    RAISE EXCEPTION 'FAIL-H4a: permitió reclasificar al costo compra histórica con seq no verificable';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%Compra histórica o sin secuencia verificable%' THEN RAISE; END IF;
+  END;
+  BEGIN
+    PERFORM public.anular_compra(v_p_hist_mig);
+    RAISE EXCEPTION 'FAIL-H4b: permitió anular compra histórica con seq no verificable';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%compra histórica o sin secuencia verificable%' THEN RAISE; END IF;
+  END;
+  BEGIN
+    PERFORM public.registrar_devolucion_compra(v_p_hist_mig, v_prod_hist4, 1, 'Hist mig dev', 'efectivo');
+    RAISE EXCEPTION 'FAIL-H4c: permitió devolver compra histórica con seq no verificable';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%compra histórica o sin secuencia verificable%' THEN RAISE; END IF;
+  END;
+  IF (SELECT stock FROM public.products WHERE id = v_prod_hist4) <> v_stock_before
+     OR (SELECT cost FROM public.products WHERE id = v_prod_hist4) <> v_cost_before
+     OR (SELECT count(*) FROM public.kardex WHERE company_id = v_co) <> v_k_cnt_b
+     OR (SELECT count(*) FROM public.acc_entries WHERE company_id = v_co) <> v_acc_e_b
+     OR (SELECT count(*) FROM public.acc_lines WHERE company_id = v_co) <> v_acc_l_b THEN
+    RAISE EXCEPTION 'FAIL-H4-atom: dejó cambios parciales tras bloqueo histórico H4';
+  END IF;
+
+  -- N1. Compra1 -> Venta1 -> Compra2 en UNA SOLA transacción (mismo created_at = now())
   INSERT INTO public.products (company_id, name, price, cost, stock, tracks_expiry)
   VALUES (v_co, 'SKU Seq Intratx', 300, 0, 0, false) RETURNING id INTO v_prod_notrack_seq;
 
@@ -3240,11 +3493,71 @@ BEGIN
     v_sup, jsonb_build_array(jsonb_build_object('product_id', v_prod_notrack_seq, 'quantity', 10, 'cost', 100)),
     'efectivo', null, 190, 'pendiente', 19, false
   );
-  -- Debe permitir reclasificar P2 a 'costo' porque S1 fue ANTERIOR a P2 en kardex.seq (pese a idéntico now())
+
+  SELECT seq INTO v_seq1 FROM public.kardex WHERE product_id = v_prod_notrack_seq AND reference_id = v_p_pre_old AND seq_verified = true;
+  SELECT seq INTO v_seq2 FROM public.kardex WHERE product_id = v_prod_notrack_seq AND reference_id = v_s_pre AND seq_verified = true;
+  SELECT seq INTO v_seq3 FROM public.kardex WHERE product_id = v_prod_notrack_seq AND reference_id = v_p_post_seq AND seq_verified = true;
+  IF v_seq1 IS NULL OR v_seq2 IS NULL OR v_seq3 IS NULL OR NOT (v_seq1 < v_seq2 AND v_seq2 < v_seq3) THEN
+    RAISE EXCEPTION 'FAIL-N1-seq: secuencia intratransaccional no monotónica (%, %, %)', v_seq1, v_seq2, v_seq3;
+  END IF;
+
+  -- P2 (posterior a S1 en misma tx) debe reclasificar a 'costo' y anularse limpiamente; P1 (con S1 posterior) debe bloquearse
   PERFORM public.clasificar_iva_compra(v_p_post_seq, 'costo', 'Misma tx sin falsos bloqueos');
   PERFORM 1 FROM public.purchases WHERE id = v_p_post_seq AND iva_cost_inventory = 190 AND iva_cost_expense = 0;
-  IF NOT FOUND THEN RAISE EXCEPTION 'FAIL-SEQ: kardex.created_at bloqueó falsamente compra posterior a venta previa'; END IF;
+  IF NOT FOUND THEN RAISE EXCEPTION 'FAIL-N1-reclass: no reclasificó P2 posterior a S1'; END IF;
   PERFORM public.anular_compra(v_p_post_seq);
+
+  BEGIN
+    PERFORM public.anular_compra(v_p_pre_old);
+    RAISE EXCEPTION 'FAIL-N1-blk: permitió anular P1 pese a S1 y P2 posteriores';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%existen ventas, ajustes o recompras posteriores%' THEN RAISE; END IF;
+  END;
+
+  -- N3. Compra nueva seguida de ajuste de stock positivo (ajustar_stock): debe bloquear devolución y anulación
+  v_p_new_adj := public.registrar_compra(
+    v_sup, jsonb_build_array(jsonb_build_object('product_id', v_prod_notrack_seq, 'quantity', 5, 'cost', 100)),
+    'efectivo', null, 95, 'pendiente', 19, false
+  );
+  PERFORM public.ajustar_stock(v_prod_notrack_seq, 7, 'Ajuste positivo post compra nueva');
+  SELECT stock, cost INTO v_stock_before, v_cost_before FROM public.products WHERE id = v_prod_notrack_seq;
+  SELECT count(*) INTO v_k_cnt_b FROM public.kardex WHERE company_id = v_co;
+  SELECT count(*) INTO v_acc_e_b FROM public.acc_entries WHERE company_id = v_co;
+  SELECT count(*) INTO v_acc_l_b FROM public.acc_lines WHERE company_id = v_co;
+
+  BEGIN
+    PERFORM public.registrar_devolucion_compra(v_p_new_adj, v_prod_notrack_seq, 1, 'Bloqueo ajuste positivo', 'efectivo');
+    RAISE EXCEPTION 'FAIL-N3a: permitió devolver compra tras ajuste positivo en kardex';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%existen ventas, ajustes o compras posteriores%' THEN RAISE; END IF;
+  END;
+  BEGIN
+    PERFORM public.anular_compra(v_p_new_adj);
+    RAISE EXCEPTION 'FAIL-N3b: permitió anular compra tras ajuste positivo en kardex';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%existen ventas, ajustes o recompras posteriores%' THEN RAISE; END IF;
+  END;
+  IF (SELECT stock FROM public.products WHERE id = v_prod_notrack_seq) <> v_stock_before
+     OR (SELECT cost FROM public.products WHERE id = v_prod_notrack_seq) <> v_cost_before
+     OR (SELECT count(*) FROM public.kardex WHERE company_id = v_co) <> v_k_cnt_b
+     OR (SELECT count(*) FROM public.acc_entries WHERE company_id = v_co) <> v_acc_e_b
+     OR (SELECT count(*) FROM public.acc_lines WHERE company_id = v_co) <> v_acc_l_b THEN
+    RAISE EXCEPTION 'FAIL-N3-atom: dejó cambios parciales tras rechazo por ajuste posterior';
+  END IF;
+
+  -- 2. CAPTURA DE LÍNEA BASE DE acc_reconcile() (después de pruebas de historial/ajustes, antes de #21)
+  v_seen_cats := array[]::text[];
+  FOR v_rec IN SELECT * FROM public.acc_reconcile() LOOP
+    v_seen_cats := array_append(v_seen_cats, v_rec.code);
+    v_base_op := jsonb_set(v_base_op, array[v_rec.code], to_jsonb(v_rec.operational));
+    v_base_acc := jsonb_set(v_base_acc, array[v_rec.code], to_jsonb(v_rec.accounting));
+    v_base_diff := jsonb_set(v_base_diff, array[v_rec.code], to_jsonb(v_rec.difference));
+  END LOOP;
+  FOR v_cnt_before IN 1..array_length(v_req_cats, 1) LOOP
+    IF NOT (v_req_cats[v_cnt_before] = ANY(v_seen_cats)) THEN
+      RAISE EXCEPTION 'FAIL #21-cat-base: faltó categoría obligatoria % en acc_reconcile()', v_req_cats[v_cnt_before];
+    END IF;
+  END LOOP;
 
   -- ==========================================================================
   -- PRUEBA #4 (AMPLIADA): ANULACIÓN DE DEVOLUCIONES (SIN LOTES, CON LOTES, BLOQUEOS Y NO DUPLICIDAD)
@@ -3287,7 +3600,7 @@ BEGIN
       v_cnt_activos, v_cnt_orig, v_cnt_rev;
   END IF;
 
-  -- 4B. Bloqueo al anular devolución sin lotes si hubo movimiento posterior en kardex
+  -- 4B. Bloqueo al anular devolución sin lotes si hubo movimiento posterior en kardex o es histórica (seq_verified = false)
   v_p_dev_nl_blk := public.registrar_compra(
     v_sup, jsonb_build_array(jsonb_build_object('product_id', v_prod_notrack_dev, 'quantity', 4, 'cost', 100)),
     'efectivo', null, 76, 'descontable', 19, false
@@ -3295,14 +3608,45 @@ BEGIN
   v_dev_nl_blk := public.registrar_devolucion_compra(v_p_dev_nl_blk, v_prod_notrack_dev, 1, 'Dev antes de venta', 'efectivo');
   PERFORM public.registrar_venta(null, jsonb_build_array(jsonb_build_object('product_id', v_prod_notrack_dev, 'quantity', 1, 'price', 250)), 'efectivo');
   SELECT stock, cost INTO v_stock_before, v_cost_before FROM public.products WHERE id = v_prod_notrack_dev;
+  SELECT count(*) INTO v_k_cnt_b FROM public.kardex WHERE company_id = v_co;
+  SELECT count(*) INTO v_acc_e_b FROM public.acc_entries WHERE company_id = v_co;
+  SELECT count(*) INTO v_acc_l_b FROM public.acc_lines WHERE company_id = v_co;
   BEGIN
     PERFORM public.anular_devolucion_compra(v_dev_nl_blk);
     RAISE EXCEPTION 'FAIL-ANUL-DEV-BLK-NL: permitió anular sin lotes tras venta posterior';
   EXCEPTION WHEN OTHERS THEN
     IF SQLERRM NOT LIKE '%existen movimientos posteriores en kardex%' THEN RAISE; END IF;
   END;
-  PERFORM 1 FROM public.products WHERE id = v_prod_notrack_dev AND stock = v_stock_before AND cost = v_cost_before;
-  IF NOT FOUND THEN RAISE EXCEPTION 'FAIL-ANUL-DEV-BLK-NL2: modificó stock/costo tras rechazo'; END IF;
+  IF (SELECT stock FROM public.products WHERE id = v_prod_notrack_dev) <> v_stock_before
+     OR (SELECT cost FROM public.products WHERE id = v_prod_notrack_dev) <> v_cost_before
+     OR (SELECT status FROM public.purchase_devolutions WHERE id = v_dev_nl_blk) <> 'activa'
+     OR (SELECT count(*) FROM public.kardex WHERE company_id = v_co) <> v_k_cnt_b
+     OR (SELECT count(*) FROM public.acc_entries WHERE company_id = v_co) <> v_acc_e_b
+     OR (SELECT count(*) FROM public.acc_lines WHERE company_id = v_co) <> v_acc_l_b THEN
+    RAISE EXCEPTION 'FAIL-ANUL-DEV-BLK-NL2: dejó cambios parciales tras rechazo de anulación';
+  END IF;
+
+  -- Devolución histórica (seq_verified = false) también debe bloquear anulación automática sin cambios parciales
+  v_dev_hist := public.registrar_devolucion_compra(v_p_dev_nl, v_prod_notrack_dev, 1, 'Dev histórica simulada', 'efectivo');
+  UPDATE public.kardex SET seq_verified = false WHERE company_id = v_co AND reference_type = 'purchase_devolution' AND reference_id = v_dev_hist;
+  SELECT stock, cost INTO v_stock_before, v_cost_before FROM public.products WHERE id = v_prod_notrack_dev;
+  SELECT count(*) INTO v_k_cnt_b FROM public.kardex WHERE company_id = v_co;
+  SELECT count(*) INTO v_acc_e_b FROM public.acc_entries WHERE company_id = v_co;
+  SELECT count(*) INTO v_acc_l_b FROM public.acc_lines WHERE company_id = v_co;
+  BEGIN
+    PERFORM public.anular_devolucion_compra(v_dev_hist);
+    RAISE EXCEPTION 'FAIL-ANUL-DEV-HIST: permitió anular devolución histórica sin secuencia verificable';
+  EXCEPTION WHEN OTHERS THEN
+    IF SQLERRM NOT LIKE '%registro histórico o sin secuencia verificable%' THEN RAISE; END IF;
+  END;
+  IF (SELECT stock FROM public.products WHERE id = v_prod_notrack_dev) <> v_stock_before
+     OR (SELECT cost FROM public.products WHERE id = v_prod_notrack_dev) <> v_cost_before
+     OR (SELECT status FROM public.purchase_devolutions WHERE id = v_dev_hist) <> 'activa'
+     OR (SELECT count(*) FROM public.kardex WHERE company_id = v_co) <> v_k_cnt_b
+     OR (SELECT count(*) FROM public.acc_entries WHERE company_id = v_co) <> v_acc_e_b
+     OR (SELECT count(*) FROM public.acc_lines WHERE company_id = v_co) <> v_acc_l_b THEN
+    RAISE EXCEPTION 'FAIL-ANUL-DEV-HIST-ATOM: dejó cambios parciales tras rechazo histórico de devolución';
+  END IF;
 
   -- 4C. Anulación CON lotes + bloqueo si compra anulada
   INSERT INTO public.products (company_id, name, price, cost, stock, tracks_expiry)
@@ -3577,8 +3921,8 @@ ROLLBACK;
 ### 4. Dependencias y orden de ejecución
 
 1. **Verificación previa (solo lectura):** confirmar en `public.sql_migration_log` que `20261113000061_consolidar_blindaje_caja_multipagos_contabilidad` está aplicada y que `000062` y `000063` están libres.
-2. **Migración `20261113000062_fase_a_iva_compras_contabilidad.sql`:** crea columnas en `purchases`, columna monotónica `kardex.seq`, tabla/políticas de solo lectura en `purchase_iva_adjustments`, helper `_acc_resolve_purchase_vat_account`, RPCs de compra/anulación/reclasificación, `dian_calcular_formulario_300` y `acc_reconcile()`.
-3. **Migración `20261113000063_devoluciones_compra_con_iva.sql`:** valida existencia previa de `purchases.tax_status`, `kardex.seq` y `purchase_iva_adjustments`; crea columnas fiscales en `purchase_devolutions`, tabla/políticas de solo lectura en `purchase_devolution_lots`, `acc_post_purchase_devolution`, `registrar_devolucion_compra` y `anular_devolucion_compra`.
+2. **Migración `20261113000062_fase_a_iva_compras_contabilidad.sql`:** crea columnas fiscales en `purchases`, secuencia `public.kardex_seq`, columnas `kardex.seq` y `kardex.seq_verified` (históricos en `false`), trigger `trg_kardex_assign_seq`, tabla/políticas de solo lectura en `purchase_iva_adjustments`, `_acc_resolve_purchase_vat_account`, RPCs de compra/anulación/reclasificación, guardián actualizado de `registrar_devolucion_compra`, `dian_calcular_formulario_300` y `acc_reconcile()`.
+3. **Migración `20261113000063_devoluciones_compra_con_iva.sql`:** valida existencia previa de `purchases.tax_status`, `kardex.seq`, `kardex.seq_verified`, `public.kardex_seq` y `purchase_iva_adjustments`; crea columnas fiscales en `purchase_devolutions`, tabla/políticas de solo lectura en `purchase_devolution_lots`, `acc_post_purchase_devolution`, `registrar_devolucion_compra` (bloqueando cualquier movimiento posterior `seq_verified = true` e historiales `seq_verified = false` sin lote) y `anular_devolucion_compra`.
 4. **Configuración por empresa con contabilidad activa:** asignar explícitamente `iva_descontable` e `iva_pendiente` vía `acc_save_settings`.
 5. **Ejecución de la suite ampliada bajo `BEGIN; ... ROLLBACK;`** antes de validar cambios de interfaz (`Purchases.tsx`, `Devolutions.tsx`, `DianComplianceCenter.tsx`).
 
@@ -3586,22 +3930,23 @@ ROLLBACK;
 
 ### 5. Riesgos residuales
 
-1. **Redondeo a 2 decimales en costo promedio (`products.cost`):** en productos con cantidades no divisibles exactas entre inventario remanente y costo unitario al reclasificar o devolver, el redondeo a 2 decimales de `products.cost` puede dejar centavos de diferencia (`±0.01/unidad`) frente al libro mayor de inventario.
-2. **Productos sin control de lote (`tracks_expiry = false`):** al no existir tabla de capas FIFO por compra, cualquier movimiento posterior (`k.seq > v_k_seq` / `k.seq > v_dev_seq`) obliga a bloquear reclasificación al costo, devolución o anulación automática, exigiendo ajuste contable manual.
-3. **Compras multi-bodega desde órdenes de compra:** `anular_compra` continúa revirtiendo únicamente `products.stock` global, no `warehouse_stock`.
-4. **Anomalía previa en datos de `Inversiones Bogota CV`:** la cuenta `4.1.03` (*Otros ingresos*) figura en esa empresa como `type = 'activo' / nature = 'credito'`; no afecta el flujo de compras/IVA (exigen `activo/debito`), pero requiere saneamiento independiente si produce diferencias históricas previas en conciliación.
-5. **Pruebas no ejecutadas aún en vivo:** hasta correr la suite completa dentro de `BEGIN; ... ROLLBACK;` sobre la base objetivo, los resultados numéricos siguen verificados por análisis estático, no por ejecución real.
+1. **Compras históricas sin control de lote (`tracks_expiry = false`, `seq_verified = false`):** al marcar todo el historial pre-migración como no verificable, estas compras antiguas quedan bloqueadas para reclasificación automática a `'costo'`, devolución o anulación automática (aunque siguen admitiendo reclasificación fiscal directa a `'descontable'` o ajuste contable manual). Es una restricción deliberada para impedir corrupción silenciosa del costo promedio y del inventario.
+2. **Redondeo a 2 decimales en costo promedio (`products.cost`):** en productos con cantidades no divisibles exactas entre inventario remanente y costo unitario al reclasificar o devolver, el redondeo a 2 decimales de `products.cost` puede dejar centavos de diferencia (`±0.01/unidad`) frente al libro mayor de inventario.
+3. **Productos nuevos sin control de lote (`tracks_expiry = false`, `seq_verified = true`):** cualquier movimiento verificado posterior (`k.seq > v_k_seq` o `k.seq > v_dev_seq`, incluidas recompras o ajustes de stock) bloquea la operación automática para evitar mezclas FIFO/promedio sin capa por compra.
+4. **Compras multi-bodega desde órdenes de compra:** `anular_compra` continúa revirtiendo únicamente `products.stock` global, no `warehouse_stock`.
+5. **Anomalía previa en datos de `Inversiones Bogota CV`:** la cuenta `4.1.03` (*Otros ingresos*) figura en esa empresa como `type = 'activo' / nature = 'credito'`; no afecta el flujo de compras/IVA (exigen `activo/debito`), pero requiere saneamiento independiente si produce diferencias históricas previas en conciliación.
+6. **Pruebas no ejecutadas aún en vivo:** hasta correr la suite completa dentro de `BEGIN; ... ROLLBACK;` sobre la base objetivo, los resultados siguen verificados por análisis estático, no por ejecución real.
 
 ---
 
 ### 6. Veredicto técnico justificado
 
-**NO APROBADA PARA DESPLIEGUE DIRECTO EN SU VERSIÓN ACTUAL DE `Lee` (v3); APROBADA EN DISEÑO SOLO TRAS INCORPORAR LAS CORRECCIONES AQUÍ DOCUMENTADAS Y PARA PASAR A EJECUCIÓN DE PRUEBAS EN `BEGIN; ... ROLLBACK;`.**
+**NO APROBADA PARA DESPLIEGUE DIRECTO EN PRODUCCIÓN HASTA EJECUTAR Y SUPERAR EN VIVO LA SUITE `BEGIN; ... ROLLBACK;` SOBRE LAS MIGRACIONES CORREGIDAS DE ESTA QUINTA REVISIÓN.**
 
-La tercera revisión en `origin/main:Lee` aún contenía cuatro fallos reales comprobados en SQL y pruebas:
-1. Políticas RLS `FOR ALL` para `is_platform_admin()` en `purchase_iva_adjustments` y `purchase_devolution_lots` + prueba #22 que usaba `role = 'admin'` sin cumplir ni verificar `is_platform_admin()` ni RLS bajo `authenticated`.
-2. Resta indebida en `dian_calcular_formulario_300` de devoluciones con `tax_status_snapshot = 'pendiente'` sobre compras ya reclasificadas (`p.tax_status <> 'pendiente'`), contaminando otras compras pendientes del período.
-3. Omisión condicional de categorías en `acc_reconcile()`, `greatest(0, ...)` ocultando descuadres y desfase temporal en devoluciones posteriores a `s.start_date` sobre compras anteriores a `s.start_date`.
-4. Uso de `kardex.created_at >= v_k_ts` (vulnerable a operaciones intratransaccionales con idéntico `now()`) y falta de validación de movimientos posteriores en `anular_devolucion_compra` sin lotes.
+La cuarta revisión (`Lee` v4, commit `dfc040b`) presentaba tres fallos críticos que invalidaban su uso seguro sobre datos históricos existentes:
+1. `ALTER TABLE public.kardex ADD COLUMN IF NOT EXISTS seq bigserial;` asignaba `seq` al historial en orden físico de disco (heap scan), permitiendo falsos negativos en `k.seq > v_k_seq` para ventas, recompras o ajustes posteriores anteriores a la migración.
+2. El respaldo `v_k_seq is null and k.created_at > ...` seguía siendo vulnerable dentro de una misma transacción (`now()` constante).
+3. El guardián temporal de `registrar_devolucion_compra` en `000062` omitía la validación `kardex` sin lotes y silenciaba excepciones contables (`exception when others then null;`), mientras `000063` filtraba solo `k.type = 'salida'` e ignoraba recompras o ajustes positivos posteriores.
 
-Una vez sustituidas las definiciones de `000062` y `000063` por el SQL corregido de la sección 2 y ejecutada con éxito la suite ampliada de la sección 3 bajo `BEGIN; ... ROLLBACK;`, quedará habilitada la aprobación de paso a aplicación controlada.
+Con la incorporación de `seq + seq_verified`, secuencia `public.kardex_seq`, trigger `trg_kardex_assign_seq` y bloqueo estricto de registros sin secuencia verificable en `000062` y `000063`, la propuesta queda **lista en diseño exclusivamente para verificación controlada mediante ejecución real de la suite de la sección 3 dentro de `BEGIN; ... ROLLBACK;`** antes de autorizar su aplicación.
+

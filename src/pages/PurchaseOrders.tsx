@@ -4,8 +4,8 @@ import {
   useAuth,
   isReadOnly,
   isCompanyManager,
-  canManagePurchases,
-  canManageInventory,
+  canManagePurchaseOrders,
+  canReceivePurchaseOrders,
   canViewAccounting,
 } from '../lib/auth'
 import { useCurrency, fmtDate } from '../lib/currency'
@@ -157,18 +157,15 @@ export default function PurchaseOrders({ onNavigate }: { onNavigate?: (page: str
   } = useWarehouse()
 
   const readOnly = isReadOnly(user)
+  const isAlmacenRole = user?.role === 'almacen'
   const canView =
     isCompanyManager(user?.role) ||
-    canManagePurchases(user?.role) ||
-    canManageInventory(user?.role) ||
+    canManagePurchaseOrders(user?.role) ||
+    canReceivePurchaseOrders(user?.role) ||
     canViewAccounting(user?.role)
-  const canEdit =
-    !readOnly &&
-    (isCompanyManager(user?.role) || canManagePurchases(user?.role) || canManageInventory(user?.role))
-  const canApprove = !readOnly && (isCompanyManager(user?.role) || user?.role === 'comprador')
-  const canReceive =
-    !readOnly &&
-    (isCompanyManager(user?.role) || canManageInventory(user?.role) || canManagePurchases(user?.role))
+  const canEdit = !readOnly && canManagePurchaseOrders(user?.role)
+  const canApprove = !readOnly && canManagePurchaseOrders(user?.role)
+  const canReceive = !readOnly && canReceivePurchaseOrders(user?.role)
 
   const companyKey = user?.company_id || user?.id || 'default'
 
@@ -1626,12 +1623,13 @@ export default function PurchaseOrders({ onNavigate }: { onNavigate?: (page: str
                   </label>
                   <select
                     value={receiveMethod}
+                    disabled={isAlmacenRole}
                     onChange={e =>
                       setReceiveMethod(
                         e.target.value as 'credito' | 'transferencia' | 'efectivo' | 'tarjeta'
                       )
                     }
-                    className="w-full px-3 py-2 rounded-lg border border-slate-300 text-xs bg-white"
+                    className="w-full px-3 py-2 rounded-lg border border-slate-300 text-xs bg-white disabled:bg-slate-100 disabled:text-slate-500"
                   >
                     <option value="credito">Crédito proveedor (genera CxP)</option>
                     <option value="transferencia">Transferencia bancaria</option>
@@ -1650,12 +1648,19 @@ export default function PurchaseOrders({ onNavigate }: { onNavigate?: (page: str
                       min={1}
                       max={365}
                       value={receiveCreditDays}
+                      disabled={isAlmacenRole}
                       onChange={e => setReceiveCreditDays(e.target.value)}
-                      className="w-full px-3 py-2 rounded-lg border border-slate-300 text-xs tabular-nums"
+                      className="w-full px-3 py-2 rounded-lg border border-slate-300 text-xs tabular-nums disabled:bg-slate-100 disabled:text-slate-500"
                     />
                   </div>
                 )}
               </div>
+
+              {isAlmacenRole && (
+                <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
+                  Recepción física de Almacén: las condiciones de pago, días de crédito y costos unitarios pactados en la orden quedan bloqueados por control financiero.
+                </div>
+              )}
 
               <div className="overflow-x-auto border border-slate-200 rounded-xl">
                 <table className="w-full text-xs">
@@ -1717,12 +1722,13 @@ export default function PurchaseOrders({ onNavigate }: { onNavigate?: (page: str
                             min="0"
                             step="any"
                             value={l.unit_cost}
+                            disabled={isAlmacenRole}
                             onChange={e =>
                               setReceiveLines(prev =>
                                 prev.map((row, i) => (i === idx ? { ...row, unit_cost: e.target.value } : row))
                               )
                             }
-                            className="w-24 px-2 py-1 rounded border border-slate-300 text-right font-mono tabular-nums"
+                            className="w-24 px-2 py-1 rounded border border-slate-300 text-right font-mono tabular-nums disabled:bg-slate-100 disabled:text-slate-500"
                           />
                         </td>
                         <td className="py-2.5 px-2">

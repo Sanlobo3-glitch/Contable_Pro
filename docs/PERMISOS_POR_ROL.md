@@ -1,20 +1,45 @@
-# Permisos por rol y página (generado desde `src/lib/pagePermissions.ts`)
+# Permisos por rol y página (Fuente única: `src/lib/pagePermissions.ts`)
 
-> Fuente única de verdad: `src/lib/pagePermissions.ts`. El menú (`AppLayout.tsx`), el guardián (`App.tsx`), los atajos del Panel y el simulador «Paso Maestro» usan **esta misma tabla**.
-> Para cambiar lo que ve un rol edita ese archivo y vuelve a generar este documento. La página y la RPC de la base deben exigir lo mismo o menos que lo que aquí se permite.
-> Roles con menús especializados (`contador`, `vendedor`, `gerente`, `transportador`): sus menús están definidos en `AppLayout.tsx`.
-> Pantalla de inicio por rol: `defaultPageForRole` en `App.tsx` (Gerente → `manager_center` Centro de Dirección Gerencial; Cajero y vendedor → Mostrador POS; Contador → Catálogo PUC NIIF; Transporte → Sedes y traslados).
+> **Fuente única de verdad:** `src/lib/pagePermissions.ts` y helpers en `src/lib/auth.tsx`.
+> El menú (`src/components/AppLayout.tsx`), el guardián de rutas (`src/App.tsx`), el simulador «Paso Maestro» (`masterRoleOverride`) y las vistas internas usan esta misma definición, sincronizada con la migración SQL `20261115000065_corregir_permisos_y_seguridad_fase_b.sql`.
+> Ningún cambio de rol en frontend sustituye las validaciones SQL (`_require_company_roles`, `can_view_accounting()`, `can_write_accounting()`, políticas RLS y privilegios de tabla/función).
 
-## Área de cada rol (criterio aplicado)
-- **Gerente («Dirección estratégica, supervisión empresarial y control integral de operaciones»):** Centro de Dirección Gerencial (`manager_center`), Resumen ejecutivo, Dirección comercial, Dirección de operaciones, Dirección financiera, Talento humano, Centro de autorizaciones gerenciales, Planes de acción, Inteligencia empresarial, Informes gerenciales y Notificaciones. Además tiene supervisión operativa de mostrador, ventas, compras, productos, bodegas, tesorería, cartera y estados financieros de su empresa. Sin acceso a SaaS global (empresas clientes, activar planes, sqlcenter) ni pago de suscripción (exclusivo dueño).
-- **Almacén («Jefe de almacén y bodegas»):** inventario, bodegas, traslados, lotes, etiquetas, kardex, toma física, logística (despachos, rutas, mapa, activos) y recepción de órdenes de compra. **Sin** ventas, clientes, catálogo comercial, cartera, compras/pagos a proveedores ni aprobaciones de IA.
-- **Compras:** órdenes de compra, compras, sugerencia de compras, proveedores y su evaluación; consulta de productos y kardex. Sin ventas ni logística.
-- **Vendedor (tienda o ruta):** mostrador/POS, sus ventas (historial propio; la base solo le deja ver las suyas), Mi ruta de hoy y el mapa de la ruta que le asignaron, cotizaciones, clientes, catálogo, metas, su portal e inventario en consulta. **No maneja caja** (sin Cierre de Caja). La base solo permite anular ventas a admin y dueño.
-- **Cajero POS:** mostrador, ventas, caja y arqueos, clientes, devoluciones/cambios y consulta de productos. Sin panel ejecutivo ni kardex.
-- **Dueño / Admin empresa / Admin:** todo lo de su empresa (Admin además la plataforma).
-- **Acciones de IA (Aprobaciones):** gerencia (admin, dueño, admin empresa, gerente). Cada propuesta indica su «rol requerido».
+---
 
-| Sección | Página | id | Admin | Dueño | Adm. empresa | Gerente | Contador | Vendedor | Cajero POS | Almacén | Compras | Transporte | Soporte |
+## 1. Criterio de separación de funciones por rol (Etapa 1 — Fase B)
+
+- **Administrador Central (`admin` / `super_admin`):** administración global de plataforma y usuarios (`companies`, `adminplans`, `users`, `sqlcenter`) y control operativo sobre su empresa activa (`current_company_id()`). Sin excepción de acceso cruzado sobre registros DIAN de otras empresas.
+- **Dueño (`dueno`) y Admin de Empresa (`admin_empresa`):** paridad total en operaciones empresariales dentro de su propia empresa (compras, devoluciones a proveedor, anulación de compras/devoluciones, CxP, pagos a proveedores, cierre/reapertura contable, PUC y parámetros). `subscription` permanece restringido a `dueno` / `admin`.
+- **Gerente (`gerente` — Decisión 3B):** dirección estratégica, supervisión operativa ERP, conciliación (`acc_reconcile`), configuración contable (`acc_save_settings`, `acc_post_pending`, `acc_close_period`, `acc_seed_template`), clasificación de IVA (`clasificar_iva_compra`) y consulta de compras, órdenes de compra, CxP, devoluciones a proveedor y DIAN. **No** registra compras directas, **no** anula compras ni devoluciones a proveedor, **no** registra/anula pagos ni cupos de CxP y **no** muta proveedores ni órdenes de compra.
+- **Contador Público (`contador` — Decisión 1A):** alcance estricto contable/tributario (PUC consulta, asientos manuales/ajuste `acc_create_entry`/`acc_post_entry`, estados financieros, despacho contable, conciliación `acc_reconcile`, clasificación de IVA en compras `clasificar_iva_compra`, consulta de devoluciones a proveedor y módulo tributario/DIAN F300/F350). **No** modifica parámetros estructurales (`acc_save_settings`, `acc_activate`), **no** administra/siembra el PUC (`acc_seed_template`, `acc_upsert_account`), **no** contabiliza en lote (`acc_post_pending`), **no** reversa asientos ni cierra/reabre periodos, y **no** crea compras/pagos/devoluciones.
+- **Compras (`comprador` — Decisión 2A):** compras directas (`_registrar_compra_impl` / `registrar_compra_con_iva`), proveedores (`suppliers` CRUD) y ciclo completo de órdenes de compra (`crear_orden_compra`, `cambiar_estado_orden_compra`, `recibir_orden_compra`). **No** anula compras, **no** registra ni anula devoluciones financieras a proveedor y **no** accede a CxP ni pagos.
+- **Almacén (`almacen` — Decisión 2A):** inventario físico, bodegas, traslados, lotes, kardex, toma física, logística y **exclusivamente recepción física de órdenes de compra aprobadas/enviadas/parciales** (`recibir_orden_compra`), sin poder modificar forma de pago, días de crédito ni costos unitarios de la OC. **No** registra compras directas, **no** anula compras, **no** gestiona proveedores, **no** toca CxP ni devoluciones financieras a proveedor.
+- **Vendedor (`vendedor` — Decisión 4A):** conserva exactamente sus 10 vistas comerciales (`pos`, `sales`, `quotations`, `catalog`, `customers`, `myroute`, `map`, `goals`, `employee_portal`, `products`) **sin** acceso a `cash` (Cierre de caja).
+- **Cajero POS (`cajero`):** mostrador POS, ventas, caja y arqueos (`cash`), cartera, devoluciones de clientes (solo pestaña clientes), cambios/garantías y consulta de productos.
+- **Transporte (`transportador`):** alcance estricto logístico (`warehouses`, `map`, `dispatch`, `routeplan`, `dispatch_history`, `equipment_assets`).
+- **Soporte (`tecnico`):** `copilot`, `ask`, `products`, `support`, `manual`.
+
+---
+
+## 2. Matriz funcional y de RPC (Compras, IVA, Devoluciones, CxP, Contabilidad y DIAN)
+
+| Rol | Ver módulo | Ver datos empresa propia | Crear / Operar | Editar / Clasificar IVA | Anular / Reversar / CxP | Conciliar (`acc_reconcile`) |
+|---|---|---|---|---|---|---|
+| `admin` / `super_admin` | Contabilidad, DIAN, Compras, OC, Devoluciones, Proveedores, CxP | Sí (solo su `current_company_id()`) | Sí (compras, OC, asientos, PUC, DIAN, pagos) | Sí (clasifica IVA, settings contables, créditos proveedor) | Sí (anula compras/devoluciones/pagos, abre/cierra periodos) | Sí |
+| `dueno` | Todos los módulos empresariales (sin SaaS global) | Sí | Sí | Sí | Sí (paridad empresarial completa) | Sí |
+| `admin_empresa` | Todos los módulos empresariales (sin SaaS global/`users`) | Sí | Sí | Sí | Sí (paridad total con `dueno` en empresa) | Sí |
+| `gerente` | Dirección, Supervisión, Compras, OC, Devoluciones, Proveedores, CxP, Contabilidad, DIAN | Sí (consulta integral) | Asientos manuales y cierre contable; **no** compras directas ni OC ni pagos CxP | Clasifica IVA (`clasificar_iva_compra`), settings contables, `acc_post_pending`; **no** muta proveedores ni cupo CxP | **No** anula compras, **no** registra/anula devoluciones a proveedor, **no** paga ni anula CxP | Sí |
+| `contador` | Contabilidad (11 rutas), DIAN, Impuestos, Compras (IVA), Devoluciones (consulta proveedor) | Sí (contable, DIAN, compras, devoluciones proveedor, proveedores lectura) | Solo asientos manuales/ajuste (`acc_create_entry`, `acc_post_entry`) y certificados/DIAN | Clasifica IVA (`clasificar_iva_compra`); **no** `acc_save_settings`, **no** PUC/plantilla, **no** `acc_post_pending` | **No** anula compras/devoluciones/asientos, **no** cierra/reabre periodos, **no** CxP | Sí |
+| `comprador` | Panel, Compras, OC, Sugerencias compra, Proveedores, Kardex | Compras, OC, Proveedores (sin CxP ni devoluciones) | Sí en compras directas, proveedores y OC (`crear`, `cambiar_estado`, `recibir`) | Sí en proveedores y OC | **No** anula compras, **no** devoluciones a proveedor, **no** CxP | No |
+| `almacen` | Inventario, Bodegas, Lotes, Kardex, OC (recepción), Sugerencias | OC aprobadas/enviadas/parciales e inventario | Solo recepción física de OC (`recibir_orden_compra` con pago/plazo/costo bloqueados) | **No** edita precios, pago ni días de crédito | **No** compras directas, **no** anula compras, **no** devoluciones, **no** proveedores, **no** CxP | No |
+| `vendedor` | 10 vistas comerciales (`pos`..`products`, sin `cash`) | Ventas propias y catálogo/clientes | Ventas POS, cotizaciones, clientes | Según módulo comercial | No | No |
+| `cajero` | POS, Caja (`cash`), Ventas, Cartera, Devoluciones clientes | POS, caja y devoluciones clientes | Ventas, abonos, devoluciones de clientes | Caja y cobros | No en compras/contabilidad | No |
+
+---
+
+## 3. Matriz completa de acceso por página (`src/lib/pagePermissions.ts`)
+
+| Sección | Página | `id` | Admin | Dueño | Adm. emp. | Gerente | Contador | Vendedor | Cajero | Almacén | Compras | Transp. | Soporte |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | Gerencia | Centro de Dirección Gerencial | `manager_center` | ✓ | ✓ | ✓ | ✓ | · | · | · | · | · | · | · |
 | Gerencia | 1. Resumen Ejecutivo | `manager_summary` | ✓ | ✓ | ✓ | ✓ | · | · | · | · | · | · | · |
@@ -27,81 +52,83 @@
 | Gerencia | 8. Inteligencia Empresarial | `manager_intelligence` | ✓ | ✓ | ✓ | ✓ | · | · | · | · | · | · | · |
 | Gerencia | 9. Informes Gerenciales | `manager_reports` | ✓ | ✓ | ✓ | ✓ | · | · | · | · | · | · | · |
 | Gerencia | 10. Notificaciones Gerenciales | `manager_notifications` | ✓ | ✓ | ✓ | ✓ | · | · | · | · | · | · | · |
-| Principal | Panel ejecutivo | `dashboard` | ✓ | ✓ | ✓ | · | · | · | · | ✓ | ✓ | · | ✓ |
-| Principal | Centro de mando | `command` | ✓ | ✓ | ✓ | · | · | · | · | · | · | · | · |
-| Principal | Resumen del día | `summary` | ✓ | ✓ | · | · | · | · | · | · | · | · | · |
-| Principal | Copiloto | `copilot` | ✓ | ✓ | ✓ | · | · | · | ✓ | ✓ | ✓ | · | ✓ |
-| Principal | Pregúntale al Copiloto | `ask` | ✓ | ✓ | ✓ | · | · | · | ✓ | ✓ | ✓ | · | ✓ |
-| Principal | Acciones de IA (Aprobaciones) | `ai_actions` | ✓ | ✓ | ✓ | · | · | · | · | · | · | · | · |
-| Ventas y cobros | Mostrador (POS) | `pos` | ✓ | ✓ | ✓ | · | · | ✓ | ✓ | · | · | · | · |
-| Ventas y cobros | Pedidos omnicanal | `omnichannel` | ✓ | ✓ | ✓ | · | · | · | ✓ | · | · | · | · |
-| Ventas y cobros | Catálogo comercial | `catalog` | ✓ | ✓ | ✓ | · | · | ✓ | ✓ | · | · | · | · |
-| Ventas y cobros | Pedidos de catálogo | `catorders` | ✓ | ✓ | ✓ | · | · | · | ✓ | · | · | · | · |
-| Ventas y cobros | Ventas | `sales` | ✓ | ✓ | ✓ | · | · | ✓ | ✓ | · | · | · | · |
-| Ventas y cobros | Trazabilidad y despachos | `dispatch_history` | ✓ | ✓ | ✓ | · | · | · | ✓ | ✓ | · | ✓ | · |
-| Ventas y cobros | Plan Separe y apartados | `layaways` | ✓ | ✓ | ✓ | · | · | · | ✓ | · | · | · | · |
-| Ventas y cobros | Cartera (fiado) | `cartera` | ✓ | ✓ | ✓ | · | · | · | ✓ | · | · | · | · |
-| Ventas y cobros | Cotizaciones | `quotations` | ✓ | ✓ | ✓ | · | · | ✓ | ✓ | · | · | · | · |
-| Ventas y cobros | Clientes | `customers` | ✓ | ✓ | ✓ | · | · | ✓ | ✓ | · | · | · | · |
-| Ventas y cobros | Devoluciones | `devolutions` | ✓ | ✓ | ✓ | · | · | · | ✓ | · | · | · | · |
-| Ventas y cobros | Cambios y garantías | `exchanges` | ✓ | ✓ | ✓ | · | · | · | ✓ | · | · | · | · |
-| Ventas y cobros | Equipo y nómina | `sellers` | ✓ | ✓ | ✓ | · | · | · | · | · | · | · | · |
-| Ventas y cobros | Portal de vendedor | `employee_portal` | ✓ | ✓ | ✓ | · | · | ✓ | ✓ | · | · | · | · |
-| Ventas y cobros | Planificar rutas | `routeplan` | ✓ | ✓ | ✓ | · | · | · | · | ✓ | · | ✓ | · |
-| Ventas y cobros | Despacho de ruta | `dispatch` | ✓ | ✓ | ✓ | · | · | · | · | ✓ | · | ✓ | · |
-| Ventas y cobros | Metas | `goals` | ✓ | ✓ | ✓ | · | · | ✓ | ✓ | · | · | · | · |
-| Compras y pagos | Órdenes de compra | `purchaseorders` | ✓ | ✓ | ✓ | · | · | · | · | ✓ | ✓ | · | · |
-| Compras y pagos | Compras | `purchases` | ✓ | ✓ | ✓ | · | · | · | · | · | ✓ | · | · |
-| Compras y pagos | Cuentas por pagar | `payables` | ✓ | ✓ | ✓ | · | · | · | · | · | · | · | · |
-| Compras y pagos | Sugerencia de compras | `buyplan` | ✓ | ✓ | ✓ | · | · | · | · | · | ✓ | · | · |
-| Compras y pagos | Proveedores | `suppliers` | ✓ | ✓ | ✓ | · | · | · | · | · | ✓ | · | · |
-| Compras y pagos | Evaluación proveedores | `supplier_intel` | ✓ | ✓ | ✓ | · | · | · | · | · | ✓ | · | · |
-| Inventario | Productos | `products` | ✓ | ✓ | ✓ | · | · | ✓ | ✓ | ✓ | ✓ | · | ✓ |
-| Inventario | Escudo de precios | `priceshield` | ✓ | ✓ | ✓ | · | · | · | · | · | · | · | · |
-| Inventario | Toma física ciega | `blindcount` | ✓ | ✓ | ✓ | · | · | · | · | ✓ | · | · | · |
-| Inventario | Sedes y multibodega | `warehouses` | ✓ | ✓ | ✓ | · | · | · | · | ✓ | · | ✓ | · |
-| Inventario | Balanceo de sedes | `branch_balance` | ✓ | ✓ | ✓ | · | · | · | · | ✓ | · | · | · |
-| Inventario | Activos y maquinaria | `equipment_assets` | ✓ | ✓ | ✓ | · | · | · | · | ✓ | · | ✓ | · |
-| Inventario | Categorías | `categories` | ✓ | ✓ | ✓ | · | · | · | · | ✓ | · | · | · |
-| Inventario | Lotes y vencimientos | `lots` | ✓ | ✓ | ✓ | · | · | · | · | ✓ | · | · | · |
-| Inventario | Kardex | `kardex` | ✓ | ✓ | ✓ | · | · | · | · | ✓ | ✓ | · | · |
-| Inventario | Etiquetas | `labels` | ✓ | ✓ | ✓ | · | · | · | · | ✓ | · | · | · |
-| Caja y gastos | Tesorería y presupuesto | `treasury` | ✓ | ✓ | ✓ | · | · | · | · | · | · | · | · |
-| Caja y gastos | Conciliación bancaria | `bankrecon` | ✓ | ✓ | ✓ | · | · | · | · | · | · | · | · |
-| Caja y gastos | Caja y arqueos | `cash` | ✓ | ✓ | ✓ | · | · | · | ✓ | · | · | · | · |
-| Caja y gastos | Gastos operativos | `expenses` | ✓ | ✓ | ✓ | · | · | · | · | · | · | · | · |
+| Principal | Panel ejecutivo | `dashboard` | ✓ | ✓ | ✓ | ✓ | · | · | · | · | ✓ | · | · |
+| Principal | Centro de mando | `command` | ✓ | ✓ | ✓ | ✓ | · | · | · | · | · | · | · |
+| Principal | Resumen del día | `summary` | ✓ | ✓ | ✓ | ✓ | · | · | · | ✓ | · | · | · |
+| Principal | Copiloto | `copilot` | ✓ | ✓ | ✓ | ✓ | · | · | ✓ | ✓ | ✓ | · | ✓ |
+| Principal | Pregúntale al Copiloto | `ask` | ✓ | ✓ | ✓ | ✓ | · | · | ✓ | ✓ | ✓ | · | ✓ |
+| Principal | Acciones de IA (Aprobaciones) | `ai_actions` | ✓ | ✓ | ✓ | ✓ | · | · | · | · | · | · | · |
+| Ventas y cobros | Mostrador (POS) | `pos` | ✓ | ✓ | ✓ | ✓ | · | ✓ | ✓ | · | · | · | · |
+| Ventas y cobros | Pedidos omnicanal | `omnichannel` | ✓ | ✓ | ✓ | ✓ | · | · | ✓ | · | · | · | · |
+| Ventas y cobros | Catálogo comercial | `catalog` | ✓ | ✓ | ✓ | ✓ | · | ✓ | ✓ | · | · | · | · |
+| Ventas y cobros | Pedidos de catálogo | `catorders` | ✓ | ✓ | ✓ | ✓ | · | · | ✓ | · | · | · | · |
+| Ventas y cobros | Ventas | `sales` | ✓ | ✓ | ✓ | ✓ | · | ✓ | ✓ | · | · | · | · |
+| Ventas y cobros | Trazabilidad y despachos | `dispatch_history` | ✓ | ✓ | ✓ | ✓ | · | · | ✓ | ✓ | · | ✓ | · |
+| Ventas y cobros | Plan Separe y apartados | `layaways` | ✓ | ✓ | ✓ | ✓ | · | · | ✓ | · | · | · | · |
+| Ventas y cobros | Cartera (fiado) | `cartera` | ✓ | ✓ | ✓ | ✓ | · | · | ✓ | · | · | · | · |
+| Ventas y cobros | Cotizaciones | `quotations` | ✓ | ✓ | ✓ | ✓ | · | ✓ | ✓ | · | · | · | · |
+| Ventas y cobros | Clientes | `customers` | ✓ | ✓ | ✓ | ✓ | · | ✓ | ✓ | · | · | · | · |
+| Ventas y cobros | Devoluciones | `devolutions` | ✓ | ✓ | ✓ | ✓ | ✓ (solo prov. lectura) | · | ✓ (solo clientes) | · | · | · | · |
+| Ventas y cobros | Cambios y garantías | `exchanges` | ✓ | ✓ | ✓ | ✓ | · | · | ✓ | · | · | · | · |
+| Ventas y cobros | Equipo y nómina | `sellers` | ✓ | ✓ | ✓ | ✓ | · | · | · | · | · | · | · |
+| Ventas y cobros | Portal de vendedor | `employee_portal` | ✓ | ✓ | ✓ | ✓ | · | ✓ | ✓ | · | · | · | · |
+| Ventas y cobros | Planificar rutas | `routeplan` | ✓ | ✓ | ✓ | ✓ | · | · | · | ✓ | · | ✓ | · |
+| Ventas y cobros | Despacho de ruta | `dispatch` | ✓ | ✓ | ✓ | ✓ | · | · | · | ✓ | · | ✓ | · |
+| Ventas y cobros | Metas | `goals` | ✓ | ✓ | ✓ | ✓ | · | ✓ | ✓ | · | · | · | · |
+| Compras y pagos | Órdenes de compra | `purchaseorders` | ✓ | ✓ | ✓ | ✓ (consulta) | · | · | · | ✓ (solo recepción) | ✓ | · | · |
+| Compras y pagos | Compras | `purchases` | ✓ | ✓ | ✓ | ✓ (consulta/IVA) | ✓ (consulta/IVA) | · | · | · | ✓ (creación) | · | · |
+| Compras y pagos | Cuentas por pagar | `payables` | ✓ | ✓ | ✓ | ✓ (consulta) | · | · | · | · | · | · | · |
+| Compras y pagos | Sugerencia de compras | `buyplan` | ✓ | ✓ | ✓ | ✓ | · | · | · | ✓ | ✓ | · | · |
+| Compras y pagos | Proveedores | `suppliers` | ✓ | ✓ | ✓ | ✓ (consulta) | · | · | · | · | ✓ | · | · |
+| Compras y pagos | Evaluación proveedores | `supplier_intel` | ✓ | ✓ | ✓ | ✓ | · | · | · | · | ✓ | · | · |
+| Inventario | Productos | `products` | ✓ | ✓ | ✓ | ✓ | · | ✓ | ✓ | ✓ | ✓ | · | ✓ |
+| Inventario | Escudo de precios | `priceshield` | ✓ | ✓ | ✓ | ✓ | · | · | · | · | · | · | · |
+| Inventario | Toma física ciega | `blindcount` | ✓ | ✓ | ✓ | ✓ | · | · | · | ✓ | · | · | · |
+| Inventario | Sedes y multibodega | `warehouses` | ✓ | ✓ | ✓ | ✓ | · | · | · | ✓ | · | ✓ | · |
+| Inventario | Balanceo de sedes | `branch_balance` | ✓ | ✓ | ✓ | ✓ | · | · | · | ✓ | · | · | · |
+| Inventario | Activos y maquinaria | `equipment_assets` | ✓ | ✓ | ✓ | ✓ | · | · | · | ✓ | · | ✓ | · |
+| Inventario | Categorías | `categories` | ✓ | ✓ | ✓ | ✓ | · | · | · | ✓ | · | · | · |
+| Inventario | Lotes y vencimientos | `lots` | ✓ | ✓ | ✓ | ✓ | · | · | · | ✓ | · | · | · |
+| Inventario | Kardex | `kardex` | ✓ | ✓ | ✓ | ✓ | · | · | · | ✓ | ✓ | · | · |
+| Inventario | Etiquetas | `labels` | ✓ | ✓ | ✓ | ✓ | · | · | · | ✓ | · | · | · |
+| Caja y gastos | Tesorería y presupuesto | `treasury` | ✓ | ✓ | ✓ | ✓ | · | · | · | · | · | · | · |
+| Caja y gastos | Conciliación bancaria | `bankrecon` | ✓ | ✓ | ✓ | ✓ | · | · | · | · | · | · | · |
+| Caja y gastos | Caja y arqueos | `cash` | ✓ | ✓ | ✓ | ✓ | · | · | ✓ | · | · | · | · |
+| Caja y gastos | Gastos operativos | `expenses` | ✓ | ✓ | ✓ | ✓ | · | · | · | · | · | · | · |
 | Caja y gastos | Detección de anomalías | `anomaly_detector` | ✓ | ✓ | ✓ | ✓ | · | · | ✓ | · | · | · | · |
 | Caja y gastos | Vencimientos legales | `compliance` | ✓ | ✓ | ✓ | ✓ | · | · | · | · | · | · | · |
 | Análisis | Reportes | `reports` | ✓ | ✓ | ✓ | ✓ | · | · | · | · | · | · | · |
 | Análisis | Rentabilidad | `profit` | ✓ | ✓ | ✓ | ✓ | · | · | · | · | · | · | · |
-| Análisis | Predicciones | `predict` | ✓ | ✓ | ✓ | · | · | · | · | ✓ | ✓ | · | · |
+| Análisis | Predicciones | `predict` | ✓ | ✓ | ✓ | ✓ | · | · | · | ✓ | ✓ | · | · |
 | Análisis | Estadísticas | `stats` | ✓ | ✓ | ✓ | ✓ | · | · | · | · | · | · | · |
-| Análisis | Mapa y rutas | `map` | ✓ | ✓ | ✓ | · | · | ✓ | · | ✓ | · | ✓ | · |
+| Análisis | Mapa y rutas | `map` | ✓ | ✓ | ✓ | ✓ | · | ✓ | · | ✓ | · | ✓ | · |
 | Análisis | Historial de auditoría | `history` | ✓ | ✓ | ✓ | ✓ | · | · | ✓ | · | · | · | · |
-| Contabilidad | Despacho contable | `cpa` | ✓ | ✓ | ✓ | · | · | · | · | · | · | · | · |
-| Contabilidad | Catálogo PUC NIIF | `accounting` | ✓ | ✓ | ✓ | · | ✓ | · | · | · | · | · | · |
-| Contabilidad | Registrar Asiento Diario | `journal_entry` | ✓ | ✓ | ✓ | · | ✓ | · | · | · | · | · | · |
-| Contabilidad | Centro de Estados Financieros (Balances) | `accstate` | ✓ | ✓ | ✓ | · | ✓ | · | · | · | · | · | · |
-| Contabilidad | Centros de costo | `costcenters` | ✓ | ✓ | ✓ | · | · | · | · | · | · | · | · |
-| Contabilidad | Config. contable | `accsetup` | ✓ | ✓ | ✓ | · | · | · | · | · | · | · | · |
-| Contabilidad | Cierre de libros | `accclose` | ✓ | ✓ | ✓ | · | · | · | · | · | · | · | · |
-| Contabilidad | Impuestos | `taxes` | ✓ | ✓ | ✓ | · | · | · | · | · | · | · | · |
+| Contabilidad | Despacho contable | `cpa` | ✓ | ✓ | ✓ | ✓ | ✓ | · | · | · | · | · | · |
+| Contabilidad | Catálogo PUC NIIF | `accounting` / `accounting_puc` | ✓ | ✓ | ✓ | ✓ | ✓ | · | · | · | · | · | · |
+| Contabilidad | Registrar Asiento Diario | `journal_entry` | ✓ | ✓ | ✓ | ✓ | ✓ | · | · | · | · | · | · |
+| Contabilidad | Centro de Estados Financieros | `accstate` | ✓ | ✓ | ✓ | ✓ | ✓ | · | · | · | · | · | · |
+| Contabilidad | Centros de costo | `costcenters` | ✓ | ✓ | ✓ | ✓ | · | · | · | · | · | · | · |
+| Contabilidad | Config. contable / Conciliación | `accsetup` | ✓ | ✓ | ✓ | ✓ | ✓ (conciliación) | · | · | · | · | · | · |
+| Contabilidad | Cierre de libros | `accclose` | ✓ | ✓ | ✓ | ✓ | ✓ (consulta) | · | · | · | · | · | · |
+| Contabilidad | Impuestos | `taxes` | ✓ | ✓ | ✓ | ✓ | ✓ | · | · | · | · | · | · |
 | Contabilidad | Centro Tributario DIAN | `dian_compliance` | ✓ | ✓ | ✓ | ✓ | ✓ | · | · | · | · | · | · |
-| Contabilidad | Migración Siigo / Loggro | `erpbridge` | ✓ | ✓ | ✓ | · | · | · | · | · | · | · | · |
-| — | support | `support` | ✓ | ✓ | ✓ | · | · | · | ✓ | ✓ | ✓ | · | ✓ |
-| Administración | API y Webhooks | `api_ecosystem` | ✓ | ✓ | ✓ | · | · | · | · | · | · | · | · |
-| Administración | Equipo y dispositivos | `team` | ✓ | ✓ | ✓ | · | · | · | · | · | · | · | · |
+| Contabilidad | Migración Siigo / Loggro | `erpbridge` | ✓ | ✓ | ✓ | ✓ | · | · | · | · | · | · | · |
+| Administración | API y Webhooks | `api_ecosystem` | ✓ | ✓ | ✓ | ✓ | · | · | · | · | · | · | · |
+| Administración | Equipo y dispositivos | `team` | ✓ | ✓ | ✓ | ✓ | · | · | · | · | · | · | · |
 | Administración | Usuarios de plataforma | `users` | ✓ | · | · | · | · | · | · | · | · | · | · |
+| Administración | Empresas clientes | `companies` | ✓ | · | · | · | · | · | · | · | · | · | · |
+| Administración | Activar planes | `adminplans` | ✓ | · | · | · | · | · | · | · | · | · | · |
+| Administración | Suscripción | `subscription` | ✓ | ✓ | · | · | · | · | · | · | · | · | · |
+| Administración | SQL Center | `sqlcenter` | ✓ | · | · | · | · | · | · | · | · | · | · |
 | Administración | Configuración | `settings` | ✓ | ✓ | ✓ | · | · | · | · | · | · | · | · |
-| Administración | Manual de usuario | `manual` | ✓ | ✓ | ✓ | · | · | · | ✓ | ✓ | ✓ | · | ✓ |
+| Soporte | Soporte y Manual | `support` / `manual` | ✓ | ✓ | ✓ | ✓ | · | · | ✓ | ✓ | ✓ | · | ✓ |
 | Mi jornada | Mi ruta de hoy | `myroute` | · | · | · | · | · | ✓ | · | · | · | · | · |
 
-✓ = ve la página en el menú y puede abrirla · · = no.
+---
 
-## Reglas de la base de datos que limitan lo anterior (verificadas 2026-11-07)
-- `cuentas_por_pagar()` (RPC): solo `admin` y `dueno`.
-- `resumen_diario` / «Resumen del día»: solo `admin` y `dueno`.
-- `can_manage_inventory()`: admin, dueno, admin_empresa, gerente, almacen.
+## 4. Verificación en base viva de funciones base (solo lectura `pg_get_functiondef`)
 
-## Datos de demostración (no reales) en la app
-`src/lib/innovationsRepo.ts` guarda en `localStorage` datos de ejemplo para: pedidos omnicanal, propuestas de IA, sugerencias de balanceo de sedes, evaluación de proveedores, anomalías, comprobantes de entrega, activos y maquinaria, cumplimiento y llaves de API. Los contadores de la tarjeta «Plataforma Inteligente de Operaciones» del Panel salen de ahí.
+Se consultaron en modo solo lectura las 6 funciones base no versionadas previamente en `supabase/migrations/`:
+- `public.acc_activate`, `public.acc_upsert_account`, `public.acc_close_period`, `public.acc_reverse_entry`: verificadas con `public.is_manager()` → `public.is_company_manager()`, que exige `p.active = true`, `p.company_id IS NOT NULL` y `p.role IN ('dueno', 'admin_empresa', 'gerente')` (bloqueando al rol `contador` y a perfiles inactivos conforme a las Decisiones 1A y 3B).
+- `public._ctx(text[])`: exige `p.active = true` y `p.company_id IS NOT NULL` antes de validar `p_roles`.
+- `public.acc_reopen_period(integer, integer, text)`: en la base viva restringía solo a `dueno` sin verificar `active = true` ni incluir `admin_empresa`; quedó corregida dentro de la migración `000065` usando `public._require_company_roles(array['admin', 'dueno', 'admin_empresa'])`.

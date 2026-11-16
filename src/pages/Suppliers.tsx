@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
-import { useAuth, isReadOnly, canManageInventory } from '../lib/auth'
+import { useAuth, isReadOnly, canViewSuppliers, canManageSuppliers } from '../lib/auth'
 import { downloadCsv } from '../lib/csv'
 import type { Supplier } from '../types'
 import { Plus, X, Pencil, Trash2, Search, Lock, Download } from 'lucide-react'
@@ -9,7 +9,8 @@ const EMPTY_FORM = { name: '', document: '', email: '', phone: '', address: '' }
 
 export default function Suppliers() {
   const { user } = useAuth()
-  const noPermission = !canManageInventory(user?.role)
+  const canView = canViewSuppliers(user?.role)
+  const noPermission = !canManageSuppliers(user?.role)
   const readOnly = isReadOnly(user) || noPermission
 
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
@@ -21,8 +22,8 @@ export default function Suppliers() {
   const [notice, setNotice] = useState('')
 
   useEffect(() => {
-    void load()
-  }, [])
+    if (canView) void load()
+  }, [canView])
 
   function flash(msg: string) {
     setNotice(msg)
@@ -116,6 +117,10 @@ export default function Suppliers() {
     (s.email || '').toLowerCase().includes(q)
   )
 
+  if (!canView) {
+    return <p className="text-sm text-slate-500">No tienes permiso para ver proveedores.</p>
+  }
+
   return (
     <div>
       <div className="flex items-center justify-between gap-2 mb-6 flex-wrap">
@@ -148,7 +153,7 @@ export default function Suppliers() {
         <div className="flex items-center gap-2 text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-4 text-xs">
           <Lock className="w-3.5 h-3.5 shrink-0" />
           {noPermission
-            ? 'Solo el dueño o el administrador pueden crear, editar o eliminar proveedores.'
+            ? 'Solo el dueño, administrador de empresa o compras pueden crear, editar o eliminar proveedores.'
             : 'Modo de solo lectura. Activa tu suscripción para crear, editar o eliminar proveedores.'}
         </div>
       )}

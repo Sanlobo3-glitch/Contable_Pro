@@ -1,6 +1,12 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
-import { useAuth, canViewAccounting } from '../lib/auth'
+import {
+  useAuth,
+  isReadOnly,
+  canViewAccounting,
+  canCloseAccounting,
+  canReopenAccounting,
+} from '../lib/auth'
 import { CheckCircle2, AlertTriangle, XCircle, Printer, X } from 'lucide-react'
 import { fmtDate, fmtNum } from '../lib/currency'
 
@@ -25,7 +31,9 @@ const PRINT_CSS = `@media print { body * { visibility: hidden !important; } .pri
 export default function AccountingClose() {
   const { user } = useAuth()
   const isManager = canViewAccounting(user?.role)
-  const canReopen = user?.role === 'dueno' || user?.role === 'admin'
+  const readOnly = isReadOnly(user)
+  const canCloseBooks = !readOnly && canCloseAccounting(user?.role)
+  const canReopen = !readOnly && canReopenAccounting(user?.role)
   const prev = new Date(new Date().getFullYear(), new Date().getMonth() - 1, 1)
   const [year, setYear] = useState(prev.getFullYear())
   const [month, setMonth] = useState(prev.getMonth() + 1)
@@ -62,6 +70,7 @@ export default function AccountingClose() {
   }
 
   async function executeClose() {
+    if (!canCloseBooks) return
     setBusy(true)
     const { error } = await supabase.rpc('acc_close_period', { p_year: year, p_month: month, p_notes: notes, p_ack: ack })
     setBusy(false)
@@ -73,7 +82,7 @@ export default function AccountingClose() {
 
   async function executeReopen(e: React.FormEvent) {
     e.preventDefault()
-    if (!reopenTarget || !reopenReason.trim()) return
+    if (!canReopen || !reopenTarget || !reopenReason.trim()) return
     setBusy(true)
     const { error } = await supabase.rpc('acc_reopen_period', {
       p_year: reopenTarget.year,
@@ -127,13 +136,18 @@ export default function AccountingClose() {
               </div>
             ))}
             {errors > 0 && <p className="text-sm text-red-700 bg-red-50 px-3 py-2 rounded-lg">Resuelve los {errors} error(es) antes de cerrar.</p>}
-            {errors === 0 && warns > 0 && (
+            {errors === 0 && warns > 0 && canCloseBooks && (
               <label className="flex items-start gap-2 text-sm text-amber-800 bg-amber-50 px-3 py-2 rounded-lg">
                 <input type="checkbox" checked={ack} onChange={e => setAck(e.target.checked)} className="mt-1" />
                 Revisé los {warns} aviso(s) y quiero cerrar el periodo.
               </label>
             )}
-            {errors === 0 && (
+            {errors === 0 && !canCloseBooks && (
+              <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 px-3 py-2 rounded-lg">
+                Puedes ejecutar la verificación previa de cierre, pero solo Gerencia, Dueño o Administrador de empresa pueden cerrar o reabrir periodos contables.
+              </p>
+            )}
+            {errors === 0 && canCloseBooks && (
               <>
                 <textarea value={notes} onChange={e => setNotes(e.target.value)} rows={2} placeholder="Observaciones del cierre (opcional)" className={`${input} w-full`} />
                 {!confirmClose ? (
@@ -148,7 +162,7 @@ export default function AccountingClose() {
                 ) : (
                   <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 space-y-2.5">
                     <p className="text-xs text-amber-900">
-                      Se cerrará <strong className="capitalize">{MONTHS[month - 1]} de {year}</strong>. Nadie podrá registrar asientos en ese periodo salvo que el dueño lo reabra.
+                      Se cerrará <strong className="capitalize">{MONTHS[month - 1]} de {year}</strong>. Nadie podrá registrar asientos en ese periodo salvo que el dueño o administrador de empresa lo reabra.
                     </p>
                     <div className="flex justify-end gap-2">
                       <button
@@ -248,7 +262,7 @@ export default function AccountingClose() {
       )}
 
       {/* Modal para reabrir periodo con motivo obligatorio */}
-      {reopenTarget && (
+      {reopenTarget && canReopen && (
         <div
           className="fixed inset-0 z-50 bg-slate-950/50 flex items-center justify-center p-4"
           onClick={() => !busy && setReopenTarget(null)}

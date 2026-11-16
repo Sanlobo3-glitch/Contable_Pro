@@ -287,6 +287,15 @@ export function isCompanyManager(role: Role | undefined): boolean {
   )
 }
 
+export function isCompanyAdminOrOwner(role: Role | undefined): boolean {
+  return (
+    role === 'admin' ||
+    (role as string) === 'super_admin' ||
+    role === 'dueno' ||
+    role === 'admin_empresa'
+  )
+}
+
 export function canRegisterSales(role: Role | undefined): boolean {
   return (
     isCompanyManager(role) ||
@@ -296,7 +305,7 @@ export function canRegisterSales(role: Role | undefined): boolean {
 }
 
 export function canManageUsers(role: Role | undefined): boolean {
-  return role === 'admin'
+  return role === 'admin' || (role as string) === 'super_admin'
 }
 
 export function canManageTeam(role: Role | undefined): boolean {
@@ -332,10 +341,77 @@ export function canManageInventory(role: Role | undefined): boolean {
 
 export function canManagePurchases(role: Role | undefined): boolean {
   return (
-    isCompanyManager(role) ||
-    role === 'almacen' ||
+    isCompanyAdminOrOwner(role) ||
     role === 'comprador'
   )
+}
+
+export function canRegisterPurchases(role: Role | undefined): boolean {
+  return (
+    isCompanyAdminOrOwner(role) ||
+    role === 'comprador'
+  )
+}
+
+export function canVoidPurchases(role: Role | undefined): boolean {
+  return isCompanyAdminOrOwner(role)
+}
+
+export function canClassifyPurchaseVat(role: Role | undefined): boolean {
+  return (
+    isCompanyAdminOrOwner(role) ||
+    role === 'gerente' ||
+    role === 'contador'
+  )
+}
+
+export function canViewSuppliers(role: Role | undefined): boolean {
+  return (
+    isCompanyManager(role) ||
+    role === 'comprador' ||
+    role === 'contador'
+  )
+}
+
+export function canManageSuppliers(role: Role | undefined): boolean {
+  return (
+    isCompanyAdminOrOwner(role) ||
+    role === 'comprador'
+  )
+}
+
+export function canManagePurchaseOrders(role: Role | undefined): boolean {
+  return (
+    isCompanyAdminOrOwner(role) ||
+    role === 'comprador'
+  )
+}
+
+export function canReceivePurchaseOrders(role: Role | undefined): boolean {
+  return (
+    isCompanyAdminOrOwner(role) ||
+    role === 'comprador' ||
+    role === 'almacen'
+  )
+}
+
+export function canViewPurchaseDevolutions(role: Role | undefined): boolean {
+  return (
+    isCompanyManager(role) ||
+    role === 'contador'
+  )
+}
+
+export function canManagePurchaseDevolutions(role: Role | undefined): boolean {
+  return isCompanyAdminOrOwner(role)
+}
+
+export function canViewPayables(role: Role | undefined): boolean {
+  return isCompanyManager(role)
+}
+
+export function canManagePayables(role: Role | undefined): boolean {
+  return isCompanyAdminOrOwner(role)
 }
 
 export function canAccessCashAndAudit(role: Role | undefined): boolean {
@@ -354,6 +430,30 @@ export function canViewAccounting(role: Role | undefined): boolean {
     role === 'contador' ||
     role === 'gerente'
   )
+}
+
+export function canConfigureAccounting(role: Role | undefined): boolean {
+  return isCompanyManager(role)
+}
+
+export function canManagePuc(role: Role | undefined): boolean {
+  return isCompanyManager(role)
+}
+
+export function canPostPendingAccounting(role: Role | undefined): boolean {
+  return isCompanyManager(role)
+}
+
+export function canCloseAccounting(role: Role | undefined): boolean {
+  return isCompanyManager(role)
+}
+
+export function canReopenAccounting(role: Role | undefined): boolean {
+  return isCompanyAdminOrOwner(role)
+}
+
+export function canReverseAccounting(role: Role | undefined): boolean {
+  return isCompanyManager(role)
 }
 
 export function canManageTransport(role: Role | undefined): boolean {

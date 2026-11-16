@@ -7,22 +7,12 @@ import {
   getRoleLabel,
   MASTER_DEV_EMAIL,
   MASTER_SWITCHABLE_ROLES,
-  isCompanyManager,
-  canRegisterSales,
-  canManageUsers,
-  canManageTeam,
-  canManageSettings,
-  canViewStats,
-  canManageInventory,
-  canManagePurchases,
-  canAccessCashAndAudit,
-  canViewAccounting,
-  canManageTransport,
   canManageTechSupport,
   getTrialDaysLeft,
   isTrialActive,
   isSubscriptionActive,
 } from '../lib/auth'
+import { isPageAllowedForRole } from '../lib/pagePermissions'
 import { supabase, type DemoRole } from '../lib/supabase'
 import { useCurrency, refreshCurrency } from '../lib/currency'
 import { useWarehouse } from '../lib/warehouseContext'
@@ -337,12 +327,11 @@ export default function AppLayout({
   const isCompanyOwner = role === 'dueno'
 
   const navItems: NavItem[] = useMemo(() => {
+    const can = (pageId: string) =>
+      isPageAllowedForRole(pageId, role, { isMasterAccount, isDemo, masterRoleOverride })
+
     // ------------------------------------------------------------------------
-    // REGLA 2: Si el usuario tiene el rol 'Contador Público' ('contador')
-    // Su barra de navegación SOLO debe mostrar:
-    // 1. Catálogo PUC NIIF
-    // 2. Registrar Asiento Diario
-    // 3. Centro de Estados Financieros (Balances)
+    // REGLA 2 (Decisión 1A): Rol 'Contador Público' ('contador') con separación de funciones
     // ------------------------------------------------------------------------
     if (role === 'contador') {
       return [
@@ -352,7 +341,7 @@ export default function AppLayout({
           section: 'Contabilidad NIIF',
           keywords: 'puc catalogo cuentas niif partida doble plan cuentas maestro',
           icon: <BookOpen className="w-4 h-4 shrink-0" />,
-          allowed: true,
+          allowed: can('accounting'),
         },
         {
           id: 'journal_entry',
@@ -360,7 +349,7 @@ export default function AppLayout({
           section: 'Contabilidad NIIF',
           keywords: 'asiento diario partida doble comprobante registrar nuevo debito credito',
           icon: <Plus className="w-4 h-4 shrink-0" />,
-          allowed: true,
+          allowed: can('journal_entry'),
         },
         {
           id: 'accstate',
@@ -368,59 +357,159 @@ export default function AppLayout({
           section: 'Contabilidad NIIF',
           keywords: 'estados financieros balance general pyg comprobacion perdidas ganancias situacion financiera',
           icon: <FileBarChart className="w-4 h-4 shrink-0" />,
-          allowed: true,
+          allowed: can('accstate'),
+        },
+        {
+          id: 'cpa',
+          label: 'Despacho Contable',
+          section: 'Contabilidad NIIF',
+          keywords: 'contador publico cpc hoja trabajo 8 columnas razones niif auditoria firma cedula iva conciliacion',
+          icon: <Calculator className="w-4 h-4 shrink-0" />,
+          allowed: can('cpa'),
+        },
+        {
+          id: 'accsetup',
+          label: 'Conciliación y Config. Contable',
+          section: 'Contabilidad NIIF',
+          keywords: 'conciliacion cuentas automaticas diagnostico',
+          icon: <SettingsIcon className="w-4 h-4 shrink-0" />,
+          allowed: can('accsetup'),
+        },
+        {
+          id: 'accclose',
+          label: 'Cierre de Libros (Consulta)',
+          section: 'Contabilidad NIIF',
+          keywords: 'bloqueo mensual periodo verificacion',
+          icon: <Lock className="w-4 h-4 shrink-0" />,
+          allowed: can('accclose'),
+        },
+        {
+          id: 'taxes',
+          label: 'Impuestos e IVA',
+          section: 'Tributario y Compras',
+          keywords: 'iva fiscal tributario retenciones',
+          icon: <Percent className="w-4 h-4 shrink-0" />,
+          allowed: can('taxes'),
         },
         {
           id: 'dian_compliance',
           label: 'Centro Tributario DIAN',
-          section: 'Contabilidad NIIF',
+          section: 'Tributario y Compras',
           keywords: 'dian impuestos exogena formulario 300 350 retenciones certificados muisca medios magneticos prevalidador colombia',
           icon: <ShieldCheck className="w-4 h-4 shrink-0" />,
-          allowed: true,
+          allowed: can('dian_compliance'),
+        },
+        {
+          id: 'purchases',
+          label: 'Compras y Clasificación IVA',
+          section: 'Tributario y Compras',
+          keywords: 'iva compras clasificar descontable costo pendiente transitorio',
+          icon: <Truck className="w-4 h-4 shrink-0" />,
+          allowed: can('purchases'),
+        },
+        {
+          id: 'devolutions',
+          label: 'Devoluciones en Compra (Consulta)',
+          section: 'Tributario y Compras',
+          keywords: 'devoluciones notas debito compras iva',
+          icon: <Undo2 className="w-4 h-4 shrink-0" />,
+          allowed: can('devolutions'),
         },
       ]
     }
 
     // ------------------------------------------------------------------------
-    // REGLA 3: Si el usuario es 'Vendedor' ('vendedor')
-    // Su menú debe estar estrictamente limitado a:
-    // 1. Mostrador/POS
-    // 2. Inventario de Bodega
-    // 3. Cierre de Caja
+    // REGLA 3 (Decisión 4A): Rol 'Vendedor' ('vendedor')
+    // Conserva sus 10 vistas comerciales sin cierre de caja ('cash').
     // ------------------------------------------------------------------------
     if (role === 'vendedor') {
       return [
         {
           id: 'pos',
-          label: 'Mostrador/POS',
+          label: 'Mostrador / POS',
           section: 'Operaciones de Venta',
           keywords: 'mostrador pos caja rapida cobrar facturar ticket venta directa',
           icon: <Store className="w-4 h-4 shrink-0" />,
-          allowed: true,
+          allowed: can('pos'),
+        },
+        {
+          id: 'sales',
+          label: 'Historial de Ventas',
+          section: 'Operaciones de Venta',
+          keywords: 'facturas ventas historial transacciones',
+          icon: <ShoppingCart className="w-4 h-4 shrink-0" />,
+          allowed: can('sales'),
+        },
+        {
+          id: 'quotations',
+          label: 'Cotizaciones',
+          section: 'Operaciones de Venta',
+          keywords: 'presupuestos proformas cotizaciones',
+          icon: <FileText className="w-4 h-4 shrink-0" />,
+          allowed: can('quotations'),
+        },
+        {
+          id: 'catalog',
+          label: 'Catálogo Comercial',
+          section: 'Operaciones de Venta',
+          keywords: 'catalogo pdf whatsapp fotos precios lista vendedor vitrina compartir',
+          icon: <BookOpen className="w-4 h-4 shrink-0" />,
+          allowed: can('catalog'),
+        },
+        {
+          id: 'customers',
+          label: 'Clientes',
+          section: 'Operaciones de Venta',
+          keywords: 'directorio clientes compradores',
+          icon: <Users className="w-4 h-4 shrink-0" />,
+          allowed: can('customers'),
+        },
+        {
+          id: 'myroute',
+          label: 'Mi Ruta Comercial',
+          section: 'Ruta y Desempeño',
+          keywords: 'mi ruta visitas clientes vendedor calle',
+          icon: <RouteIcon className="w-4 h-4 shrink-0" />,
+          allowed: can('myroute'),
+        },
+        {
+          id: 'map',
+          label: 'Mapa y Rutas',
+          section: 'Ruta y Desempeño',
+          keywords: 'mapa rutas gps clientes geocerca',
+          icon: <MapPin className="w-4 h-4 shrink-0" />,
+          allowed: can('map'),
+        },
+        {
+          id: 'goals',
+          label: 'Metas de Venta',
+          section: 'Ruta y Desempeño',
+          keywords: 'objetivos cuotas metas comisiones',
+          icon: <Target className="w-4 h-4 shrink-0" />,
+          allowed: can('goals'),
+        },
+        {
+          id: 'employee_portal',
+          label: 'Portal de Vendedor',
+          section: 'Ruta y Desempeño',
+          keywords: 'autoservicio comisiones metas vendedor cartera saldo',
+          icon: <UserCheck className="w-4 h-4 shrink-0" />,
+          allowed: can('employee_portal'),
         },
         {
           id: 'products',
-          label: 'Inventario de Bodega',
-          section: 'Operaciones de Venta',
+          label: 'Inventario de Productos',
+          section: 'Consulta de Inventario',
           keywords: 'inventario de bodega productos stock sku existencias mercancia articulos',
           icon: <Package className="w-4 h-4 shrink-0" />,
-          allowed: true,
-        },
-        {
-          id: 'cash',
-          label: 'Cierre de Caja',
-          section: 'Operaciones de Venta',
-          keywords: 'cierre de caja arqueo efectivo corte turno saldo billetes monedas',
-          icon: <Wallet className="w-4 h-4 shrink-0" />,
-          allowed: true,
+          allowed: can('products'),
         },
       ]
     }
 
     // ------------------------------------------------------------------------
-    // REGLA 4: Si el usuario es 'Gerente' ('gerente')
-    // Menú exclusivo del CENTRO DE DIRECCIÓN GERENCIAL: Dirección Estratégica,
-    // Gobernanza y Supervisión Operativa ERP.
+    // REGLA 4 (Decisión 3B): Rol 'Gerente' ('gerente')
+    // Dirección Estratégica, Gobernanza y Supervisión Operativa ERP (sin funciones exclusivas de dueño/admin_empresa).
     // ------------------------------------------------------------------------
     if (role === 'gerente') {
       return [
@@ -431,7 +520,7 @@ export default function AppLayout({
           section: 'Dirección Estratégica',
           keywords: 'gerente direccion gerencial centro mando ejecutivo kpis tablero general',
           icon: <Briefcase className="w-4 h-4 shrink-0" />,
-          allowed: true,
+          allowed: can('manager_center'),
         },
         {
           id: 'manager_summary',
@@ -439,7 +528,7 @@ export default function AppLayout({
           section: 'Dirección Estratégica',
           keywords: 'resumen ejecutivo hoy mes utilidad flujo caja salud operativa',
           icon: <Activity className="w-4 h-4 shrink-0" />,
-          allowed: true,
+          allowed: can('manager_summary'),
         },
         {
           id: 'manager_commercial',
@@ -447,7 +536,7 @@ export default function AppLayout({
           section: 'Dirección Estratégica',
           keywords: 'ventas vendedores ranking clientes inactivos ticket metas cuotas',
           icon: <TrendingUp className="w-4 h-4 shrink-0" />,
-          allowed: true,
+          allowed: can('manager_commercial'),
         },
         {
           id: 'manager_operations',
@@ -455,7 +544,7 @@ export default function AppLayout({
           section: 'Dirección Estratégica',
           keywords: 'operaciones stock agotados quiebres rotacion recepcion traslados',
           icon: <Package className="w-4 h-4 shrink-0" />,
-          allowed: true,
+          allowed: can('manager_operations'),
         },
         {
           id: 'manager_financial',
@@ -463,7 +552,7 @@ export default function AppLayout({
           section: 'Dirección Estratégica',
           keywords: 'finanzas pyg margen cartera vencida cobranza flujo caja gastos',
           icon: <DollarSign className="w-4 h-4 shrink-0" />,
-          allowed: true,
+          allowed: can('manager_financial'),
         },
         {
           id: 'manager_hr',
@@ -471,7 +560,7 @@ export default function AppLayout({
           section: 'Dirección Estratégica',
           keywords: 'talento humano empleados evaluaciones desempeno productividad personal novedades',
           icon: <Users className="w-4 h-4 shrink-0" />,
-          allowed: true,
+          allowed: can('manager_hr'),
         },
 
         // Sección 2: Gobernanza y Control Gerencial
@@ -481,7 +570,7 @@ export default function AppLayout({
           section: 'Gobernanza y Control',
           keywords: 'autorizaciones aprobaciones compras gastos descuentos ajustes inventario',
           icon: <CheckCircle2 className="w-4 h-4 shrink-0" />,
-          allowed: true,
+          allowed: can('manager_authorizations'),
         },
         {
           id: 'manager_action_plans',
@@ -489,7 +578,7 @@ export default function AppLayout({
           section: 'Gobernanza y Control',
           keywords: 'planes de accion objetivos tareas responsables seguimiento cumplimiento',
           icon: <Layers className="w-4 h-4 shrink-0" />,
-          allowed: true,
+          allowed: can('manager_action_plans'),
         },
         {
           id: 'manager_intelligence',
@@ -497,7 +586,7 @@ export default function AppLayout({
           section: 'Gobernanza y Control',
           keywords: 'inteligencia empresarial alertas riesgos anomalias recomendaciones tendencias',
           icon: <Sparkles className="w-4 h-4 shrink-0" />,
-          allowed: true,
+          allowed: can('manager_intelligence'),
         },
         {
           id: 'manager_reports',
@@ -505,7 +594,7 @@ export default function AppLayout({
           section: 'Gobernanza y Control',
           keywords: 'informes gerenciales diario semanal mensual exportar pdf imprimir',
           icon: <FileText className="w-4 h-4 shrink-0" />,
-          allowed: true,
+          allowed: can('manager_reports'),
         },
         {
           id: 'manager_notifications',
@@ -513,7 +602,7 @@ export default function AppLayout({
           section: 'Gobernanza y Control',
           keywords: 'notificaciones alertas criticas vencimientos avisos pendientes',
           icon: <Bell className="w-4 h-4 shrink-0" />,
-          allowed: true,
+          allowed: can('manager_notifications'),
         },
 
         // Sección 3: Supervisión Operativa ERP
@@ -523,7 +612,7 @@ export default function AppLayout({
           section: 'Supervisión Operativa ERP',
           keywords: 'mostrador pos ventas caja cobrar',
           icon: <Store className="w-4 h-4 shrink-0" />,
-          allowed: true,
+          allowed: can('pos'),
         },
         {
           id: 'omnichannel',
@@ -531,7 +620,7 @@ export default function AppLayout({
           section: 'Supervisión Operativa ERP',
           keywords: 'pedidos whatsapp catalogo web omnicanal alistamiento',
           icon: <Boxes className="w-4 h-4 shrink-0" />,
-          allowed: true,
+          allowed: can('omnichannel'),
         },
         {
           id: 'sales',
@@ -539,7 +628,7 @@ export default function AppLayout({
           section: 'Supervisión Operativa ERP',
           keywords: 'facturas ventas historial transacciones',
           icon: <ShoppingCart className="w-4 h-4 shrink-0" />,
-          allowed: true,
+          allowed: can('sales'),
         },
         {
           id: 'cartera',
@@ -547,7 +636,7 @@ export default function AppLayout({
           section: 'Supervisión Operativa ERP',
           keywords: 'cxc cartera credito fiado abonos',
           icon: <Banknote className="w-4 h-4 shrink-0" />,
-          allowed: true,
+          allowed: can('cartera'),
         },
         {
           id: 'customers',
@@ -555,15 +644,39 @@ export default function AppLayout({
           section: 'Supervisión Operativa ERP',
           keywords: 'directorio clientes compradores',
           icon: <Users className="w-4 h-4 shrink-0" />,
-          allowed: true,
+          allowed: can('customers'),
+        },
+        {
+          id: 'purchaseorders',
+          label: 'Órdenes de Compra (Supervisión)',
+          section: 'Supervisión Operativa ERP',
+          keywords: 'oc ordenes compra proveedores supervision',
+          icon: <ClipboardCheck className="w-4 h-4 shrink-0" />,
+          allowed: can('purchaseorders'),
         },
         {
           id: 'purchases',
-          label: 'Compras y Proveedores',
+          label: 'Compras y Clasificación IVA',
           section: 'Supervisión Operativa ERP',
-          keywords: 'compras proveedores ordenes compra mercancia',
+          keywords: 'compras proveedores facturas iva clasificacion supervision',
           icon: <Truck className="w-4 h-4 shrink-0" />,
-          allowed: true,
+          allowed: can('purchases'),
+        },
+        {
+          id: 'payables',
+          label: 'Cuentas por Pagar (Consulta)',
+          section: 'Supervisión Operativa ERP',
+          keywords: 'cxp cuentas por pagar proveedores supervision saldos',
+          icon: <Receipt className="w-4 h-4 shrink-0" />,
+          allowed: can('payables'),
+        },
+        {
+          id: 'devolutions',
+          label: 'Devoluciones (Supervisión)',
+          section: 'Supervisión Operativa ERP',
+          keywords: 'devoluciones notas credito compras supervision',
+          icon: <Undo2 className="w-4 h-4 shrink-0" />,
+          allowed: can('devolutions'),
         },
         {
           id: 'products',
@@ -571,7 +684,7 @@ export default function AppLayout({
           section: 'Supervisión Operativa ERP',
           keywords: 'catalogo productos stock sku precios costos',
           icon: <Package className="w-4 h-4 shrink-0" />,
-          allowed: true,
+          allowed: can('products'),
         },
         {
           id: 'warehouses',
@@ -579,7 +692,7 @@ export default function AppLayout({
           section: 'Supervisión Operativa ERP',
           keywords: 'sucursales sedes bodegas almacenes stock',
           icon: <Building2 className="w-4 h-4 shrink-0" />,
-          allowed: true,
+          allowed: can('warehouses'),
         },
         {
           id: 'treasury',
@@ -587,7 +700,7 @@ export default function AppLayout({
           section: 'Supervisión Operativa ERP',
           keywords: 'flujo caja bancos liquidez presupuesto',
           icon: <Landmark className="w-4 h-4 shrink-0" />,
-          allowed: true,
+          allowed: can('treasury'),
         },
         {
           id: 'accstate',
@@ -595,7 +708,47 @@ export default function AppLayout({
           section: 'Supervisión Operativa ERP',
           keywords: 'balance general estado resultados pyg financiero',
           icon: <FileBarChart className="w-4 h-4 shrink-0" />,
-          allowed: true,
+          allowed: can('accstate'),
+        },
+        {
+          id: 'cpa',
+          label: 'Despacho Contable',
+          section: 'Supervisión Operativa ERP',
+          keywords: 'contador publico cpc conciliacion niif',
+          icon: <Calculator className="w-4 h-4 shrink-0" />,
+          allowed: can('cpa'),
+        },
+        {
+          id: 'accsetup',
+          label: 'Config. y Conciliación Contable',
+          section: 'Supervisión Operativa ERP',
+          keywords: 'configuracion contable conciliacion',
+          icon: <SettingsIcon className="w-4 h-4 shrink-0" />,
+          allowed: can('accsetup'),
+        },
+        {
+          id: 'accclose',
+          label: 'Cierre de Libros',
+          section: 'Supervisión Operativa ERP',
+          keywords: 'bloqueo mensual cierre periodo contable',
+          icon: <Lock className="w-4 h-4 shrink-0" />,
+          allowed: can('accclose'),
+        },
+        {
+          id: 'taxes',
+          label: 'Impuestos',
+          section: 'Supervisión Operativa ERP',
+          keywords: 'iva fiscal tributario',
+          icon: <Percent className="w-4 h-4 shrink-0" />,
+          allowed: can('taxes'),
+        },
+        {
+          id: 'dian_compliance',
+          label: 'Centro Tributario DIAN',
+          section: 'Supervisión Operativa ERP',
+          keywords: 'dian impuestos exogena formulario 300 350 retenciones',
+          icon: <ShieldCheck className="w-4 h-4 shrink-0" />,
+          allowed: can('dian_compliance'),
         },
         {
           id: 'compliance',
@@ -603,7 +756,7 @@ export default function AppLayout({
           section: 'Supervisión Operativa ERP',
           keywords: 'calendario legal soat bomberos impuestos licencias',
           icon: <Scale className="w-4 h-4 shrink-0" />,
-          allowed: true,
+          allowed: can('compliance'),
         },
         {
           id: 'manual',
@@ -611,20 +764,13 @@ export default function AppLayout({
           section: 'Supervisión Operativa ERP',
           keywords: 'guia manual documentacion ayuda',
           icon: <HelpCircle className="w-4 h-4 shrink-0" />,
-          allowed: true,
+          allowed: can('manual'),
         },
       ]
     }
 
     // ------------------------------------------------------------------------
     // REGLA 5: Si el usuario es 'Transporte y Despacho' ('transportador')
-    // Su menú debe estar estrictamente enfocado en su operación logística:
-    // 1. Traslados y Despacho Multisede (Bodegas, escáner en sitio, fotos/firmas, remisiones)
-    // 2. Mapa y Rutas GPS en Vivo (Monitoreo satelital, simulación y reproductor de historial)
-    // 3. Despacho de Ruta (Hoja de carga, entregas presenciales)
-    // 4. Planificar Rutas (Itinerario y optimización de visitas)
-    // 5. Trazabilidad y Auditoría de Despachos (Historial producto/cliente/tienda, correcciones)
-    // 6. Vehículos y Mantenimiento de Flota (Estado de camiones, SOAT, odómetro, conductores)
     // ------------------------------------------------------------------------
     if (role === 'transportador') {
       return [
@@ -634,7 +780,7 @@ export default function AppLayout({
           section: 'Operaciones de Transporte',
           keywords: 'traslados multibodega despacho escaner qr remision firma entrega vehiculos recepcion en sitio',
           icon: <Building2 className="w-4 h-4 shrink-0" />,
-          allowed: true,
+          allowed: can('warehouses'),
         },
         {
           id: 'map',
@@ -642,7 +788,7 @@ export default function AppLayout({
           section: 'Operaciones de Transporte',
           keywords: 'mapa rutas gps telemetria vehiculos vivo historial reproductor conductor satelital velocidad',
           icon: <MapPin className="w-4 h-4 shrink-0" />,
-          allowed: true,
+          allowed: can('map'),
         },
         {
           id: 'dispatch',
@@ -650,7 +796,7 @@ export default function AppLayout({
           section: 'Operaciones de Transporte',
           keywords: 'despacho hoja de ruta entregas transportador camion carga liquidacion',
           icon: <Truck className="w-4 h-4 shrink-0" />,
-          allowed: true,
+          allowed: can('dispatch'),
         },
         {
           id: 'routeplan',
@@ -658,7 +804,7 @@ export default function AppLayout({
           section: 'Operaciones de Transporte',
           keywords: 'planificar rutas paradas optimizacion visitas entregas clientes',
           icon: <RouteIcon className="w-4 h-4 shrink-0" />,
-          allowed: true,
+          allowed: can('routeplan'),
         },
         {
           id: 'dispatch_history',
@@ -666,7 +812,7 @@ export default function AppLayout({
           section: 'Operaciones de Transporte',
           keywords: 'trazabilidad auditoria despachos quien movio corrigio cantidades faltante producto cliente tienda',
           icon: <History className="w-4 h-4 shrink-0" />,
-          allowed: true,
+          allowed: can('dispatch_history'),
         },
         {
           id: 'equipment_assets',
@@ -674,104 +820,104 @@ export default function AppLayout({
           section: 'Operaciones de Transporte',
           keywords: 'vehiculos camiones flota mantenimiento preventivo soat tecnicomecanica odometro conductor',
           icon: <Wrench className="w-4 h-4 shrink-0" />,
-          allowed: true,
+          allowed: can('equipment_assets'),
         },
       ]
     }
 
     // ------------------------------------------------------------------------
-    // OTROS ROLES (Administrador Central / Super Admin, Dueño, Almacén, Soporte Técnico, etc.)
+    // OTROS ROLES (Administrador Central / Super Admin, Dueño, Admin Empresa, Almacén, Compras, Cajero, Soporte)
+    // Regidos directamente por pagePermissions.ts (Fuente Única de Verdad).
     // ------------------------------------------------------------------------
     return [
       // Inicio y mando
-      { id: 'dashboard', label: 'Panel ejecutivo', section: 'Principal', keywords: 'inicio kpi resumen', icon: <LayoutDashboard className="w-4 h-4 shrink-0" />, allowed: true },
-      { id: 'command', label: 'Centro de mando', section: 'Principal', keywords: 'cfo coo finanzas vivo pulso sedes', icon: <Gauge className="w-4 h-4 shrink-0" />, allowed: isCompanyManager(role) || canViewAccounting(role) },
-      { id: 'summary', label: 'Resumen del día', section: 'Principal', keywords: 'cierre diario corte', icon: <CalendarDays className="w-4 h-4 shrink-0" />, allowed: isCompanyManager(role) || canManageInventory(role) || canViewAccounting(role) },
-      { id: 'copilot', label: 'Copiloto', section: 'Principal', keywords: 'alertas avisos', icon: <Sparkles className="w-4 h-4 shrink-0" />, allowed: true },
-      { id: 'ask', label: 'Pregúntale al Copiloto', section: 'Principal', keywords: 'asistente consulta', icon: <MessageCircleQuestion className="w-4 h-4 shrink-0" />, allowed: true },
-      { id: 'ai_actions', label: 'Acciones de IA (Aprobaciones)', section: 'Principal', keywords: 'ia human in the loop aprobacion sugerencias ordenes compra precios', icon: <Sparkles className="w-4 h-4 shrink-0" />, allowed: true },
+      { id: 'dashboard', label: 'Panel ejecutivo', section: 'Principal', keywords: 'inicio kpi resumen', icon: <LayoutDashboard className="w-4 h-4 shrink-0" />, allowed: can('dashboard') },
+      { id: 'command', label: 'Centro de mando', section: 'Principal', keywords: 'cfo coo finanzas vivo pulso sedes', icon: <Gauge className="w-4 h-4 shrink-0" />, allowed: can('command') },
+      { id: 'summary', label: 'Resumen del día', section: 'Principal', keywords: 'cierre diario corte', icon: <CalendarDays className="w-4 h-4 shrink-0" />, allowed: can('summary') },
+      { id: 'copilot', label: 'Copiloto', section: 'Principal', keywords: 'alertas avisos', icon: <Sparkles className="w-4 h-4 shrink-0" />, allowed: can('copilot') },
+      { id: 'ask', label: 'Pregúntale al Copiloto', section: 'Principal', keywords: 'asistente consulta', icon: <MessageCircleQuestion className="w-4 h-4 shrink-0" />, allowed: can('ask') },
+      { id: 'ai_actions', label: 'Acciones de IA (Aprobaciones)', section: 'Principal', keywords: 'ia human in the loop aprobacion sugerencias ordenes compra precios', icon: <Sparkles className="w-4 h-4 shrink-0" />, allowed: can('ai_actions') },
 
       // Ventas y cobros
-      { id: 'pos', label: 'Mostrador (POS)', section: 'Ventas y cobros', keywords: 'caja rapida cobrar facturar', icon: <Store className="w-4 h-4 shrink-0" />, allowed: canRegisterSales(role) },
-      { id: 'omnichannel', label: 'Pedidos omnicanal', section: 'Ventas y cobros', keywords: 'pedidos whatsapp catalogo web ruta omnicanal alistamiento empaque epod', icon: <Boxes className="w-4 h-4 shrink-0" />, allowed: canRegisterSales(role) || isCompanyManager(role) },
-      { id: 'catalog', label: 'Catálogo comercial', section: 'Ventas y cobros', keywords: 'catalogo pdf whatsapp fotos precios lista vendedor vitrina compartir', icon: <BookOpen className="w-4 h-4 shrink-0" />, allowed: true },
-      { id: 'catorders', label: 'Pedidos de catálogo', section: 'Ventas y cobros', keywords: 'pedidos catalogo web capture comprobante pagomovil nequi zelle verificar autogestion', icon: <ClipboardCheck className="w-4 h-4 shrink-0" />, allowed: canRegisterSales(role) || isCompanyManager(role) || canViewAccounting(role) },
-      { id: 'sales', label: 'Ventas', section: 'Ventas y cobros', keywords: 'facturas historial ventas', icon: <ShoppingCart className="w-4 h-4 shrink-0" />, allowed: canRegisterSales(role) || canViewAccounting(role) },
-      { id: 'dispatch_history', label: 'Trazabilidad y despachos', section: 'Ventas y cobros', keywords: 'despachos trazabilidad producto cliente tienda sucursal historial imprimir reporte remisiones salidas auditar', icon: <History className="w-4 h-4 shrink-0" />, allowed: canRegisterSales(role) || canManageInventory(role) || canViewAccounting(role) || isCompanyManager(role) },
-      { id: 'layaways', label: 'Plan Separe y apartados', section: 'Ventas y cobros', keywords: 'plan separe apartados anticipos abonos reservar mercancia whatsapp', icon: <CalendarClock className="w-4 h-4 shrink-0" />, allowed: canRegisterSales(role) },
-      { id: 'cartera', label: 'Cartera (fiado)', section: 'Ventas y cobros', keywords: 'cxc cuentas por cobrar abonos deudores', icon: <Banknote className="w-4 h-4 shrink-0" />, allowed: canRegisterSales(role) || canViewAccounting(role) },
-      { id: 'quotations', label: 'Cotizaciones', section: 'Ventas y cobros', keywords: 'presupuestos proformas', icon: <FileText className="w-4 h-4 shrink-0" />, allowed: canRegisterSales(role) },
-      { id: 'customers', label: 'Clientes', section: 'Ventas y cobros', keywords: 'directorio compradores', icon: <Users className="w-4 h-4 shrink-0" />, allowed: true },
-      { id: 'devolutions', label: 'Devoluciones', section: 'Ventas y cobros', keywords: 'notas credito garantias', icon: <Undo2 className="w-4 h-4 shrink-0" />, allowed: canRegisterSales(role) || canManageInventory(role) },
-      { id: 'exchanges', label: 'Cambios y garantías', section: 'Ventas y cobros', keywords: 'cambios mano a mano talla referencia excedente garantias posventa', icon: <ArrowLeftRight className="w-4 h-4 shrink-0" />, allowed: canRegisterSales(role) || canManageInventory(role) },
-      { id: 'sellers', label: 'Equipo y nómina', section: 'Ventas y cobros', keywords: 'vendedores comisiones vales pagos', icon: <BadgeCheck className="w-4 h-4 shrink-0" />, allowed: canManageTeam(role) || canViewAccounting(role) },
-      { id: 'employee_portal', label: 'Portal de vendedor', section: 'Ventas y cobros', keywords: 'autoservicio comisiones metas vendedor cartera saldo', icon: <UserCheck className="w-4 h-4 shrink-0" />, allowed: true },
-      { id: 'routeplan', label: 'Planificar rutas', section: 'Ventas y cobros', keywords: 'paradas visitas', icon: <RouteIcon className="w-4 h-4 shrink-0" />, allowed: canRegisterSales(role) || canManageTransport(role) },
-      { id: 'dispatch', label: 'Despacho de ruta', section: 'Ventas y cobros', keywords: 'camion liquidacion carga', icon: <Truck className="w-4 h-4 shrink-0" />, allowed: canRegisterSales(role) || canManageTransport(role) || canManageInventory(role) },
-      { id: 'goals', label: 'Metas', section: 'Ventas y cobros', keywords: 'objetivos cuotas', icon: <Target className="w-4 h-4 shrink-0" />, allowed: canRegisterSales(role) || isCompanyManager(role) },
+      { id: 'pos', label: 'Mostrador (POS)', section: 'Ventas y cobros', keywords: 'caja rapida cobrar facturar', icon: <Store className="w-4 h-4 shrink-0" />, allowed: can('pos') },
+      { id: 'omnichannel', label: 'Pedidos omnicanal', section: 'Ventas y cobros', keywords: 'pedidos whatsapp catalogo web ruta omnicanal alistamiento empaque epod', icon: <Boxes className="w-4 h-4 shrink-0" />, allowed: can('omnichannel') },
+      { id: 'catalog', label: 'Catálogo comercial', section: 'Ventas y cobros', keywords: 'catalogo pdf whatsapp fotos precios lista vendedor vitrina compartir', icon: <BookOpen className="w-4 h-4 shrink-0" />, allowed: can('catalog') },
+      { id: 'catorders', label: 'Pedidos de catálogo', section: 'Ventas y cobros', keywords: 'pedidos catalogo web capture comprobante pagomovil nequi zelle verificar autogestion', icon: <ClipboardCheck className="w-4 h-4 shrink-0" />, allowed: can('catorders') },
+      { id: 'sales', label: 'Ventas', section: 'Ventas y cobros', keywords: 'facturas historial ventas', icon: <ShoppingCart className="w-4 h-4 shrink-0" />, allowed: can('sales') },
+      { id: 'dispatch_history', label: 'Trazabilidad y despachos', section: 'Ventas y cobros', keywords: 'despachos trazabilidad producto cliente tienda sucursal historial imprimir reporte remisiones salidas auditar', icon: <History className="w-4 h-4 shrink-0" />, allowed: can('dispatch_history') },
+      { id: 'layaways', label: 'Plan Separe y apartados', section: 'Ventas y cobros', keywords: 'plan separe apartados anticipos abonos reservar mercancia whatsapp', icon: <CalendarClock className="w-4 h-4 shrink-0" />, allowed: can('layaways') },
+      { id: 'cartera', label: 'Cartera (fiado)', section: 'Ventas y cobros', keywords: 'cxc cuentas por cobrar abonos deudores', icon: <Banknote className="w-4 h-4 shrink-0" />, allowed: can('cartera') },
+      { id: 'quotations', label: 'Cotizaciones', section: 'Ventas y cobros', keywords: 'presupuestos proformas', icon: <FileText className="w-4 h-4 shrink-0" />, allowed: can('quotations') },
+      { id: 'customers', label: 'Clientes', section: 'Ventas y cobros', keywords: 'directorio compradores', icon: <Users className="w-4 h-4 shrink-0" />, allowed: can('customers') },
+      { id: 'devolutions', label: 'Devoluciones', section: 'Ventas y cobros', keywords: 'notas credito garantias devoluciones compra venta', icon: <Undo2 className="w-4 h-4 shrink-0" />, allowed: can('devolutions') },
+      { id: 'exchanges', label: 'Cambios y garantías', section: 'Ventas y cobros', keywords: 'cambios mano a mano talla referencia excedente garantias posventa', icon: <ArrowLeftRight className="w-4 h-4 shrink-0" />, allowed: can('exchanges') },
+      { id: 'sellers', label: 'Equipo y nómina', section: 'Ventas y cobros', keywords: 'vendedores comisiones vales pagos', icon: <BadgeCheck className="w-4 h-4 shrink-0" />, allowed: can('sellers') },
+      { id: 'employee_portal', label: 'Portal de vendedor', section: 'Ventas y cobros', keywords: 'autoservicio comisiones metas vendedor cartera saldo', icon: <UserCheck className="w-4 h-4 shrink-0" />, allowed: can('employee_portal') },
+      { id: 'routeplan', label: 'Planificar rutas', section: 'Ventas y cobros', keywords: 'paradas visitas', icon: <RouteIcon className="w-4 h-4 shrink-0" />, allowed: can('routeplan') },
+      { id: 'dispatch', label: 'Despacho de ruta', section: 'Ventas y cobros', keywords: 'camion liquidacion carga', icon: <Truck className="w-4 h-4 shrink-0" />, allowed: can('dispatch') },
+      { id: 'goals', label: 'Metas', section: 'Ventas y cobros', keywords: 'objetivos cuotas', icon: <Target className="w-4 h-4 shrink-0" />, allowed: can('goals') },
 
       // Compras y obligaciones
-      { id: 'purchaseorders', label: 'Órdenes de compra', section: 'Compras y pagos', keywords: 'oc pedidos proveedor recepcion bodega backorder', icon: <ClipboardCheck className="w-4 h-4 shrink-0" />, allowed: canManagePurchases(role) || canManageInventory(role) || canViewAccounting(role) },
-      { id: 'purchases', label: 'Compras', section: 'Compras y pagos', keywords: 'entradas mercancia facturas compra', icon: <Truck className="w-4 h-4 shrink-0" />, allowed: canManagePurchases(role) || canViewAccounting(role) },
-      { id: 'payables', label: 'Cuentas por pagar', section: 'Compras y pagos', keywords: 'cxp deuda proveedores pagos', icon: <Receipt className="w-4 h-4 shrink-0" />, allowed: canManagePurchases(role) || canViewAccounting(role) },
-      { id: 'buyplan', label: 'Sugerencia de compras', section: 'Compras y pagos', keywords: 'reabastecimiento reposicion', icon: <ShoppingBasket className="w-4 h-4 shrink-0" />, allowed: canManagePurchases(role) || canManageInventory(role) },
-      { id: 'suppliers', label: 'Proveedores', section: 'Compras y pagos', keywords: 'fabricantes distribuidores', icon: <Truck className="w-4 h-4 shrink-0" />, allowed: canManagePurchases(role) || canManageInventory(role) },
-      { id: 'supplier_intel', label: 'Evaluación proveedores', section: 'Compras y pagos', keywords: 'otif inflacion costos ranking compras demoras calidad', icon: <Award className="w-4 h-4 shrink-0" />, allowed: canManagePurchases(role) || canManageInventory(role) },
+      { id: 'purchaseorders', label: 'Órdenes de compra', section: 'Compras y pagos', keywords: 'oc pedidos proveedor recepcion bodega backorder', icon: <ClipboardCheck className="w-4 h-4 shrink-0" />, allowed: can('purchaseorders') },
+      { id: 'purchases', label: 'Compras', section: 'Compras y pagos', keywords: 'entradas mercancia facturas compra', icon: <Truck className="w-4 h-4 shrink-0" />, allowed: can('purchases') },
+      { id: 'payables', label: 'Cuentas por pagar', section: 'Compras y pagos', keywords: 'cxp deuda proveedores pagos', icon: <Receipt className="w-4 h-4 shrink-0" />, allowed: can('payables') },
+      { id: 'buyplan', label: 'Sugerencia de compras', section: 'Compras y pagos', keywords: 'reabastecimiento reposicion', icon: <ShoppingBasket className="w-4 h-4 shrink-0" />, allowed: can('buyplan') },
+      { id: 'suppliers', label: 'Proveedores', section: 'Compras y pagos', keywords: 'fabricantes distribuidores', icon: <Truck className="w-4 h-4 shrink-0" />, allowed: can('suppliers') },
+      { id: 'supplier_intel', label: 'Evaluación proveedores', section: 'Compras y pagos', keywords: 'otif inflacion costos ranking compras demoras calidad', icon: <Award className="w-4 h-4 shrink-0" />, allowed: can('supplier_intel') },
 
       // Inventario y sedes
-      { id: 'products', label: 'Productos', section: 'Inventario', keywords: 'catalogo precios stock sku', icon: <Package className="w-4 h-4 shrink-0" />, allowed: true },
-      { id: 'priceshield', label: 'Escudo de precios', section: 'Inventario', keywords: 'escudo margenes actualizar precios masivo redondeo inflacion etiquetas', icon: <ShieldCheck className="w-4 h-4 shrink-0" />, allowed: canManageInventory(role) },
-      { id: 'blindcount', label: 'Toma física ciega', section: 'Inventario', keywords: 'toma fisica ciega conteo auditoria faltantes sobrantes inventario', icon: <EyeOff className="w-4 h-4 shrink-0" />, allowed: canManageInventory(role) || canViewAccounting(role) || isCompanyManager(role) },
-      { id: 'warehouses', label: 'Sedes y multibodega', section: 'Inventario', keywords: 'sucursales bodegas almacenes traslados reservas', icon: <Building2 className="w-4 h-4 shrink-0" />, allowed: canManageInventory(role) },
-      { id: 'branch_balance', label: 'Balanceo de sedes', section: 'Inventario', keywords: 'traslado predictivo bodegas sobrestock stockout rebalanceo', icon: <ArrowLeftRight className="w-4 h-4 shrink-0" />, allowed: canManageInventory(role) },
-      { id: 'equipment_assets', label: 'Activos y maquinaria', section: 'Inventario', keywords: 'vehiculo bascula balanza nevera mantenimiento preventivo equipos flota', icon: <Wrench className="w-4 h-4 shrink-0" />, allowed: canManageInventory(role) || isCompanyManager(role) },
-      { id: 'categories', label: 'Categorías', section: 'Inventario', keywords: 'lineas familias', icon: <Tag className="w-4 h-4 shrink-0" />, allowed: canManageInventory(role) },
-      { id: 'lots', label: 'Lotes y vencimientos', section: 'Inventario', keywords: 'caducidad fefo perecederos', icon: <CalendarClock className="w-4 h-4 shrink-0" />, allowed: canManageInventory(role) },
-      { id: 'kardex', label: 'Kardex', section: 'Inventario', keywords: 'movimientos auditoria entradas salidas', icon: <ClipboardList className="w-4 h-4 shrink-0" />, allowed: true },
-      { id: 'labels', label: 'Etiquetas', section: 'Inventario', keywords: 'codigos barras qr impresion', icon: <QrCode className="w-4 h-4 shrink-0" />, allowed: canManageInventory(role) },
+      { id: 'products', label: 'Productos', section: 'Inventario', keywords: 'catalogo precios stock sku', icon: <Package className="w-4 h-4 shrink-0" />, allowed: can('products') },
+      { id: 'priceshield', label: 'Escudo de precios', section: 'Inventario', keywords: 'escudo margenes actualizar precios masivo redondeo inflacion etiquetas', icon: <ShieldCheck className="w-4 h-4 shrink-0" />, allowed: can('priceshield') },
+      { id: 'blindcount', label: 'Toma física ciega', section: 'Inventario', keywords: 'toma fisica ciega conteo auditoria faltantes sobrantes inventario', icon: <EyeOff className="w-4 h-4 shrink-0" />, allowed: can('blindcount') },
+      { id: 'warehouses', label: 'Sedes y multibodega', section: 'Inventario', keywords: 'sucursales bodegas almacenes traslados reservas', icon: <Building2 className="w-4 h-4 shrink-0" />, allowed: can('warehouses') },
+      { id: 'branch_balance', label: 'Balanceo de sedes', section: 'Inventario', keywords: 'traslado predictivo bodegas sobrestock stockout rebalanceo', icon: <ArrowLeftRight className="w-4 h-4 shrink-0" />, allowed: can('branch_balance') },
+      { id: 'equipment_assets', label: 'Activos y maquinaria', section: 'Inventario', keywords: 'vehiculo bascula balanza nevera mantenimiento preventivo equipos flota', icon: <Wrench className="w-4 h-4 shrink-0" />, allowed: can('equipment_assets') },
+      { id: 'categories', label: 'Categorías', section: 'Inventario', keywords: 'lineas familias', icon: <Tag className="w-4 h-4 shrink-0" />, allowed: can('categories') },
+      { id: 'lots', label: 'Lotes y vencimientos', section: 'Inventario', keywords: 'caducidad fefo perecederos', icon: <CalendarClock className="w-4 h-4 shrink-0" />, allowed: can('lots') },
+      { id: 'kardex', label: 'Kardex', section: 'Inventario', keywords: 'movimientos auditoria entradas salidas', icon: <ClipboardList className="w-4 h-4 shrink-0" />, allowed: can('kardex') },
+      { id: 'labels', label: 'Etiquetas', section: 'Inventario', keywords: 'codigos barras qr impresion', icon: <QrCode className="w-4 h-4 shrink-0" />, allowed: can('labels') },
 
       // Caja, tesorería y gastos
-      { id: 'treasury', label: 'Tesorería y presupuesto', section: 'Caja y gastos', keywords: 'flujo caja liquidez proyeccion 30 60 90 presupuesto cfo', icon: <Landmark className="w-4 h-4 shrink-0" />, allowed: isCompanyManager(role) || canViewAccounting(role) },
-      { id: 'bankrecon', label: 'Conciliación bancaria', section: 'Caja y gastos', keywords: 'conciliacion bancaria extracto nequi bancolombia 4x1000 gmf comisiones banco', icon: <FileSpreadsheet className="w-4 h-4 shrink-0" />, allowed: isCompanyManager(role) || canViewAccounting(role) },
-      { id: 'cash', label: 'Caja y arqueos', section: 'Caja y gastos', keywords: 'efectivo apertura cierre turno', icon: <Wallet className="w-4 h-4 shrink-0" />, allowed: canAccessCashAndAudit(role) },
-      { id: 'expenses', label: 'Gastos operativos', section: 'Caja y gastos', keywords: 'egresos servicios alquiler', icon: <TrendingDown className="w-4 h-4 shrink-0" />, allowed: isCompanyManager(role) || canViewAccounting(role) },
-      { id: 'anomaly_detector', label: 'Detección de anomalías', section: 'Caja y gastos', keywords: 'fraude mermas descuentos caja devolucion auditoria perdida riesgo', icon: <ShieldAlert className="w-4 h-4 shrink-0" />, allowed: canAccessCashAndAudit(role) || isCompanyManager(role) },
-      { id: 'compliance', label: 'Vencimientos legales', section: 'Caja y gastos', keywords: 'soat camara comercio bomberos impuestos contratos calendario legal licencias', icon: <Scale className="w-4 h-4 shrink-0" />, allowed: isCompanyManager(role) || canViewAccounting(role) },
+      { id: 'treasury', label: 'Tesorería y presupuesto', section: 'Caja y gastos', keywords: 'flujo caja liquidez proyeccion 30 60 90 presupuesto cfo', icon: <Landmark className="w-4 h-4 shrink-0" />, allowed: can('treasury') },
+      { id: 'bankrecon', label: 'Conciliación bancaria', section: 'Caja y gastos', keywords: 'conciliacion bancaria extracto nequi bancolombia 4x1000 gmf comisiones banco', icon: <FileSpreadsheet className="w-4 h-4 shrink-0" />, allowed: can('bankrecon') },
+      { id: 'cash', label: 'Caja y arqueos', section: 'Caja y gastos', keywords: 'efectivo apertura cierre turno', icon: <Wallet className="w-4 h-4 shrink-0" />, allowed: can('cash') },
+      { id: 'expenses', label: 'Gastos operativos', section: 'Caja y gastos', keywords: 'egresos servicios alquiler', icon: <TrendingDown className="w-4 h-4 shrink-0" />, allowed: can('expenses') },
+      { id: 'anomaly_detector', label: 'Detección de anomalías', section: 'Caja y gastos', keywords: 'fraude mermas descuentos caja devolucion auditoria perdida riesgo', icon: <ShieldAlert className="w-4 h-4 shrink-0" />, allowed: can('anomaly_detector') },
+      { id: 'compliance', label: 'Vencimientos legales', section: 'Caja y gastos', keywords: 'soat camara comercio bomberos impuestos contratos calendario legal licencias', icon: <Scale className="w-4 h-4 shrink-0" />, allowed: can('compliance') },
 
       // Análisis y reportes
-      { id: 'reports', label: 'Reportes', section: 'Análisis', keywords: 'exportar csv imprimir', icon: <FileBarChart className="w-4 h-4 shrink-0" />, allowed: canViewStats(role) },
-      { id: 'profit', label: 'Rentabilidad', section: 'Análisis', keywords: 'margen utilidad ganancia', icon: <PieChart className="w-4 h-4 shrink-0" />, allowed: isCompanyManager(role) || canViewAccounting(role) },
-      { id: 'predict', label: 'Predicciones', section: 'Análisis', keywords: 'demanda proyeccion agotamiento', icon: <TrendingUp className="w-4 h-4 shrink-0" />, allowed: canManageInventory(role) || canManagePurchases(role) },
-      { id: 'stats', label: 'Estadísticas', section: 'Análisis', keywords: 'graficas desempeno', icon: <BarChart3 className="w-4 h-4 shrink-0" />, allowed: canViewStats(role) },
-      { id: 'map', label: 'Mapa y rutas', section: 'Análisis', keywords: 'gps ubicacion geocerca', icon: <MapPin className="w-4 h-4 shrink-0" />, allowed: isCompanyManager(role) || canManageTransport(role) },
-      { id: 'history', label: 'Historial de auditoría', section: 'Análisis', keywords: 'bitacora trazabilidad cambios', icon: <History className="w-4 h-4 shrink-0" />, allowed: canAccessCashAndAudit(role) },
+      { id: 'reports', label: 'Reportes', section: 'Análisis', keywords: 'exportar csv imprimir', icon: <FileBarChart className="w-4 h-4 shrink-0" />, allowed: can('reports') },
+      { id: 'profit', label: 'Rentabilidad', section: 'Análisis', keywords: 'margen utilidad ganancia', icon: <PieChart className="w-4 h-4 shrink-0" />, allowed: can('profit') },
+      { id: 'predict', label: 'Predicciones', section: 'Análisis', keywords: 'demanda proyeccion agotamiento', icon: <TrendingUp className="w-4 h-4 shrink-0" />, allowed: can('predict') },
+      { id: 'stats', label: 'Estadísticas', section: 'Análisis', keywords: 'graficas desempeno', icon: <BarChart3 className="w-4 h-4 shrink-0" />, allowed: can('stats') },
+      { id: 'map', label: 'Mapa y rutas', section: 'Análisis', keywords: 'gps ubicacion geocerca', icon: <MapPin className="w-4 h-4 shrink-0" />, allowed: can('map') },
+      { id: 'history', label: 'Historial de auditoría', section: 'Análisis', keywords: 'bitacora trazabilidad cambios', icon: <History className="w-4 h-4 shrink-0" />, allowed: can('history') },
 
       // Contabilidad e impuestos
-      { id: 'cpa', label: 'Despacho contable', section: 'Contabilidad', keywords: 'contador publico cpc hoja trabajo 8 columnas razones niif auditoria firma cedula iva conciliacion', icon: <Calculator className="w-4 h-4 shrink-0" />, allowed: canViewAccounting(role) },
-      { id: 'accounting', label: 'Catálogo PUC NIIF', section: 'Contabilidad', keywords: 'plan cuentas asientos diario mayor balance comprobacion puc niif', icon: <BookOpen className="w-4 h-4 shrink-0" />, allowed: canViewAccounting(role) },
-      { id: 'journal_entry', label: 'Registrar Asiento Diario', section: 'Contabilidad', keywords: 'asiento diario partida doble comprobante registrar nuevo debito credito', icon: <Plus className="w-4 h-4 shrink-0" />, allowed: canViewAccounting(role) },
-      { id: 'accstate', label: 'Centro de Estados Financieros (Balances)', section: 'Contabilidad', keywords: 'estado resultados balance general pyg vertical', icon: <FileBarChart className="w-4 h-4 shrink-0" />, allowed: canViewAccounting(role) },
-      { id: 'costcenters', label: 'Centros de costo', section: 'Contabilidad', keywords: 'estado resultados sucursal sede unidad negocio pyg analitico', icon: <Layers className="w-4 h-4 shrink-0" />, allowed: isCompanyManager(role) || canViewAccounting(role) },
-      { id: 'accsetup', label: 'Config. contable', section: 'Contabilidad', keywords: 'conciliacion cuentas automaticas', icon: <SettingsIcon className="w-4 h-4 shrink-0" />, allowed: canViewAccounting(role) },
-      { id: 'accclose', label: 'Cierre de libros', section: 'Contabilidad', keywords: 'bloqueo mensual periodo', icon: <Lock className="w-4 h-4 shrink-0" />, allowed: canViewAccounting(role) },
-      { id: 'taxes', label: 'Impuestos', section: 'Contabilidad', keywords: 'iva fiscal tributario', icon: <Percent className="w-4 h-4 shrink-0" />, allowed: canViewAccounting(role) },
-      { id: 'dian_compliance', label: 'Centro Tributario DIAN', section: 'Contabilidad', keywords: 'dian impuestos exogena formulario 300 350 retenciones certificados muisca colombia medios magneticos prevalidador', icon: <ShieldCheck className="w-4 h-4 shrink-0" />, allowed: canViewAccounting(role) || isCompanyManager(role) },
-      { id: 'erpbridge', label: 'Migración Siigo / Loggro', section: 'Contabilidad', keywords: 'siigo loggro migrar importar exportar puc terceros comprobantes contable pro', icon: <ArrowLeftRight className="w-4 h-4 shrink-0" />, allowed: isCompanyManager(role) || canViewAccounting(role) },
+      { id: 'cpa', label: 'Despacho contable', section: 'Contabilidad', keywords: 'contador publico cpc hoja trabajo 8 columnas razones niif auditoria firma cedula iva conciliacion', icon: <Calculator className="w-4 h-4 shrink-0" />, allowed: can('cpa') },
+      { id: 'accounting', label: 'Catálogo PUC NIIF', section: 'Contabilidad', keywords: 'plan cuentas asientos diario mayor balance comprobacion puc niif', icon: <BookOpen className="w-4 h-4 shrink-0" />, allowed: can('accounting') },
+      { id: 'journal_entry', label: 'Registrar Asiento Diario', section: 'Contabilidad', keywords: 'asiento diario partida doble comprobante registrar nuevo debito credito', icon: <Plus className="w-4 h-4 shrink-0" />, allowed: can('journal_entry') },
+      { id: 'accstate', label: 'Centro de Estados Financieros (Balances)', section: 'Contabilidad', keywords: 'estado resultados balance general pyg vertical', icon: <FileBarChart className="w-4 h-4 shrink-0" />, allowed: can('accstate') },
+      { id: 'costcenters', label: 'Centros de costo', section: 'Contabilidad', keywords: 'estado resultados sucursal sede unidad negocio pyg analitico', icon: <Layers className="w-4 h-4 shrink-0" />, allowed: can('costcenters') },
+      { id: 'accsetup', label: 'Config. contable', section: 'Contabilidad', keywords: 'conciliacion cuentas automaticas', icon: <SettingsIcon className="w-4 h-4 shrink-0" />, allowed: can('accsetup') },
+      { id: 'accclose', label: 'Cierre de libros', section: 'Contabilidad', keywords: 'bloqueo mensual periodo', icon: <Lock className="w-4 h-4 shrink-0" />, allowed: can('accclose') },
+      { id: 'taxes', label: 'Impuestos', section: 'Contabilidad', keywords: 'iva fiscal tributario', icon: <Percent className="w-4 h-4 shrink-0" />, allowed: can('taxes') },
+      { id: 'dian_compliance', label: 'Centro Tributario DIAN', section: 'Contabilidad', keywords: 'dian impuestos exogena formulario 300 350 retenciones certificados muisca colombia medios magneticos prevalidador', icon: <ShieldCheck className="w-4 h-4 shrink-0" />, allowed: can('dian_compliance') },
+      { id: 'erpbridge', label: 'Migración Siigo / Loggro', section: 'Contabilidad', keywords: 'siigo loggro migrar importar exportar puc terceros comprobantes contable pro', icon: <ArrowLeftRight className="w-4 h-4 shrink-0" />, allowed: can('erpbridge') },
 
       // Administración y soporte técnico
-      { id: 'support', label: canManageTechSupport(role) ? 'Bandeja soporte técnico' : 'Soporte y autorización', section: 'Administración', keywords: 'soporte tecnico autorizar sesion ticket ayuda desarrollador aut', icon: <LifeBuoy className="w-4 h-4 shrink-0" />, allowed: true },
-      { id: 'api_ecosystem', label: 'API y Webhooks', section: 'Administración', keywords: 'api token keys desarrollador woocommerce shopify webhooks integracion', icon: <Code className="w-4 h-4 shrink-0" />, allowed: canManageSettings(role) || isCompanyManager(role) },
-      // REGLA 1: sqlcenter SOLO para Administrador Central ('super_admin' o 'admin')
-      { id: 'sqlcenter', label: 'Centro de Scripts SQL y Supabase', section: 'Administración', keywords: 'sql supabase migraciones base datos tablas ejecutar diagnostico', icon: <Database className="w-4 h-4 shrink-0" />, allowed: isSuperAdmin },
-      { id: 'team', label: 'Equipo y dispositivos', section: 'Administración', keywords: 'autorizar celulares seguridad equipos', icon: <MonitorSmartphone className="w-4 h-4 shrink-0" />, allowed: canManageTeam(role) },
-      { id: 'users', label: 'Usuarios de plataforma', section: 'Administración', keywords: 'cuentas accesos', icon: <UserCog className="w-4 h-4 shrink-0" />, allowed: canManageUsers(role) },
-      { id: 'companies', label: 'Empresas clientes', section: 'Administración', keywords: 'saas inquilinos', icon: <Building2 className="w-4 h-4 shrink-0" />, allowed: isSuperAdmin },
-      { id: 'adminplans', label: 'Activar planes', section: 'Administración', keywords: 'licencias pagos', icon: <Gift className="w-4 h-4 shrink-0" />, allowed: isSuperAdmin },
-      { id: 'subscription', label: 'Suscripción', section: 'Administración', keywords: 'plan membresia paypal', icon: <CreditCard className="w-4 h-4 shrink-0" />, allowed: isCompanyOwner || isSuperAdmin },
-      { id: 'settings', label: 'Configuración', section: 'Administración', keywords: 'empresa moneda tasas iva rif nit', icon: <SettingsIcon className="w-4 h-4 shrink-0" />, allowed: canManageSettings(role) },
-      { id: 'manual', label: 'Manual de usuario', section: 'Administración', keywords: 'ayuda guia documentacion', icon: <HelpCircle className="w-4 h-4 shrink-0" />, allowed: true },
+      { id: 'support', label: canManageTechSupport(role) ? 'Bandeja soporte técnico' : 'Soporte y autorización', section: 'Administración', keywords: 'soporte tecnico autorizar sesion ticket ayuda desarrollador aut', icon: <LifeBuoy className="w-4 h-4 shrink-0" />, allowed: can('support') },
+      { id: 'api_ecosystem', label: 'API y Webhooks', section: 'Administración', keywords: 'api token keys desarrollador woocommerce shopify webhooks integracion', icon: <Code className="w-4 h-4 shrink-0" />, allowed: can('api_ecosystem') },
+      { id: 'sqlcenter', label: 'Centro de Scripts SQL y Supabase', section: 'Administración', keywords: 'sql supabase migraciones base datos tablas ejecutar diagnostico', icon: <Database className="w-4 h-4 shrink-0" />, allowed: isSuperAdmin && can('sqlcenter') },
+      { id: 'team', label: 'Equipo y dispositivos', section: 'Administración', keywords: 'autorizar celulares seguridad equipos', icon: <MonitorSmartphone className="w-4 h-4 shrink-0" />, allowed: can('team') },
+      { id: 'users', label: 'Usuarios de plataforma', section: 'Administración', keywords: 'cuentas accesos', icon: <UserCog className="w-4 h-4 shrink-0" />, allowed: can('users') },
+      { id: 'companies', label: 'Empresas clientes', section: 'Administración', keywords: 'saas inquilinos', icon: <Building2 className="w-4 h-4 shrink-0" />, allowed: isSuperAdmin && can('companies') },
+      { id: 'adminplans', label: 'Activar planes', section: 'Administración', keywords: 'licencias pagos', icon: <Gift className="w-4 h-4 shrink-0" />, allowed: isSuperAdmin && can('adminplans') },
+      { id: 'subscription', label: 'Suscripción', section: 'Administración', keywords: 'plan membresia paypal', icon: <CreditCard className="w-4 h-4 shrink-0" />, allowed: (isCompanyOwner || isSuperAdmin) && can('subscription') },
+      { id: 'settings', label: 'Configuración', section: 'Administración', keywords: 'empresa moneda tasas iva rif nit', icon: <SettingsIcon className="w-4 h-4 shrink-0" />, allowed: can('settings') },
+      { id: 'manual', label: 'Manual de usuario', section: 'Administración', keywords: 'ayuda guia documentacion', icon: <HelpCircle className="w-4 h-4 shrink-0" />, allowed: can('manual') },
     ]
-  }, [role, isSuperAdmin, isCompanyOwner, isMasterAccount, isDemo])
+  }, [role, isSuperAdmin, isCompanyOwner, isMasterAccount, isDemo, masterRoleOverride])
 
   const allowedItems = useMemo(() => navItems.filter(n => n.allowed), [navItems])
 

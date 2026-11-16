@@ -3973,3 +3973,459 @@ ROLLBACK;
    - `20261114000064_devoluciones_compra_con_iva` (`2ffe1235-f9b5-4441-9322-bf6dbbe23259`, `aplicado`, `2026-11-14 22:58:11 UTC`).
 3. **Estado de repositorio:** archivos creados en `supabase/migrations/`, registrados en `supabase/MIGRATIONS.md` y añadidos como paquete `iva_compras` en `src/lib/sqlScripts.ts`. Pendiente de configuración operativa: asignar `iva_descontable` e `iva_pendiente` en `acc_settings` de las empresas con contabilidad activa antes de registrar compras con IVA.
 
+---
+
+# AUDITORÍA INTEGRAL FASE B — IVA EN COMPRAS
+
+> **Alcance y metodología:** auditoría técnica independiente de código fuente, migraciones SQL, políticas RLS, RPCs `SECURITY DEFINER`, matriz de permisos, motor contable `acc_*`, Formulario 300, UI React y paridad con el modo demo (`src/lib/supabase.ts`), realizada en modo **solo lectura** (sin ejecutar SQL en Supabase ni pruebas E2E en navegador, y sin modificar archivos de aplicación ni de migraciones). Toda evidencia proviene de inspección directa del snapshot del repositorio (commit de referencia de Fase B `45d94dd`) y de los registros documentados en `Lee` y `supabase/MIGRATIONS.md`.
+
+---
+
+## 1. Estado real del repositorio y migraciones
+
+1. **Snapshot del código en el entorno:** el workspace analizado contiene el snapshot del código del commit de referencia de Fase B (`45d94dd`); el directorio `.git` no forma parte de este snapshot exportado, por lo que no hay historial local de commits posteriores a `45d94dd` ni commits sin empujar verificables por `git log`.
+2. **Migraciones existentes en `supabase/migrations/`:** existen **88 archivos `.sql`** + `README.md`. Todas las migraciones documentadas en `supabase/MIGRATIONS.md` están en disco **excepto una**, y existe un conflicto de numeración:
+   - **Migración faltante en el repositorio (`000062`):** `20261113000062_blindaje_cartera_devoluciones_y_multipagos.sql` figura como **aplicada** en la base viva (`2026-11-14 00:28:14 UTC`, `sql_editor_manual`, actualizada para incluir `sale_payments.method = 'fiado'` en `acc_reconcile()`), pero **no existe archivo `.sql`** en `supabase/migrations/`.
+   - **Numeración duplicada (`000040`):** coexisten `20261105000040_restringir_ejecucion_anon_funciones_privilegiadas.sql` y `20261107000040_bitacora_sql_trazabilidad_base.sql`.
+   - **Migraciones de estado parcial / nombre divergente (`MIGRATIONS.md`):** `20261105000002_aislamiento_datos_por_empresa.sql` figura sin verificar (sus políticas fueron reemplazadas) y `20261112000055_seguridad_confiabilidad_turnos_caja.sql` consta por verificar frente a `blindaje_ciclo_comercial_caja_y_contabilidad` (consolidada finalmente en `000061`).
+3. **Migraciones de Fase A / Fase B de IVA en compras verificadas en disco y en `src/lib/sqlScripts.ts`:**
+   - `supabase/migrations/20261114000063_fase_a_iva_compras_contabilidad.sql` (2,518 líneas): columnas fiscales en `purchases`, `kardex_seq` + `kardex.seq`/`seq_verified` + `trg_kardex_assign_seq`, `purchase_iva_adjustments`, `_acc_resolve_purchase_vat_account`, `_registrar_compra_impl`, `registrar_compra` (2/3/4/8 params), `registrar_compra_con_iva`, `acc_post_purchase`, `acc_reverse_purchase_entries`, `clasificar_iva_compra`, `anular_compra`, `dian_calcular_formulario_300` y `acc_reconcile()`.
+   - `supabase/migrations/20261114000064_devoluciones_compra_con_iva.sql` (596 líneas): columnas fiscales en `purchase_devolutions`, `purchase_devolution_lots`, `acc_post_purchase_devolution`, `registrar_devolucion_compra` y `anular_devolucion_compra`.
+   - Paquete `iva_compras` en `src/lib/sqlScripts.ts:50-61`: incluye ambos archivos en orden `000063` → `000064` y declara `targetTables: ['purchase_iva_adjustments', 'purchase_devolution_lots']`.
+4. **Funciones base asumidas por `000063` y `000064` que no se redefinen en `supabase/migrations/`:** `public._ctx(...)`, `public.acc_system_entry(...)`, `public.acc_reverse_source(...)`, `public.acc_period_is_open(...)`, `public.acc_post_sale(...)`, `public.my_company()`, `public.current_company_id()` y `public._es_finito(...)` existen como baseline de la base de datos o fueron creadas/ajustadas fuera de los 88 archivos actuales (lo cual impide auditar localmente el cuerpo de `_ctx`, `acc_system_entry` y `acc_reverse_source` desde archivos locales sin acceso de ejecución SQL).
+
+---
+
+## 2. Resumen ejecutivo
+
+La implementación SQL de Fase A (`000063` y `000064`) logró un núcleo sólido para trazabilidad por lotes/`kardex.seq`, separación de IVA descontable/pendiente/costo y cálculo del Formulario 300 dentro de la RPC oficial. Sin embargo, al auditar la integración completa **Frontend → Servicios → RLS → RPCs PostgreSQL → Modo Demo** en la Fase B, se detectan **fallas arquitectónicas críticas y de alto impacto** que impiden aprobar el despliegue a producción tal como está:
+
+1. **Ruptura sistémica del contrato de permisos:** la UI (`Purchases.tsx`, `Devolutions.tsx`, `AccountingSetup.tsx`, `Payables.tsx`), la fuente de verdad de menú (`pagePermissions.ts`) y la base de datos (`_ctx(...)`, `can_view_accounting()`, `is_manager()`, `recibir_orden_compra`) se contradicen en **todos** los roles operativos secundarios (`admin_empresa`, `gerente`, `almacen`, `comprador` y `contador`), exponiendo botones que fallan en PostgreSQL con `No autorizado` o ocultando información legítima por RLS.
+2. **Evasión completa del módulo de IVA en dos entradas operativas de compras:** `PurchaseInvoiceScannerModal.tsx` (escáner de facturas) y `PurchaseOrders.tsx` / `recibir_orden_compra` llaman a la firma legada `registrar_compra` **sin parámetros de IVA**, grabando compras gravadas como `'sin_iva'` e inflando el costo del inventario con IVA recuperable.
+3. **Desincronización permanente de inventario multibodega (`warehouse_stock`):** las recepciones desde órdenes de compra alimentan `warehouse_stock`, pero ni `anular_compra`, ni `registrar_devolucion_compra`, ni `anular_devolucion_compra` actualizan `warehouse_stock` ni `warehouse_movements`.
+4. **Brecha crítica entre `acc_reconcile()` y `acc_post_pending()`:** `acc_reconcile()` (y F300) exige `e.status = 'contabilizado'` en asientos de compras/devoluciones, mientras `acc_post_pending()` no filtra `e.status = 'contabilizado'`; si un asiento de `'registro'` fue reversado (`status = 'reversado'`), el sistema entra en un bucle donde reporta documentos pendientes pero `acc_post_pending()` no los vuelve a contabilizar.
+5. **Fallback de Formulario 300 incompleto y datos simulados en DIAN:** si falla la RPC en `dianTaxService.ts`, el cálculo de respaldo ignora por completo `purchase_devolutions` y `purchase_iva_adjustments`; además la pestaña de Certificados en `DianComplianceCenter.tsx` imprime valores y NITs fijos simulados (`PROVEEDOR GENERAL S.A.S.`, `$15.000.000`).
+
+---
+
+## 3. Hallazgos críticos (ordenados por impacto)
+
+| ID | Severidad | Componente / Ubicación | Descripción exacta del fallo e impacto |
+|---|---|---|---|
+| **C-01** | **CRÍTICO** | `Devolutions.tsx:51,498,700` vs `pagePermissions.ts:74` vs `000064:202,440` (`000063:1585`) | **Contradicción triple de permisos en Devoluciones a Proveedor:** `Devolutions.tsx:51` usa `isManager = canManageInventory(user?.role)` (`admin, dueno, admin_empresa, gerente, almacen`), habilitando la pestaña Proveedores, `+ Devolver a proveedor` y `Anular`. Pero `registrar_devolucion_compra` (`000064:202`) y `anular_devolucion_compra` (`000064:440`) exigen `public._ctx(array['admin', 'dueno'])`, bloqueando en PostgreSQL con `No autorizado` a **`admin_empresa`, `gerente` y `almacen`**. Además `pagePermissions.ts:74` usa `canRegisterSales` para la ruta `devolutions`: **`almacen` ni siquiera ve la página en el menú** (pese a estar en `canManageInventory`), mientras `vendedor`/`cajero` sí entran a la página. |
+| **C-02** | **CRÍTICO** | `Purchases.tsx:140-141` vs `pagePermissions.ts:82` vs `000063:404,1356` | **Contradicción triple en Compras y Anulación de Compras:** `pagePermissions.ts:82` da acceso a `purchases` a `admin, dueno, admin_empresa, gerente, comprador, contador`. En `Purchases.tsx:140`, `canManage = canManageInventory(user?.role)`: (a) **`comprador` queda bloqueado en `readOnly = true`** dentro del módulo diseñado para su cargo; (b) **`admin_empresa`, `gerente` y `almacen` ven activos los botones `+ Nueva Compra` y `Anular`**, pero `_registrar_compra_impl` (`000063:404`) y `anular_compra` (`000063:1356`) exigen `array['admin', 'dueno']`, provocando error en tiempo real al guardar o anular. |
+| **C-03** | **CRÍTICO** | `can_view_accounting()` (`20261101000004:18`) vs `is_manager()` (`20261105000001:168`) vs `canViewAccounting()` (`auth.tsx:349-357`) vs `clasificar_iva_compra` (`000063:943`) | **Fractura entre RLS de lectura contable y RPCs de contabilidad/IVA:** `can_view_accounting()` solo autoriza `('admin', 'dueno', 'contador')`. Como las políticas `SELECT` de `acc_accounts`, `acc_entries`, `acc_lines`, `acc_settings`, `acc_closings` y `acc_periods` dependen de `can_view_accounting()`: **(1) `admin_empresa` y `gerente` NO pueden leer `acc_accounts` ni `acc_settings`** (ven pantalla vacía en `AccountingSetup.tsx` aunque `is_manager()` y `clasificar_iva_compra` sí los autoricen); **(2) `contador` SÍ lee `acc_*` y SÍ puede ejecutar `clasificar_iva_compra`, pero `is_manager()` lo excluye** de `acc_reconcile()` (`000063:2052`), `acc_post_pending()` y `acc_save_settings()`, haciendo fallar los botones que `AccountingSetup.tsx:42` le muestra activos. |
+| **C-04** | **CRÍTICO** | `PurchaseInvoiceScannerModal.tsx:373-384` y `PurchaseOrders.tsx:690,747` + `20261103000013:458-501` | **Omisión total del modelo de IVA en Escáner de Facturas y Órdenes de Compra:** ambos flujos llaman la firma de 2/3/4 parámetros de `registrar_compra`, la cual por compatibilidad fuerza `p_tax_status = 'sin_iva'`, `p_tax = 0` (`000063:654-687`). Si una factura escaneada o una orden de compra recibida incluye IVA del 19% o 5%, **el sistema lo registra como `'sin_iva'`, omite la casilla 74 / cuenta 2408 descontable y capitaliza o pierde la discriminación tributaria sin advertencia al usuario**. Adicionalmente, `recibir_orden_compra` (`20261103000013:391`) usa `public._ctx(NULL)` (permite invocarla a roles no autorizados, que luego fallan dentro de `registrar_compra` si no son `admin`/`dueno`). |
+| **C-05** | **CRÍTICO** | `000063:1486-1548`, `000064:359-429`, `000064:545-580` | **Descuadre estructural de inventario multibodega (`warehouse_stock`):** las recepciones desde `PurchaseOrders.tsx:699` incrementan `warehouse_stock` vía `register_warehouse_movement` / `recibir_orden_compra`. Sin embargo, **`anular_compra`, `registrar_devolucion_compra` y `anular_devolucion_compra` solo modifican `products.stock` global** y jamás ajustan `warehouse_stock` ni insertan en `warehouse_movements`, rompiendo el invariante `SUM(warehouse_stock.quantity) == products.stock`. |
+
+---
+
+## 4. Hallazgos altos
+
+| ID | Severidad | Componente / Ubicación | Descripción exacta del fallo e impacto |
+|---|---|---|---|
+| **A-01** | **ALTO** | `20261101_gastos_y_devoluciones_completas.sql:1095,1173` vs `000063:1975,1989,2303,2328` | **`acc_post_pending()` ignora `e.status = 'contabilizado'`:** tanto `acc_reconcile()` (`compras_pendientes`, `devoluciones_compra_pendientes`) como `dian_calcular_formulario_300` verifican `not exists (... source_event = 'registro' and e.status = 'contabilizado')`. En contraste, `acc_post_pending()` omite `and e.status = 'contabilizado'`. Si un asiento original de compra o devolución fue reversado (`status = 'reversado'`), el sistema alerta documentos sin contabilizar, pero `acc_post_pending()` **los omite indefinidamente** y la conciliación queda bloqueada. |
+| **A-02** | **ALTO** | `dianTaxService.ts:115-228` | **Fallback roto del Formulario 300:** cuando `dian_calcular_formulario_300` falla o no existe, el cálculo de respaldo en TypeScript fija `devoluciones_compras_iva_descontable: 0` (línea 224), **ignora por completo `purchase_devolutions`** e **ignora `purchase_iva_adjustments`** (reclasificaciones de `'pendiente'` a `'descontable'` de períodos previos). Además descarta silenciosamente `.error` en `salesQuery`, `devQuery` y `purQuery` (líneas 176-184). |
+| **A-03** | **ALTO** | `Purchases.tsx:1419-1513` y `000063:413-589` | **Limitación de cabecera única para IVA en compras mixtas:** solo existe un `tax_status`, un `tax_rate` y un `tax_included` para toda la factura. Es imposible registrar correctamente en la misma factura un producto gravado al 19%, otro al 5% y otro exento/excluido (0%); el SQL prorratea el IVA por proporción de subtotal sobre **todos** los ítems (`000063:518-534`), contaminando el costo/IVA atribuido a cada producto y distorsionando devoluciones parciales posteriores. |
+| **A-04** | **ALTO** | `Purchases.tsx:480-496, 1055` | **Inconsistencia en `customTax` manual:** al ingresar un IVA manual (monto diferente a `subtotal * rate`), `Purchases.tsx:490` envía igualmente `p_tax_rate: parsedRate` (ej. `19`) en lugar de `null` o tasa recalculada. La tarjeta de detalle (`Purchases.tsx:1055`) imprime `"IVA compra (19%)"` aunque el impuesto aplicado no corresponda al 19%. |
+| **A-05** | **ALTO** | `DianComplianceCenter.tsx:880-946` | **Certificados de retención con datos simulados fijos (hardcoded):** la pestaña *Certificados* del Centro DIAN no consulta proveedores ni retenciones reales; renderiza e imprime siempre `"PROVEEDOR GENERAL S.A.S."`, NIT `"900.876.543-1"`, base `"$15.000.000"`, tarifa `"2.5%"` y retenido `"$375.000"`, lo cual representa un riesgo tributario grave si un usuario imprime y entrega el documento como oficial. |
+| **A-06** | **ALTO** | `DianComplianceCenter.tsx:131-142, 153-166` y `000063:850,1400,1811` | **Asimetría de zona horaria (`America/Caracas` vs navegador vs `acc_settings.timezone`) y consulta sin paginación ni error check:** `000063` usa `'America/Caracas'` (UTC-4) como fallback en 3 puntos para empresas sin `acc_settings` (contraviniendo operación DIAN Colombia UTC-5); en el cliente, `DianComplianceCenter.tsx:134-135` envía `start.toISOString()` en zona horaria local del navegador; además `pendRes` (línea 161) está limitado a `.limit(50)` y **no verifica `pendRes.error`**, pudiendo ocultar compras pendientes de clasificar cuando hay error RLS o más de 50 facturas. |
+| **A-07** | **ALTO** | `Payables.tsx:41-43,85,107` y `Purchases.tsx:572-579` y `dianTaxService.ts:237-247,338,384,423` | **Silenciamiento de errores y desfase en Cuentas por Pagar:** `Payables.tsx` permite abrir la ruta por `canManageInventory` (`pagePermissions.ts` / `auth.tsx`), pero `load()` aborta sin mensaje cuando `!isManager` (`dueno | admin`), mostrando una pantalla vacía a `admin_empresa, gerente, almacen`; `Purchases.tsx:576` ignora `error` al leer `purchase_iva_adjustments`; `getFormulario350` tiene `catch {}` vacío y `getExogenaRows` ignora `.error` en 3 queries. |
+| **A-08** | **ALTO** | `000063:135-170` (`purchase_iva_adjustments`) | **Ausencia de índice único parcial para blindaje estructural:** aunque `clasificar_iva_compra` usa `FOR UPDATE` + `EXISTS`, `purchase_iva_adjustments` no posee un índice `CREATE UNIQUE INDEX ... ON public.purchase_iva_adjustments (purchase_id) WHERE status = 'aplicado'` en BD que garantice a nivel de esquema que nunca existan dos reclasificaciones aplicadas sobre una misma compra. |
+
+---
+
+## 5. Hallazgos medios y bajos
+
+| ID | Severidad | Componente / Ubicación | Descripción exacta del fallo e impacto |
+|---|---|---|---|
+| **M-01** | **MEDIO** | `src/lib/supabase.ts:3578-3809, 4154-4309, 7480-7652` | **Falta de paridad entre modo Demo y SQL real:** los handlers demo no validan RBAC ni `company_id`, `clasificar_iva_compra` no valida movimientos posteriores en `kardex` ni genera asientos `acc_entries`, `anular_compra` y `anular_devolucion_compra` ignoran `product_lots` / `purchase_devolution_lots` y no replican los guardas de `iva_cost_expense > 0` ni de cambio de `pur.tax_status`. (Ver detalle en §15). |
+| **M-02** | **MEDIO** | `000063:1032-1220` | **Caso borde NIIF en `clasificar_iva_compra` tras venta total y devolución de cliente posterior:** si un lote (`tracks_expiry = true`) se vende por completo antes de reclasificarse de `'pendiente'` a `'costo'`, `clasificar_iva_compra` imputa el 100% del IVA a `costo_ventas`. Si posteriormente el cliente devuelve unidades de esa venta (`registrar_devolucion`), el reingreso entra al costo previo del producto/lote sin re-capitalizar la fracción proporcional del IVA ya enviada al gasto. |
+| **M-03** | **MEDIO** | `000063:596,1207,1530` y `000064:383,562` | **Deriva acumulada por redondeo a 2 decimales de `products.cost`:** documentado y confirmado previamente; cuando hay divisiones no exactas (p. ej. 15u / 4u), `round(..., 2)` en el costo promedio acumulado acumula diferencias de centavos frente al auxiliar contable de inventario. |
+| **M-04** | **MEDIO** | `Purchases.tsx:1007-1097` y `buildPurchaseDoc` (`Purchases.tsx:98-134`) | **Comprobante imprimible/WhatsApp incompleto en IVA:** `buildPurchaseDoc` y `buildShareText` no muestran el desglose explícito de subtotal gravado, tarifa/estado del IVA (`descontable`/`pendiente`/`costo`) ni el ajuste por reclasificación en el comprobante enviado al proveedor o archivado en PDF. |
+| **M-05** | **BAJO** | `PurchaseInvoiceScannerModal.tsx:334-347` y `Purchases.tsx:785-805` | **Creación directa de catálogo vía `.from('products').insert(...)` sin `company_id` explícito en payload:** depende 100% de defaults/triggers/RLS en `products` (riesgo menor si RLS exige `company_id = my_company()`, pero rompe la uniformidad de RPCs). Adicionalmente, si `Purchases.tsx` recibe un borrador desde `consumePurchaseDraft()` con ítems cuya creación viene de otros módulos, pre-carga estado por defecto `'sin_iva'`. |
+| **B-01** | **BAJO** | `Taxes.tsx:49-78` y `supabase/migrations/` | **Desfase documental/estructural:** `Taxes.tsx` continúa advirtiendo al pie que corresponde solo a ventas y no descuenta devoluciones (comportamiento esperado pero propenso a confusión frente a `DianComplianceCenter.tsx`); en `supabase/migrations/` falta `000062` en disco y hay prefijo `000040` duplicado. |
+
+---
+
+## 6. Auditoría detallada de permisos y roles
+
+### 6.1 Matriz comparativa real (Menú vs UI vs RLS/SQL)
+
+Fuentes verificadas: `src/lib/pagePermissions.ts`, `src/lib/auth.tsx`, `docs/PERMISOS_POR_ROL.md`, `Purchases.tsx`, `Devolutions.tsx`, `DianComplianceCenter.tsx`, `AccountingSetup.tsx`, `Payables.tsx`, `PurchaseOrders.tsx`, `20261101000004`, `20261105000001`, `20261103000013`, `20261114000063`, `20261114000064`.
+
+| Operación / Recurso | Menú (`pagePermissions.ts`) | UI / Botón (`src/pages/*`) | RPC / RLS Real en PostgreSQL | Roles que ven botón pero **FALLAN** en BD | Roles que **DEBERÍAN** operar pero la UI los bloquea |
+|---|---|---|---|---|---|
+| **Ver página `purchases`** | `admin, dueno, admin_empresa, gerente, comprador, contador` (`:82`) | `Purchases.tsx:140` (`canManageInventory`: excluye a `comprador` y `contador`, incluye a `almacen`) | `purchases SELECT` (por `company_id`) | Ninguno en lectura básica | `comprador` entra en **solo lectura**; `almacen` no ve menú pero tiene bandera `canManage` |
+| **Registrar compra / con IVA** (`registrar_compra*`) | Igual que arriba | `Purchases.tsx:140`: `admin, dueno, admin_empresa, gerente, almacen` | `_registrar_compra_impl`: `_ctx(array['admin', 'dueno'])` (`000063:404`) | **`admin_empresa`, `gerente`, `almacen`** (al guardar: error `No autorizado`) | **`comprador`** (la UI le deshabilita el botón aunque `pagePermissions.ts` y `PERMISOS_POR_ROL.md` le dan compras) |
+| **Anular compra** (`anular_compra`) | Igual que arriba | `Purchases.tsx:140`: `admin, dueno, admin_empresa, gerente, almacen` | `anular_compra`: `_ctx(array['admin', 'dueno'])` (`000063:1356`) | **`admin_empresa`, `gerente`, `almacen`** | Coherente que `almacen`/`comprador` no anulen |
+| **Reclasificar IVA** (`clasificar_iva_compra`) | `purchases` / `dian_reports` (`contador` también) | `Purchases.tsx:144` & `DianComplianceCenter.tsx:93`: `admin, dueno, admin_empresa, gerente, contador` | `clasificar_iva_compra`: `_ctx(array['admin', 'dueno', 'admin_empresa', 'gerente', 'contador'])` (`000063:943`) | **Coincide** en los 5 roles. Sin embargo, si contabilidad está activa, **`admin_empresa`/`gerente` pueden fallar o no ver cuentas** en `AccountingSetup` por C-03 | Ninguno |
+| **Ver página `devolutions`** | `canRegisterSales`: `admin, dueno, admin_empresa, gerente, vendedor, cajero` (`:74`) | `Devolutions.tsx:51` (`canManageInventory`) | `purchase_devolutions SELECT` (por `company_id`) | `vendedor` y `cajero` entran a la ruta y pueden ver pestaña Proveedores en solo lectura | **`almacen`** no puede abrir `/devolutions` desde el menú (`pagePermissions.ts`) pese a ser rol de inventario |
+| **Registrar devolución proveedor** (`registrar_devolucion_compra`) | `canRegisterSales` (`:74`) | `Devolutions.tsx:51,498`: `admin, dueno, admin_empresa, gerente, almacen` | `000064:202` (y `000063:1585`): `_ctx(array['admin', 'dueno'])` | **`admin_empresa`, `gerente`** (y `almacen` si accediera a la vista) | Incoherencia directa entre UI (`canManageInventory`) y SQL (`admin`, `dueno`) |
+| **Anular devolución proveedor** (`anular_devolucion_compra`) | `canRegisterSales` (`:74`) | `Devolutions.tsx:51,700`: `admin, dueno, admin_empresa, gerente, almacen` | `000064:440`: `_ctx(array['admin', 'dueno'])` | **`admin_empresa`, `gerente`** (y `almacen`) | Misma incoherencia crítica |
+| **Recibir orden de compra** (`recibir_orden_compra`) | `purchase_orders` (`:83`: `admin, dueno, admin_empresa, gerente, comprador, almacen, contador`) | `PurchaseOrders.tsx:165`: `canManageInventory` | `20261103000013:391`: `_ctx(NULL)` → llama `registrar_compra` (`admin, dueno`) | **`admin_empresa`, `gerente`, `almacen`** (pasan `recibir_orden_compra` pero fallan dentro de `registrar_compra`) | `comprador` queda en modo lectura; además SQL permite a roles ajenos iniciar `recibir_orden_compra` antes de chocar |
+| **Cuentas por pagar** (`cuentas_por_pagar`) | `payables` (`:81`: `canManageInventory`) | `Payables.tsx:41-43,85`: `isManager` (`dueno | admin`) | `cuentas_por_pagar` exige `dueno`/`admin` | **`admin_empresa`, `gerente`, `almacen`** ven pantalla en blanco (`load()` ni consulta) | Desalineación entre `pagePermissions` y `Payables.tsx` |
+| **Lectura plan de cuentas y `acc_settings`** | `accounting_setup` (`:90`: `canViewAccounting`) | `AccountingSetup.tsx:42`: `admin, dueno, admin_empresa, gerente, contador` | RLS `can_view_accounting()` (`20261101000004:18`): `admin, dueno, contador` | **`admin_empresa`, `gerente`** ven pantalla vacía ("Primero crea tu plan de cuentas") aunque `is_manager()` les da escritura | Ninguno en `admin/dueno/contador` |
+| **Conciliar / Contabilizar / Guardar `acc_settings`** | `accounting_setup` (`:90`) | `AccountingSetup.tsx:42`: `canViewAccounting` | `is_manager()` (`20261105000001:168`): `admin, dueno, admin_empresa, gerente` | **`contador`** ve los botones *Guardar*, *Conciliar*, *Contabilizar pendientes*, pero SQL lo rechaza | **`admin_empresa`, `gerente`** no pueden leer `acc_accounts` por RLS para mapear cuentas |
+| **Formulario 300 / Centro DIAN** (`dian_calcular_formulario_300`) | `dian_reports` (`:95`: `canViewAccounting`) | `DianComplianceCenter.tsx:90`: `admin, dueno, admin_empresa, gerente, contador` | `000063:1815-1824`: cualquier perfil **activo de esa misma empresa** (`p_company_id = current_company_id()`) | Ninguno con perfil activo en la empresa | El menú/UI filtra correctamente, pero en BD falta exigir rol autorizado (p. ej. `can_view_accounting` o `is_manager`) para no exponer resumen tributario completo vía RPC directa a `vendedor`/`cajero` |
+
+### 6.2 Contrato de permisos recomendado (Principio de Mínimo Privilegio)
+
+Para alinear la regla de `AGENTS.md` (fuente única `src/lib/pagePermissions.ts` sin que UI ni BD exijan distinto) sin ampliar privilegios destructivos a roles operativos bajos:
+
+1. **Compras (`registrar_compra*`):**
+   - **Permitir:** `['admin', 'dueno', 'admin_empresa', 'gerente', 'comprador', 'almacen']` (solo si el flujo de `almacen` incluye recepción física y según `pagePermissions.ts`, o definir explícitamente si `almacen` solo recibe órdenes de compra). Si el negocio desea que **`comprador` y `almacen`** puedan registrar compras, actualizar `Purchases.tsx` (en lugar de `canManageInventory` que deja fuera a `comprador`) y actualizar `_registrar_compra_impl` para aceptar exactamente los roles autorizados en `pagePermissions.ts` (`['admin', 'dueno', 'admin_empresa', 'gerente', 'comprador', 'almacen']` o sin `almacen`/`comprador` si solo aprueban gerentes).
+2. **Anulación de compras (`anular_compra`), Devoluciones a proveedor (`registrar_devolucion_compra`) y Anulación de devoluciones (`anular_devolucion_compra`):**
+   - Son operaciones **financieras, fiscales (mueven IVA, CxP, Caja y Kardex) y reversibles de alto riesgo**. No deben abrirse a `almacen` ni `vendedor` ni `comprador`.
+   - **Contrato seguro recomendado:** restringir **tanto el botón UI como la RPC SQL** a la gerencia de empresa: **`['admin', 'dueno', 'admin_empresa', 'gerente']`** (equivalente al `is_manager()` real de `20261105000001`). En `Devolutions.tsx`, separar explícitamente el permiso de devolución de clientes vs devolución a proveedor (`canManagePurchaseDevolutions`: solo `['admin', 'dueno', 'admin_empresa', 'gerente']`) y ajustar `pagePermissions.ts` si `almacen` solo opera inventario interno y no devoluciones monetarias.
+3. **Reclasificación de IVA (`clasificar_iva_compra`):**
+   - Mantener exactamente **`['admin', 'dueno', 'admin_empresa', 'gerente', 'contador']`** en UI y SQL (`000063:943`).
+4. **Contabilidad y Formulario 300 (`acc_*` y `dian_calcular_formulario_300`):**
+   - Unificar `can_view_accounting()` en SQL para que coincida con `auth.tsx:349-357` y `clasificar_iva_compra`: **`('admin', 'dueno', 'admin_empresa', 'gerente', 'contador')`** (incluyendo `active = true` y `company_id = my_company()`).
+   - Evaluar que `acc_reconcile()` y `acc_post_pending()` puedan ser ejecutados por `contador` si `AccountingSetup.tsx` le muestra el panel de conciliación, o restringir los botones de `acc_save_settings` / `acc_activate` / `acc_post_pending` en `AccountingSetup.tsx` únicamente a `is_manager()` (`admin, dueno, admin_empresa, gerente`), dejando el modo solo lectura + clasificación IVA para `contador`.
+   - En `dian_calcular_formulario_300` (`000063:1815`), agregar validación de rol (`['admin', 'dueno', 'admin_empresa', 'gerente', 'contador']`) además de pertenencia a la empresa, impidiendo que un `vendedor` o `cajero` consulte balances fiscales vía RPC directa.
+
+---
+
+## 7. Auditoría de compras, IVA y costos
+
+### 7.1 Comportamiento verificado del núcleo SQL (`_registrar_compra_impl`, `000063:388-652`)
+
+- **Firmas compatibles:** `registrar_compra(2/3/4 params)` delega en `_registrar_compra_impl(..., 0, 'sin_iva', null, false)`, preservando compatibilidad con llamadas anteriores. `registrar_compra(8 params)` y `registrar_compra_con_iva(...)` exponen `p_tax`, `p_tax_status`, `p_tax_rate`, `p_tax_included`.
+- **Validaciones fiscales y aritméticas:**
+  - `tax_status` permitido: `'sin_iva'`, `'descontable'`, `'pendiente'`, `'costo'`.
+  - Si `tax_status = 'sin_iva'`, rechaza `p_tax > 0`.
+  - Si `tax_status <> 'sin_iva'`: si `p_tax` es `NULL` o `0` y `p_tax_rate > 0`, calcula automáticamente el impuesto.
+    - `p_tax_included = true`: `v_tax := round(v_items_sum - (v_items_sum / (1 + v_tax_rate / 100.0)), 2)` y `v_subtotal := round(v_items_sum - v_tax, 2)`.
+    - `p_tax_included = false`: `v_tax := round(v_items_sum * (v_tax_rate / 100.0), 2)` y `v_subtotal := round(v_items_sum, 2)`.
+  - Si `p_tax > 0` explícito con `p_tax_included = true` (`Purchases.tsx:480` modo `customTax` con IVA incluido), `v_subtotal := round(v_items_sum - p_tax, 2)` siempre que `p_tax < v_items_sum`; si no incluido, `v_total := round(v_items_sum + p_tax, 2)`.
+  - Bloquea tasas negativas, tasas `> 100`, e IVA incluido `>= total` (base <= 0).
+- **Costo promedio e inventario (`products.cost`, `product_lots`):**
+  - El ajuste de cierre de redondeo en el último ítem (`v_idx = v_line_count`, `v_rem_base`/`v_rem_tax` en `000063:520-534`) garantiza que la suma de `items[].subtotal` y `items[].tax_amount` cuadre exactamente al centavo con `purchases.subtotal` y `purchases.tax`.
+  - Cuando `tax_status` es `'descontable'` o `'pendiente'`, `v_inv_add = v_line_base` (el IVA recuperable/pendiente **no** infla `products.cost` ni `product_lots.unit_cost`).
+  - Cuando `tax_status = 'costo'`, `v_inv_add = v_line_base + v_line_tax` (el IVA no recuperable **sí** se incorpora al costo promedio y a `product_lots.unit_cost`).
+  - `prev_cost` queda almacenado en cada elemento de `purchases.items` y en `product_lots.unit_cost` para respaldo de reversiones.
+
+### 7.2 Brechas detectadas en compras
+
+1. **Evasión en Escáner (`PurchaseInvoiceScannerModal.tsx:373-384`) y Órdenes de Compra (`PurchaseOrders.tsx:690,747` y `20261103000013:458-501`):** ambos canales usan la firma sin IVA. Una factura gravada registrada por estas vías queda marcada como `'sin_iva'` y todo el valor pagado entra a inventario sin discriminar IVA descontable.
+2. **Compras multi-tarifa / exentos + gravados (`A-03`):** el modelo solo soporta 1 tasa y 1 estado tributario por cabecera de factura (`purchases`), prorrateando linealmente sobre todos los productos.
+3. **`customTax` en `Purchases.tsx:490` (`A-04`):** envía `p_tax_rate: parsedRate` (el número de la lista desplegable, ej. `19`) junto al monto fijo editado manualmente, generando metadato engañoso en DB y vista de detalle.
+4. **Multibodega (`C-05`):** `_registrar_compra_impl` no recibe ni distribuye `warehouse_id`; solo `PurchaseOrders.tsx` llama luego `register_warehouse_movement`, mientras `Purchases.tsx` nunca actualiza `warehouse_stock`.
+
+---
+
+## 8. Auditoría de reclasificaciones de IVA (`clasificar_iva_compra`)
+
+Verificado en `000063:932-1330`:
+
+1. **Control de estado y duplicidad:**
+   - Solo permite reclasificar compras con `status = 'recibida'` y `tax_status = 'pendiente'`, hacia `'descontable'` o `'costo'`, dentro de `FOR UPDATE` sobre `purchases`.
+   - Bloquea doble reclasificación comprobando `v_pur.iva_classified_at is not null` y `exists (... purchase_iva_adjustments where status = 'aplicado')`. (Falta índice único parcial a nivel de tabla, ver **A-08**).
+2. **Bloqueo ante devoluciones previas:**
+   - Rechaza la reclasificación si la compra ya tiene devoluciones activas en `purchase_devolutions` (`000063:1004-1010`) — regla conservadora para evitar descuadres sobre remanentes devueltos. *(Nota: el Formulario 300 en líneas 1883-1891 contempla resta de devoluciones pendientes previas a `adj.created_at`, pero en la práctica la RPC impide que existan).*
+3. **Verificación cronológica y distinción Inventario Remanente vs Costo de Ventas (`'pendiente'` → `'costo'`):**
+   - **Con lote (`tracks_expiry = true`):** calcula `v_lot_rem = sum(qty_remaining)` y `v_lot_sold = v_net_qty - v_lot_rem` sobre los lotes de la compra (`source_type = 'compra'`). Prorratea el IVA de cada ítem: la fracción remanente (`amount_to_inventory`) ajusta el costo promedio del producto y el `unit_cost` proporcional de cada lote vivo (`000063:1150-1215`); la fracción vendida (`amount_to_expense`) se imputa a `costo_ventas`.
+   - **Sin lote (`tracks_expiry = false`):** exige `k.seq_verified = true` y verifica ausencia de movimientos posteriores en `kardex` (`k.seq > v_k_seq`). Si la compra es histórica (`seq_verified = false`) o existen ventas/ajustes/recompras posteriores verificables, **bloquea** la reclasificación a `'costo'` con excepción explícita (`000063:1100-1120`) sin dejar cambios parciales. *(Permite reclasificación fiscal directa a `'descontable'` porque esta no altera costo promedio ni unidades).*
+   - **Validación NIIF:** cuando `amount_to_inventory + amount_to_expense` presenta centavos de diferencia respecto al `tax` total por prorrata de lotes vendida/remanente, el residuo se asigna determinísticamente (`v_iva_cogs := round(v_net_line_tax - v_iva_inv, 2)`), garantizando partida doble exacta.
+4. **Defectos identificados en reclasificaciones:**
+   - Si el usuario que reclasifica es `admin_empresa` o `gerente` con contabilidad activa, puede estar bloqueado en la lectura de configuración/cuentas en UI por `C-03`, y `clasificar_iva_compra` exige `acc_period_is_open(v_co, v_reclass_date)`.
+   - Caso borde **M-02** si un cliente devuelve mercancía después de reclasificar un lote 100% vendido a `'costo'`.
+   - `Purchases.tsx:572-579` silencia errores de consulta a `purchase_iva_adjustments`.
+
+---
+
+## 9. Auditoría de devoluciones y anulaciones
+
+### 9.1 Devoluciones a proveedor (`registrar_devolucion_compra`, `000064:189-430`)
+
+- **Prorrata base / IVA:** en la última unidad devuelta (`v_returned + p_quantity = v_bought`), liquida exacto el saldo restante de base (`v_bought_amt - v_returned_amt`) y de IVA (`v_bought_tax - v_returned_tax`) para que múltiples devoluciones parciales sumen exactamente el 100% de la factura sin residuos de centavos (`000064:275-305`).
+- **Trazabilidad y guardián histórico:**
+  - Si `tracks_expiry = true`: descuenta FIFO/por fecha de vencimiento de `product_lots` de la compra y guarda el detalle exacto en `purchase_devolution_lots` (`lot_id`, `quantity`, `lot_unit_cost`).
+  - Si `tracks_expiry = false`: exige `k.seq_verified = true` y **bloquea si existe cualquier movimiento posterior verificable** (`k.seq > v_k_seq`, ignorando únicamente devoluciones anuladas de esa misma compra).
+- **Impacto según `tax_status_snapshot`:**
+  - `'descontable'` o `'pendiente'`: `inventory_credit = base` (solo la base sale de inventario) y `tax_amount` revierte la cuenta `iva_descontable` o `iva_pendiente`; el proveedor devuelve/abona `base + tax`.
+  - `'costo'`: `inventory_credit = base + tax` (porque el IVA había sido capitalizado al inventario).
+  - `'sin_iva'`: `tax_amount = 0`, `inventory_credit = amount`.
+
+### 9.2 Anulación de devoluciones (`anular_devolucion_compra`, `000064:433-591`)
+
+- **Bloqueos de seguridad verificados:**
+  - Bloquea si la devolución ya está `'anulada'`.
+  - Bloquea si la compra original (`v_pur`) está `'anulada'`.
+  - Bloquea si la compra fue reclasificada **después** de la devolución (`v_pur.iva_classified_at > d.created_at`).
+  - Verifica período contable abierto antes de mutar datos (`acc_period_is_open`).
+  - **Con lotes (`tracks_expiry = true`):** exige registros en `purchase_devolution_lots` (si es devolución histórica sin registro de lotes, bloquea con mensaje explícito) y restaura `qty_remaining` exacto de cada lote afectado, recalculando el costo promedio ponderado con `lot_unit_cost`.
+  - **Sin lotes (`tracks_expiry = false`):** verifica `kardex.seq_verified = true` de la entrada/salida de devolución y **bloquea si hubo movimientos posteriores** (`k.seq > v_dev_seq`), recalculando el costo promedio restaurado con `d.inventory_credit`.
+- **Reversión contable:** invoca `acc_reverse_purchase_entries(v_co, 'devolucion_compra', d.id, 'registro', ...)` con motivo `'Anulación de devolución a proveedor'`.
+
+### 9.3 Anulación de compras (`anular_compra`, `000063:1335-1569`)
+
+- Bloquea si tiene `iva_cost_expense > 0` (parte del IVA reclasificado ya enviado a costo de ventas), devoluciones activas, pagos a proveedores activos o período contable cerrado.
+- Verifica lotes intactos o ausencia de movimientos `seq_verified = true` posteriores en `kardex` (ignorando devoluciones anuladas de esa misma compra).
+- Al calcular la reversión del costo de inventario, suma cualquier `purchase_iva_adjustments.amount_to_inventory` aplicado cuando `to_status = 'costo'`.
+- **Defecto crítico compartido (`C-05`):** ninguna de las tres funciones anteriores (`anular_compra`, `registrar_devolucion_compra`, `anular_devolucion_compra`) revierte ni restaura `warehouse_stock`.
+- **Defecto crítico de permisos compartido (`C-01`, `C-02`):** las tres funciones restringen `_ctx(array['admin', 'dueno'])`, dejando fuera a `admin_empresa` y `gerente` que ven los botones en UI.
+
+---
+
+## 10. Auditoría contable y conciliación (`acc_*`)
+
+1. **Asientos automáticos (`acc_post_purchase`, `acc_post_purchase_devolution`, `acc_reverse_purchase_entries`):**
+   - `acc_post_purchase` (`000063:775-910`) arma líneas por ítem/totales cuadradas al centavo:
+     - `'descontable'`: Débito `inventario` (subtotal) + Débito `iva_descontable` (`tax`) vs Crédito `caja`/`bancos`/`cxp` (total).
+     - `'pendiente'`: Débito `inventario` (subtotal) + Débito `iva_pendiente` (`tax`) vs Crédito `caja`/`bancos`/`cxp` (total).
+     - `'costo'`: Débito `inventario` (`subtotal + tax`) vs Crédito medio de pago/CxP (`total`).
+     - `'sin_iva'`: Débito `inventario` (`total`) vs Crédito medio de pago/CxP (`total`).
+   - `_acc_resolve_purchase_vat_account` (`000063:345-385`) **no usa fallback silencioso** a cuentas genéricas (`impuestos` / `2408` de ventas): exige explícitamente `s.map->>'iva_descontable'` o `s.map->>'iva_pendiente'` con `type = 'activo'`, `nature = 'debito'`, `is_postable = true` y `active = true`.
+   - `acc_post_purchase_devolution` (`000064:75-186`) genera crédito a `inventario` por `inventory_credit`, crédito a `iva_descontable`/`iva_pendiente` (cuando `tax_status_snapshot` es descontable/pendiente) y débito a `caja`/`bancos`/`cxp`.
+   - `acc_reverse_purchase_entries` (`000063:300-343`) revierte entradas contabilizadas vía `acc_reverse_source(...)`.
+2. **Conciliación (`acc_reconcile()`, `000063:2030-2510`):**
+   - Emite siempre las 8 categorías clave solicitadas (`ventas`, `ventas_pendientes`, `compras`, `compras_reclasificacion_inv`, `devoluciones_compra_inv`, `iva_compras_costo_gasto`, `iva_compras_descontable`, `iva_compras_pendiente`) más la alerta `iva_compras_otros_asientos` si existen asientos manuales que toquen 1.1.05/1.1.06.
+   - Respeta `e.status = 'contabilizado'`, elimina `greatest(0, ...)` para que descuadres negativos sean visibles, filtra por `(created_at at time zone s.timezone)::date >= s.start_date` e incluye el fix `sale_payments.method = 'fiado'` heredado de `000062`.
+3. **Bug detectado en `acc_post_pending()` (`A-01`):**
+   - En `20261101_gastos_y_devoluciones_completas.sql:1095-1096, 1173-1174`, `acc_post_pending()` busca compras/devoluciones donde `not exists (select 1 from acc_entries e where ... source_event = 'registro')` **sin exigir `e.status = 'contabilizado'`**. Si un asiento `'registro'` quedó `'reversado'` (manteniendo activa la compra o devolución), `acc_reconcile()` lo marca como pendiente (`k > 0`), pero `acc_post_pending()` devuelve `0` contabilizados.
+4. **Bloqueo de permisos en `acc_*` (`C-03`):**
+   - `can_view_accounting()` (`20261101000004:18`) deja fuera a `admin_empresa` y `gerente` en las políticas RLS de lectura de todas las tablas `acc_*`.
+
+---
+
+## 11. Auditoría de Formulario 300 (`dian_calcular_formulario_300` vs UI vs fallback)
+
+1. **RPC `dian_calcular_formulario_300(p_company_id, p_start_date, p_end_date)` (`000063:1770-2027`):**
+   - Seguridad: rechaza `auth.uid() is null`, `p_company_id <> current_company_id()`, o usuario sin perfil activo en `v_cur_co` con SQLSTATE `42501`. *(Falta restricción por rol dentro de la empresa).*
+   - Casilla 66 y 74: suma `purchases` nacidas directamente como `'descontable'` (`iva_classified_at is null` y `created_at` en el período) + reclasificaciones aplicadas en el período (`adj.to_status = 'descontable'` por `adj.created_at` en el período, permitiendo compras de períodos anteriores reclasificadas hoy) − devoluciones activas con `tax_status_snapshot = 'descontable'` (`pd.created_at` en el período).
+   - Evita doble contabilización y doble deducción:
+     - Si una compra nace `'descontable'`, se cuenta por `p.created_at` (`iva_classified_at is null`).
+     - Si nace `'pendiente'` y se reclasifica a `'descontable'` en el mismo período o en uno posterior, sale de pendientes del período de compra (por estado actual `p.tax_status`) y entra a Casilla 66/74 únicamente en el período de `adj.created_at`.
+     - Las devoluciones ocurridas antes de una reclasificación tienen `tax_status_snapshot = 'pendiente'` y no se restan de Casilla 74; las posteriores tienen `tax_status_snapshot = 'descontable'` y sí se restan.
+   - Banderas de integridad: reporta `compras_sin_contabilizar_count`, `devoluciones_compra_sin_contabilizar_count` y `es_borrador_no_conciliado`.
+2. **Desajuste en fallback frontend (`dianTaxService.ts:115-228`, `A-02`):**
+   - Si la RPC falla por red, permisos o esquema, `getFormulario300()` cae en consultas directas desde el navegador donde **fija `devoluciones_compras_iva_descontable: 0`** y **no lee `purchase_iva_adjustments`**, produciendo un Formulario 300 incorrecto y silencioso cuando ocurre un fallo de RPC (p. ej. por un error `42501` en perfil maestro mal enlazado).
+3. **Desajuste de fechas/huso horario (`A-06`):**
+   - `DianComplianceCenter.tsx:134-135` crea `new Date(selectedYear, startMonth, 1).toISOString()` usando la zona horaria del dispositivo cliente, en vez de fijar `America/Bogota` (`-05:00`) o `acc_settings.timezone`. Si un contador abre el reporte desde UTC o UTC-4, los límites de bimestre/mes se desplazan 1 a 5 horas y las operaciones de medianoche del último/primer día cambian de período frente al libro diario `acc_entries`.
+
+---
+
+## 12. Auditoría de UI, formularios, validaciones y manejo de errores
+
+1. **`Purchases.tsx`:**
+   - Permite seleccionar los 4 estados tributarios (`sin_iva`, `descontable`, `pendiente`, `costo`), tarifa (`19%`, `5%`, personalizada) y toggle *IVA incluido*, mostrando vista previa y desglose por ítem.
+   - **Fallas:**
+     - `canManage = canManageInventory(user?.role)` bloquea a `comprador` y habilita a `almacen` (`C-02`).
+     - Al usar `customTax` manual (`Purchases.tsx:490`), mantiene `p_tax_rate: parsedRate` en la RPC (`A-04`).
+     - `supabase.from('purchase_iva_adjustments').select(...)` en línea 572 descarta `error` sin alertar.
+     - `PurchaseInvoiceScannerModal.tsx:373-384` registra facturas escaneadas sin campo ni envío de IVA (`C-04`).
+2. **`Devolutions.tsx`:**
+   - Calcula y previsualiza correctamente el desglose proporcional de Base + IVA a devolver (`Devolutions.tsx:189-203`) alineado con el estado de la compra.
+   - **Fallas:**
+     - Usa `canManageInventory` para mostrar `+ Devolver a proveedor` y `Anular` (`C-01`), generando fallo garantizado en PostgreSQL para `admin_empresa`, `gerente` y `almacen`.
+3. **`DianComplianceCenter.tsx`:**
+   - Presenta correctamente los nuevos campos tributarios del Formulario 300 (`Casilla 66`, `Casilla 74`, devoluciones en compras descontables, IVA pendiente, IVA al costo, alerta `es_borrador_no_conciliado` y modal de clasificación rápida para compras pendientes).
+   - **Fallas:**
+     - `pendRes` (líneas 155-161) trunca silenciosamente en `.limit(50)` y omite validación de `pendRes.error`.
+     - Pestaña **Certificados (`880-946`)** contiene un documento imprimible con datos falsos hardcodeados (`PROVEEDOR GENERAL S.A.S.`, `$15.000.000`, `2.5%`, `$375.000`) (`A-05`).
+4. **`AccountingSetup.tsx`:**
+   - Expone campos explícitos para mapear `iva_descontable` y `iva_pendiente` filtrando correctamente `type === 'activo' && nature === 'debito'` (`AccountingSetup.tsx:70`), y alerta si falta alguno antes de registrar compras con IVA.
+   - **Falla:** ignora el rol real de lectura/escritura (`C-03`), mostrando UI vacía a `admin_empresa`/`gerente` y botones sin permiso a `contador`.
+5. **`dianTaxService.ts`:**
+   - `getFormulario350` (`237-247`) tiene `catch {}` vacío; `getExogenaRows` (`338, 384, 423`) ignora `.error` en queries a Supabase (`A-07`).
+
+---
+
+## 13. Auditoría de seguridad y aislamiento multiempresa
+
+1. **Definición real de `is_platform_admin()` (`20261105000001:103-174`):**
+   - No se determina por `profiles.role = 'admin'` (ese es administrador de empresa), sino por pertenencia del `auth.uid()` / email autenticado a `platform_admins` o cuenta maestra `sanlobo3@hotmail.com`.
+2. **Aislamiento verificado en Fase A (`000063` y `000064`):**
+   - **`dian_calcular_formulario_300` (`000063:1815-1824`):** valida `auth.uid() is not null`, `p_company_id = current_company_id()` y perfil activo perteneciente a `v_cur_co`. Incluso un administrador de plataforma no puede pasar el `p_company_id` de otra empresa para leer su F300. *(Pendiente: validar rol funcional en `profiles` para no permitir invocación por `vendedor`/`cajero` de la misma empresa).*
+   - **`purchase_iva_adjustments` (`000063:160-182`) y `purchase_devolution_lots` (`000064:44-67`):** RLS habilitada; `SELECT` restringido estrictamente a `company_id = public.my_company()`; revocados `INSERT`, `UPDATE`, `DELETE` y `TRUNCATE` a `anon` y `authenticated` (escritura exclusiva desde RPCs `SECURITY DEFINER`).
+   - **Privilegios `REVOKE/GRANT`:** todas las funciones nuevas/modificadas de `000063` y `000064` revocan ejecución a `PUBLIC` y `anon`, otorgando `EXECUTE` solo a `authenticated` y `service_role`, con `SET search_path = 'pg_catalog', 'public', 'pg_temp'` (o `''` en `acc_reconcile`).
+3. **Brecha de seguridad funcional en «Paso Maestro» (`auth.tsx:676-702`):**
+   - El cambio de empresa en «Paso Maestro» modifica el estado de compañía en React (`user.company_id`), pero **no cambia la empresa vinculada al perfil en Supabase** a menos que exista un mecanismo servidor sincronizado. Si un administrador maestro inspecciona otra empresa mediante estado React, `dian_calcular_formulario_300` bloqueará legítimamente con `42501` (`p_company_id <> current_company_id()`), pero `getFormulario300()` activará el **fallback roto en cliente** (`A-02`) mostrando ceros o datos dependientes de RLS, lo que oculta el verdadero motivo del bloqueo.
+4. **Brecha en `recibir_orden_compra` (`20261103000013:391`):**
+   - Usa `public._ctx(NULL)` sin restringir roles autorizados al inicio de la RPC; depende tardíamente de `_registrar_compra_impl` y puede filtrar validaciones de `purchase_orders` entre roles no compradores dentro de la misma empresa.
+
+---
+
+## 14. Auditoría de concurrencia e integridad transaccional
+
+1. **Secuencia monotónica intratransaccional en Kardex (`kardex_seq`, `000063:50-108`):**
+   - `public.kardex_seq` + trigger `BEFORE INSERT` `trg_kardex_assign_seq` asigna `seq` monotónico y `seq_verified = true` en tiempo de inserción (sin depender de `created_at = now()`), diferenciando limpiamente el historial previo (`seq_verified = false`, `seq = null`) de los movimientos verificables nuevos (`seq_verified = true`).
+2. **Orden de bloqueos `FOR UPDATE`:**
+   - `_registrar_compra_impl` (`000063:511`), `clasificar_iva_compra` (`000063:1060`), `anular_compra` (`000063:1414`), `registrar_devolucion_compra` (`000064:245, 315`) y `anular_devolucion_compra` (`000064:460, 480`) bloquean la cabecera (`purchases` / `purchase_devolutions`) antes de recorrer productos ordenados determinísticamente por `product_id`, previniendo *deadlocks* cruzados y condiciones de carrera entre dos devoluciones o anulaciones simultáneas.
+   - En `registrar_devolucion_compra`, los lotes se bloquean con `FOR UPDATE` ordenados por `(coalesce(expiry_date, '9999-12-31'::date), created_at, id)`.
+3. **Brecha estructural de concurrencia (`A-08`):**
+   - Aunque `clasificar_iva_compra` adquiere `FOR UPDATE` sobre la compra, `purchase_iva_adjustments` no tiene índice `CREATE UNIQUE INDEX ... ON public.purchase_iva_adjustments (purchase_id) WHERE status = 'aplicado'` que blinde el invariante de «máximo una reclasificación aplicada por compra» frente a eventuales inserciones futuras desde otra RPC o mantenimiento manual.
+
+---
+
+## 15. Auditoría de paridad entre modo demo y base real (`src/lib/supabase.ts`)
+
+La revisión de los manejadores RPC simulados en `src/lib/supabase.ts` (`registrar_compra` / `registrar_compra_con_iva` `:3578-3738`, `anular_compra` `:3739-3809`, `registrar_devolucion_compra` `:4154-4266`, `anular_devolucion_compra` `:4267-4309`, `clasificar_iva_compra` `:7480-7539`, `dian_calcular_formulario_300` `:7540-7652`) revela divergencias importantes frente a `000063` y `000064`:
+
+1. **Sin validación de roles ni aislamiento por empresa:** los handlers demo no inspeccionan el rol del usuario ni restringen `company_id`, por lo que las pruebas en modo demo ocultan completamente los fallos de permisos `C-01`, `C-02` y `C-03`.
+2. **`clasificar_iva_compra` demo (`7480-7539`):**
+   - **No verifica** movimientos posteriores en `kardex` ni lotes (`product_lots`), permitiendo reclasificar a `'costo'` productos sin lote ya vendidos o recomprados (calculando en su lugar `qtyInv = Math.min(boughtQty, Math.max(0, prod.stock))`, lógica que **no existe** en PostgreSQL).
+   - **No genera** asientos contables en `acc_entries`/`acc_lines`.
+3. **`anular_compra` demo (`3739-3809`):**
+   - No valida `iva_cost_expense > 0`, no verifica ni limpia `product_lots`, no verifica movimientos posteriores en `kardex` y guarda `reference_type: 'anulacion_compra'` en lugar de `'purchase'`.
+4. **`registrar_devolucion_compra` demo (`4154-4266`):**
+   - No crea `purchase_devolution_lots`, no valida trazabilidad por lote ni secuencia `kardex.seq` ante movimientos posteriores y no genera asientos `acc_entries`.
+5. **`anular_devolucion_compra` demo (`4267-4309`):**
+   - No valida si `pur.status === 'anulada'`, ni si `pur.tax_status` cambió después de la devolución (`iva_classified_at > d.created_at`), ni lotes ni secuencia `kardex`, y restaura `prod.cost` usando un promedio diferente al de `000064`.
+6. **Contabilidad/conciliación demo:** `acc_reconcile` demo no refleja fielmente las 8 filas nuevas de IVA de `000063`.
+
+---
+
+## 16. Matriz de pruebas de los 20 escenarios mínimos requeridos
+
+> **Transparencia de verificación:** en esta auditoría **no se ejecutó SQL ni navegador E2E** (restricción de solo lectura). Se distinguen explícitamente: **(a) Verificado por inspección de código/migraciones** (+ referencia a suite SQL ejecutada en el ciclo anterior documentada en `Lee:3970`) vs **(b) Pendiente de ejecución en BD real / UI E2E**.
+
+| # | Escenario auditado | Estado de verificación | Resultado esperado / Comportamiento real observado en código y SQL |
+|---|---|---|---|
+| **1** | Compra sin IVA (`sin_iva`) | Inspección SQL/UI (`000063:416,580`; `Purchases.tsx`) · *UI E2E pendiente* | Válida con `tax = 0` si el usuario es `admin`/`dueno`. Falla para `admin_empresa`/`gerente`/`almacen`/`comprador` (**C-02**). |
+| **2** | Compra con IVA 19% no incluido (`descontable`) | Inspección SQL/UI (`000063:483`; `Purchases.tsx`) · *UI E2E pendiente* | Calcula `tax = 19%`, `subtotal = base`, no infla `products.cost`, acredita `iva_descontable` y alimenta Casilla 74. Bloqueada en BD si la registra `admin_empresa`/`gerente` (**C-02**). |
+| **3** | Compra con IVA 5% incluido (`descontable` / `costo`) | Inspección SQL/UI (`000063:479`; `Purchases.tsx`) · *UI E2E pendiente* | Desagrega `base = total / 1.05` e `iva = total - base`; cuadra al centavo. Misma restricción de rol (**C-02**). |
+| **4** | Compra con tasa personalizada / IVA manual (`customTax`) | Inspección SQL/UI (`Purchases.tsx:480-496, 1055`) · *UI E2E pendiente* | Cálculo en dinero correcto en SQL, pero UI envía `p_tax_rate` de lista previo y muestra etiqueta porcentual falsa en detalle (**A-04**). |
+| **5** | Compra con IVA `pendiente` por clasificar | Inspección SQL/UI (`000063:805,1851`; `DianComplianceCenter.tsx:155`) · *UI E2E pendiente* | Debita `iva_pendiente` (`1.1.06`), no entra a Casilla 74, aparece como borrador (`es_borrador_no_conciliado = true`). En UI solo carga máximo 50 filas y oculta errores (**A-06**). |
+| **6** | Compra con IVA incorporado al `costo` | Inspección SQL/UI (`000063:548,808`; `Purchases.tsx`) · *UI E2E pendiente* | Incorpora el IVA al costo unitario de `products.cost` y `product_lots.unit_cost` e inventario (`1.4.xx`), excluyendo Casilla 74. |
+| **7** | Compra mixta (productos 19% + 5% + exentos en misma factura) | Inspección SQL/UI (`Purchases.tsx:1419`; `000063:518`) | **NO SOPORTADO:** la cabecera impone un solo `tax_rate`/`tax_status` y prorratea IVA a todos los ítems, distorsionando costos por ítem (**A-03**). |
+| **8** | Compra vía Escáner de Factura / Orden de Compra multi-bodega | Inspección UI/SQL (`PurchaseInvoiceScannerModal.tsx:373`; `PurchaseOrders.tsx:690,747`) | **FALLA FUNCIONAL:** ambos omiten campos/parámetros de IVA (entran como `'sin_iva'`) y `anular_compra`/devoluciones desincronizan `warehouse_stock` (**C-04, C-05**). |
+| **9** | Reclasificación `pendiente` → `descontable` (mismo período y período posterior) | Inspección SQL/UI (`000063:932,1878`; `Purchases.tsx:144`) · *UI E2E pendiente* | Mueve saldo `iva_pendiente` → `iva_descontable` en fecha `adj.created_at`; F300 suma en el período de reclasificación sin duplicar. |
+| **10** | Reclasificación `pendiente` → `costo` con inventario 100% remanente | Inspección SQL (`000063:1150-1250`; cubierto en BD en ciclo previo) · *UI E2E pendiente* | Capitaliza 100% a inventario (`amount_to_inventory`) y actualiza `products.cost` y lotes vivos; en UI `admin_empresa`/`gerente` no ven su configuración `acc_*` (**C-03**). |
+| **11** | Reclasificación `pendiente` → `costo` con venta parcial previa (con lote) | Inspección SQL (`000063:1150-1285`; cubierto en BD en ciclo previo) · *UI E2E pendiente* | Divide proporcionalmente `amount_to_inventory` (remanente) vs `amount_to_expense` (`costo_ventas` por lo vendido) y protege `anular_compra` posterior (`iva_cost_expense > 0`). |
+| **12** | Bloqueo de reclasificación `pendiente` → `costo` sin lote y movimiento posterior / compra histórica | Inspección SQL (`000063:1096-1122`; cubierto en BD en ciclo previo) · *UI E2E pendiente* | Lanza excepción verificando `seq_verified` y `k.seq > v_k_seq` sin dejar cambios parciales en tablas ni contabilidad. |
+| **13** | Devolución parcial a proveedor (con y sin IVA descontable/pendiente/costo) | Inspección SQL/UI (`000064:189`; `Devolutions.tsx:51,498`) · *UI E2E pendiente* | En SQL prorratea base/IVA exacto y descuenta inventario/IVA. **EN UI FALLA POR PERMISOS** para `admin_empresa`, `gerente` y `almacen` (**C-01**). |
+| **14** | Anulación de devolución a proveedor (con lotes y sin lotes) | Inspección SQL/UI (`000064:433`; `Devolutions.tsx:700`) · *UI E2E pendiente* | En SQL restaura stock, costo, lotes y revierte asiento exactamente; bloquea si compra anulada, reclasificada después o con movimiento posterior. **EN UI FALLA POR PERMISOS** para `admin_empresa`, `gerente` y `almacen` (**C-01**). |
+| **15** | Anulación de compra (normal, tras anular devolución, y bloqueo tras venta/`iva_cost_expense`) | Inspección SQL/UI (`000063:1335`; `Purchases.tsx:140`) · *UI E2E pendiente* | En SQL funciona y revierte contabilidad/caja/kardex/stock global (no `warehouse_stock`, **C-05**). Falla por rol para `admin_empresa`/`gerente`/`almacen` (**C-02**). |
+| **16** | Conciliación `acc_reconcile()` y `acc_post_pending()` tras reversos | Inspección SQL (`000063:2030`; `20261101_gastos...:1095`) · *E2E pendiente* | `acc_reconcile()` emite las 8 categorías exactas con `status = 'contabilizado'`. Pero **`acc_post_pending()` falla** en documentos cuyo asiento fue reversado (`A-01`) y `contador` no puede ejecutarla (**C-03**). |
+| **17** | Formulario 300: SQL RPC vs fallback TypeScript (`dianTaxService.ts`) | Inspección SQL/TS (`000063:1770`; `dianTaxService.ts:115-228`) · *E2E pendiente* | RPC SQL cuadra importes y evita doble conteo/deducción; **fallback TS está roto** (devoluciones de compras en `0` e ignora reclasificaciones, **A-02**) y fechas dependen de TZ local (**A-06**). |
+| **18** | Matriz de permisos real en navegador (todos los roles operativos) | Inspección estática (`pagePermissions.ts`, UI y SQL) · *Pendiente E2E navegador* | Confirmadas múltiples fallas de autorización UI vs BD en `admin_empresa`, `gerente`, `almacen`, `comprador` y `contador` (**C-01, C-02, C-03**). |
+| **19** | Aislamiento multiempresa (`is_platform_admin()`, `purchase_iva_adjustments`, `purchase_devolution_lots`, F300) | Inspección SQL (`000063:160,1815`; `000064:44`; `20261105000001:103`) · *E2E pendiente* | Aislamiento estricto en BD y RPC F300 verificado en código. Sin embargo, F300 RPC debe exigir rol contable/gerencial y modo «Paso Maestro» en UI choca con `current_company_id()` cayendo al fallback roto (**A-02**). |
+| **20** | Coherencia UI ↔ DB ↔ PDF/Certificados DIAN (`DianComplianceCenter.tsx`) | Inspección UI (`DianComplianceCenter.tsx:880-946`) · *Pendiente E2E navegador* | F300 conecta con BD (salvo fallo → fallback **A-02**), pero **pestaña Certificados imprime datos simulados falsos** (**A-05**) y Exógena silencia errores (**A-07**). |
+
+---
+
+## 17. Correcciones recomendadas antes de pasar a producción
+
+### Prioridad 1 — Bloqueantes (impiden pasar a producción)
+1. **Unificar contrato de permisos End-to-End (`C-01`, `C-02`, `C-03`):**
+   - Actualizar `can_view_accounting()` en nueva migración idempotente para alinear exactamente los 5 roles de `auth.tsx` (`admin, dueno, admin_empresa, gerente, contador`) y corregir `AccountingSetup.tsx` para que `contador` no vea botones que requieren `is_manager()` (o habilitar `acc_reconcile()`/`acc_post_pending()` a `contador`).
+   - En `anular_compra`, `registrar_devolucion_compra` y `anular_devolucion_compra`, alinear `public._ctx(array['admin', 'dueno', 'admin_empresa', 'gerente'])` con el nuevo helper `canManagePurchaseDevolutions(user?.role)` en `Devolutions.tsx` y `Purchases.tsx` (excluyendo explícitamente botones financieros/reversivos a `almacen`, `vendedor`, `cajero`).
+   - Definir y alinear `_registrar_compra_impl`, `recibir_orden_compra`, `Purchases.tsx` y `pagePermissions.ts` para `comprador` (ya sea otorgándole creación de compras si ese es el rol del negocio o removiéndolo de `pagePermissions.ts` / marcando el módulo como solo gerencia).
+   - Restringir `dian_calcular_formulario_300` también por rol (`admin, dueno, admin_empresa, gerente, contador`).
+2. **Integrar IVA en `PurchaseInvoiceScannerModal.tsx` y `PurchaseOrders.tsx` / `recibir_orden_compra` (`C-04`):**
+   - Permitir elegir/detectar `tax_status`, `tax_rate`, `tax_included` y `tax` en el escáner y al recibir una orden de compra, llamando a `registrar_compra_con_iva`.
+3. **Sincronizar `warehouse_stock` y `warehouse_movements` en compras, devoluciones y anulaciones (`C-05`):**
+   - Guardar `warehouse_id` en compras / líneas o exigir bodega origen/destino en anulación y devolución a proveedor cuando la empresa opera multibodega, manteniendo `SUM(warehouse_stock.quantity) = products.stock`.
+
+### Prioridad 2 — Altas
+4. **Corregir `acc_post_pending()` (`A-01`):** exigir `and e.status = 'contabilizado'` en todas las subconsultas `not exists` de asientos `'registro'` (compras, devoluciones de compra, ventas, gastos, etc.).
+5. **Eliminar o reparar el fallback incompleto de `dianTaxService.ts` (`A-02`, `A-07`):**
+   - Propagar los errores de la RPC F300 en lugar de ocultar fallos de esquema o permisos con un cálculo parcial sin devoluciones ni reclasificaciones (o incluir `purchase_devolutions` y `purchase_iva_adjustments` completos en el fallback si se conserva únicamente para soporte offline controlado).
+   - Eliminar `catch {}` vacío en `getFormulario350` y validar `.error` en `getExogenaRows`, `Purchases.tsx` (`purchase_iva_adjustments`) y `DianComplianceCenter.tsx` (`pendRes`, además de paginar o quitar `.limit(50)`).
+6. **Eliminar datos falsos de Certificados en `DianComplianceCenter.tsx` (`A-05`):** conectar la pestaña `certificates` a retenciones reales por tercero (`purchases` / `expenses` / `dian_certificates_issued` / `acc_lines`) o deshabilitar el botón de impresión oficial mientras no haya datos reales.
+7. **Corregir zona horaria y `customTax` (`A-04`, `A-06`):**
+   - Reemplazar fallback `'America/Caracas'` por `'America/Bogota'` en las funciones SQL de `000063` y `000064`; construir `p_start_date`/`p_end_date` en `DianComplianceCenter.tsx` con la zona horaria contable de la empresa.
+   - En `Purchases.tsx` con `customTax` manual, enviar `p_tax_rate: null` (o tasa efectiva calculada) y ajustar la etiqueta de visualización.
+8. **Blindaje de unicidad e historial de repositorio (`A-08`, `MIGRATIONS.md`):**
+   - Crear índice único parcial `uq_purchase_iva_adjustments_aplicado_purchase` sobre `purchase_iva_adjustments(purchase_id) WHERE status = 'aplicado'`.
+   - Incorporar `20261113000062_blindaje_cartera_devoluciones_y_multipagos.sql` en `supabase/migrations/`.
+
+### Prioridad 3 — Medias y bajas
+9. **Soporte multi-tarifa por ítem en compras (`A-03`):** migrar en Fase C a `tax_rate` y `tax_status` por línea para facturas mixtas (19% + 5% + exentos).
+10. **Actualizar paridad en modo demo (`src/lib/supabase.ts`, `M-01`)** y complementar el desglose de IVA en el comprobante PDF/WhatsApp de `Purchases.tsx` (`M-04`).
+11. **Ejecutar suite E2E completa en vivo (UI + BD real)** cubriendo los 20 escenarios con usuarios reales de cada rol (`dueno`, `admin`, `admin_empresa`, `gerente`, `contador`, `comprador`, `almacen`, `vendedor`, `cajero` y cuenta de plataforma) antes de liberar a producción.
+
+---
+
+## 18. Veredicto técnico final
+
+### Veredicto: **NO APROBADA**
+
+**Justificación técnica:**
+Aunque las migraciones base `20261114000063` y `20261114000064` implementan correctamente la lógica nuclear de trazabilidad por lote/`kardex.seq`, el prorrateo de IVA en devoluciones parciales y el cálculo SQL del Formulario 300, **la solución completa de Fase B NO está lista para producción** debido a **5 hallazgos críticos bloqueantes**:
+1. La ruptura generalizada entre el menú, los botones de UI, las políticas RLS contables (`can_view_accounting()`) y las RPCs SQL (`_ctx(array['admin', 'dueno'])`, `is_manager()`) provoca fallos en producción (`No autorizado` / `42501` o vistas vacías) para los roles **`admin_empresa`, `gerente`, `almacen`, `comprador` y `contador`**.
+2. El escáner de facturas (`PurchaseInvoiceScannerModal.tsx`) y la recepción de órdenes de compra (`PurchaseOrders.tsx` / `recibir_orden_compra`) ignoran por completo el modelo de IVA, corrompiendo la contabilidad e inflando inventarios como `'sin_iva'`.
+3. `anular_compra`, `registrar_devolucion_compra` y `anular_devolucion_compra` desincronizan `warehouse_stock` respecto a `products.stock`.
+4. `acc_post_pending()` omite el filtro `status = 'contabilizado'` que `acc_reconcile()` sí exige, dejando un callejón sin salida tras cualquier reverso de compra o devolución; y el fallback de F300 en `dianTaxService.ts` devuelve cifras erróneas sin devoluciones ni reclasificaciones.
+5. La pestaña de Certificados en `DianComplianceCenter.tsx` genera un documento oficial imprimible con datos simulados fijos, y las pruebas E2E en navegador con roles reales aún no se han ejecutado.
+
+---
+
+# PLAN MAESTRO DE CORRECCIÓN — ETAPA 1: PERMISOS, AUTORIZACIÓN Y SEGURIDAD MULTIEMPRESA
+
+**Estado de implementación en código fuente:** ✅ Implementada en código y SQL local (**⏳ Pendiente de revisión del usuario y de aplicación en Supabase en vivo**; **NO se ejecutó SQL en producción ni se inició la Etapa 2**).
+
+## 1. Decisiones funcionales implementadas
+
+1. **Decisión 1A — Contador con separación de funciones:**
+   - **Permitido:** ver contabilidad (`can_view_accounting()`), ejecutar conciliación (`acc_reconcile()`), crear y contabilizar asientos manuales/ajuste (`acc_create_entry`, `acc_post_entry`), clasificar IVA pendiente en compras (`clasificar_iva_compra`), consultar devoluciones de compra (pestaña Proveedores en lectura), consultar proveedores y operar DIAN (`dian_calcular_formulario_300`, `dian_calcular_formulario_350`, pestañas tributarias autorizadas).
+   - **Denegado:** modificar parámetros estructurales (`acc_save_settings`, `acc_activate`), administrar o sembrar el PUC (`acc_seed_template`, `acc_upsert_account`, pestaña PUC en `ErpBridge.tsx`), contabilizar documentos operativos en lote (`acc_post_pending`), crear compras directas (`_registrar_compra_impl`), gestionar CxP ni anular/cerrar/reabrir periodos (`acc_close_period`, `acc_reopen_period`, `acc_reverse_entry`).
+
+2. **Decisión 2A — Separación entre Compras y Bodega (`comprador` vs `almacen`):**
+   - **`comprador`:** puede registrar compras directas (`_registrar_compra_impl`), gestionar CRUD de `suppliers` y crear/aprobar/enviar/cancelar/recibir `purchase_orders`. No puede anular compras (`anular_compra`), registrar/anular devoluciones a proveedor (`registrar_devolucion_compra`, `anular_devolucion_compra`), clasificar IVA ni acceder a CxP.
+   - **`almacen`:** exclusivamente recepción física de órdenes de compra en estado `'approved'`, `'sent'` o `'partial'` mediante `recibir_orden_compra`, el cual invoca el núcleo interno `public._registrar_compra_core(...)` (privilegios revocados a `authenticated`, `anon` y `public`). La RPC valida en PostgreSQL que el rol `almacen` no altere `payment_terms`, `credit_days` ni `unit_cost`, y verifica empresa, bodega activa, cantidades y renglones de la OC. No tiene acceso a `registrar_compra*`, `suppliers`, `purchases` ni `devolutions` a proveedor.
+
+3. **Decisión 3B — Gerencia con separación financiera (`admin_empresa` vs `gerente`):**
+   - **`admin_empresa`:** paridad empresarial completa con `dueno` en compras, devoluciones a proveedor, anulación de compras/devoluciones, CxP, pagos a proveedores, crédito de proveedores y configuración `cxp_save_account`.
+   - **`gerente`:** conserva acceso de consulta y supervisión sobre `purchases`, `purchase_orders`, `suppliers`, `payables` (`cuentas_por_pagar`, `cuenta_por_pagar_proveedor`, `cxp_config`), `devolutions` (solo consulta en proveedor; escritura solo en devoluciones de cliente), clasificación de IVA (`clasificar_iva_compra`), conciliación (`acc_reconcile`), configuración contable (`acc_save_settings`, `acc_seed_template`, `acc_post_pending`, `acc_close_period`) y DIAN. No puede registrar compras directas, anular compras, registrar/anular devoluciones a proveedor, pagar/anular/configurar CxP ni mutar proveedores u órdenes de compra.
+
+4. **Decisión 4A — Vendedor sin cierre de caja y fuente única de verdad (`pagePermissions.ts`):**
+   - Eliminado el archivo duplicado `src/lib/permissions.ts` (verificados 0 consumidores).
+   - Unificados `src/lib/pagePermissions.ts`, `src/lib/auth.tsx`, `src/App.tsx`, `src/components/AppLayout.tsx` y `docs/PERMISOS_POR_ROL.md`.
+   - `App.tsx` pasa `{ isMasterAccount, isDemo, masterRoleOverride }` a `isPageAllowedForRole(...)` para mantener consistencia en rutas y simulador.
+   - `vendedor` conserva exactamente sus 10 vistas comerciales (`pos`, `sales`, `quotations`, `catalog`, `customers`, `myroute`, `map`, `goals`, `employee_portal`, `products`) sin acceso a `cash`.
+
+---
+
+## 2. Matriz única de autorización (UI + PostgreSQL Etapa 1)
+
+| Rol | Ver módulo | Ver datos (empresa propia) | Crear | Editar / Clasificar | Anular / Reversar / CxP | Conciliar (`acc_reconcile`) |
+|---|---|---|---|---|---|---|
+| `admin` / `super_admin` | Todos (empresa activa + plataforma) | Sí (solo su `current_company_id()` en tablas DIAN/compras/contabilidad; sin bypass entre empresas) | Sí (compras, OC, asientos, PUC, pagos CxP, DIAN) | Sí (clasifica IVA, settings contables, créditos proveedor) | Sí (anula compras/devoluciones/pagos, abre/cierra periodos) | Sí |
+| `dueno` | Todos los módulos empresariales (sin SaaS global/`users`) | Sí | Sí | Sí | Sí (paridad empresarial total) | Sí |
+| `admin_empresa` | Todos los módulos empresariales (sin SaaS global/`users`/`subscription`) | Sí | Sí | Sí | Sí (paridad total con `dueno` en empresa) | Sí |
+| `gerente` | Dirección Gerencial, Compras, OC, Proveedores, CxP, Devoluciones, Contabilidad, DIAN | Sí (supervisión completa) | Asientos manuales y cierre contable; **no** compras directas, OC ni pagos CxP | Clasifica IVA (`clasificar_iva_compra`), settings contables, `acc_post_pending`; **no** muta proveedores ni cupos | **No** anula compras, **no** registra/anula devoluciones proveedor, **no** paga/anula CxP | Sí |
+| `contador` | Contabilidad (11 rutas), DIAN, Impuestos, Compras (IVA), Devoluciones (consulta prov.) | Sí (contable, DIAN, compras, devoluciones prov., proveedores lectura) | Solo asientos manuales/ajuste (`acc_create_entry`, `acc_post_entry`) y DIAN | Clasifica IVA (`clasificar_iva_compra`); **no** `acc_save_settings`, **no** PUC/plantilla, **no** `acc_post_pending` | **No** anula compras/devoluciones/asientos, **no** cierra/reabre periodos, **no** CxP | Sí |
+| `comprador` | Panel, Compras, OC, Sugerencias compra, Proveedores, Kardex | Compras, OC, Proveedores (sin CxP ni devoluciones) | Compras directas, proveedores y OC (`crear`, `cambiar_estado`, `recibir`) | Proveedores y OC | **No** anula compras, **no** devoluciones proveedor, **no** CxP | No |
+| `almacen` | Inventario, Bodegas, Lotes, Kardex, OC (recepción), Sugerencias | OC aprobadas/enviadas/parciales e inventario | Exclusivamente `recibir_orden_compra` (pago/plazo/costo bloqueados en SQL) | **No** edita precios, pago ni días de crédito | **No** compras directas, **no** anula compras, **no** devoluciones, **no** proveedores, **no** CxP | No |
+| `vendedor` | 10 vistas comerciales (`pos`, `sales`, `quotations`, `catalog`, `customers`, `myroute`, `map`, `goals`, `employee_portal`, `products`) sin `cash` | Ventas propias, catálogo y clientes | Ventas POS, cotizaciones, clientes | Según módulo comercial | No | No |
+| `cajero` | POS, `cash`, Ventas, Cartera, Devoluciones (solo clientes), Cambios | POS, caja y devoluciones clientes | Ventas, abonos, devoluciones clientes | Caja y cobros | No en compras/contabilidad | No |
+
+---
+
+## 3. Cambios realizados en SQL y Frontend
+
+### 3.1 Migración SQL nueva (única, idempotente, sin `BEGIN`/`COMMIT`)
+- **`supabase/migrations/20261115000065_corregir_permisos_y_seguridad_fase_b.sql`** (fila 93 registrada en `supabase/MIGRATIONS.md` como `⏳ Pendiente de aplicar en base viva`):
+  1. Crea `public._require_company_roles(p_roles text[])` validando `auth.uid() IS NOT NULL`, `current_company_id() IS NOT NULL`, `profiles.active = true` y `profiles.company_id = current_company_id()` (privilegios `REVOKE ALL` para `authenticated`/`anon`/`public`).
+  2. Actualiza `can_view_accounting()` y `can_write_accounting()` exigiendo `active = true` y `company_id = current_company_id()`.
+  3. Endurece `acc_seed_template`, `acc_save_settings` y `acc_post_pending` (restringidos a `admin, dueno, admin_empresa, gerente`, excluyendo a `contador`), manteniendo `acc_create_entry`, `acc_post_entry` y `acc_reconcile` disponibles para `contador`.
+  4. Introduce `public._registrar_compra_core(...)` (no invocable directamente por `authenticated`) y restringe `_registrar_compra_impl(...)` a `['admin','dueno','admin_empresa','comprador']`.
+  5. Endurece `crear_orden_compra`, `cambiar_estado_orden_compra` (`['admin','dueno','admin_empresa','comprador']`) y `recibir_orden_compra` (`['admin','dueno','admin_empresa','comprador','almacen']`, con bloqueo estricto en SQL de `payment_terms`, `credit_days`, `unit_cost`, bodega y estado de OC para `almacen`).
+  6. Alinea `clasificar_iva_compra` (`['admin','dueno','admin_empresa','gerente','contador']`), `anular_compra`, `registrar_devolucion_compra` y `anular_devolucion_compra` (`['admin','dueno','admin_empresa']`).
+  7. Alinea CxP: `cuentas_por_pagar`, `cuenta_por_pagar_proveedor`, `cxp_config` (`['admin','dueno','admin_empresa','gerente']`) vs `guardar_credito_proveedor`, `registrar_pago_proveedor`, `anular_pago_proveedor`, `cxp_save_account` (`['admin','dueno','admin_empresa']`), eliminando el bypass global que antes permitía a `admin` operar sin validar empresa activa.
+  8. Actualiza `dian_calcular_formulario_300` y `dian_calcular_formulario_350` exigiendo `p_company_id = current_company_id()` y `can_view_accounting()` (sin bypass de `is_platform_admin()`).
+  9. Reemplaza políticas RLS de `dian_account_mappings`, `dian_tax_rules`, `dian_certificates_issued` (sin bypass `admin`/`super_admin` entre empresas), `suppliers`, `purchases`, `purchase_iva_adjustments`, `purchase_devolutions`, `purchase_devolution_lots`, `purchase_orders`, `purchase_order_items` (preservando `support_%` y `platform_admin_company_all`) y revoca `INSERT`/`UPDATE`/`DELETE`/`TRUNCATE` directo de `authenticated` sobre tablas de compras/devoluciones/OC.
+
+### 3.2 Archivos Frontend y Documentación modificados/eliminados
+- Eliminado `src/lib/permissions.ts`.
+- Actualizados: `src/lib/auth.tsx`, `src/lib/pagePermissions.ts`, `src/App.tsx`, `src/components/AppLayout.tsx`, `src/pages/Purchases.tsx`, `src/pages/Devolutions.tsx`, `src/pages/PurchaseOrders.tsx`, `src/pages/Payables.tsx`, `src/pages/Suppliers.tsx`, `src/pages/AccountingSetup.tsx`, `src/pages/AccountantDesk.tsx`, `src/pages/AccountingClose.tsx`, `src/pages/ErpBridge.tsx`, `src/services/dianTaxService.ts` (propaga errores reales en `getFormulario350` en lugar de silenciar `42501`), `docs/PERMISOS_POR_ROL.md` y `supabase/MIGRATIONS.md`.
+- Creada suite transaccional de pruebas SQL (sin persistir datos, envuelta en `BEGIN; ... ROLLBACK;`): `supabase/tests/etapa1_permisos_y_seguridad_rollback_tests.sql`.
+
+---
+
+## 4. Verificación ejecutada (código y lectura en Supabase)
+
+- **Compilación y tipos ejecutados:**
+  - `compile_applet` (`vite build`): ✅ **Aprobado** (`Build succeeded - the applet is compiled`).
+  - `lint_applet` (`tsc --noEmit`): ✅ **Aprobado** (`Linting completed successfully`).
+- **Inspección de solo lectura ejecutada en Supabase (`pg_get_functiondef`, sin ejecutar DDL/DML):**
+  - `public.acc_activate`, `public.acc_upsert_account`, `public.acc_close_period` y `public.acc_reverse_entry`: verificadas en base viva usando `public.is_manager()` → `public.is_company_manager()` (`p.active = true`, `p.company_id IS NOT NULL`, `p.role IN ('dueno', 'admin_empresa', 'gerente')`); el rol `contador` y los perfiles inactivos quedan bloqueados conforme a 1A y 3B.
+  - `public._ctx(text[])`: verificado en base viva; exige `p.active = true` y `p.company_id IS NOT NULL`.
+  - `public.acc_reopen_period(integer, integer, text)`: en la base viva permitía solo `'dueno'` sin validar `active = true` ni incluir `'admin_empresa'`; se incorporó su reemplazo endurecido dentro de `20261115000065_corregir_permisos_y_seguridad_fase_b.sql` usando `public._require_company_roles(array['admin', 'dueno', 'admin_empresa'])`.
+- **Estado de ejecución en Supabase:** la migración `20261115000065_corregir_permisos_y_seguridad_fase_b.sql` **no se ha aplicado todavía en la base viva** (pendiente de revisión y autorización expresa antes de aplicarla y correr `supabase/tests/etapa1_permisos_y_seguridad_rollback_tests.sql`).
+
+

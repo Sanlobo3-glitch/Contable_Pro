@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '../lib/supabase'
-import { useAuth, isReadOnly, canManageInventory } from '../lib/auth'
+import {
+  useAuth,
+  isReadOnly,
+  isCompanyManager,
+  canRegisterSales,
+  canViewPurchaseDevolutions,
+  canManagePurchaseDevolutions,
+} from '../lib/auth'
 import { useCurrency } from '../lib/currency'
 import { downloadCsv } from '../lib/csv'
 import { buildDocHtml, buildShareText, printHtml, type DocData } from '../lib/documents'
@@ -48,9 +55,14 @@ export default function Devolutions({
   const { user } = useAuth()
   const { fmt: money } = useCurrency()
   const readOnly = isReadOnly(user)
-  const isManager = canManageInventory(user?.role)
+  const canViewClientDevs = canRegisterSales(user?.role) || isCompanyManager(user?.role)
+  const canWriteClientDevs = !readOnly && canViewClientDevs
+  const canViewSupplierDevs = canViewPurchaseDevolutions(user?.role)
+  const canWriteSupplierDevs = !readOnly && canManagePurchaseDevolutions(user?.role)
 
-  const [tab, setTab] = useState<'clientes' | 'proveedores'>('clientes')
+  const [tab, setTab] = useState<'clientes' | 'proveedores'>(() =>
+    user?.role === 'contador' ? 'proveedores' : 'clientes'
+  )
   const [devolutions, setDevolutions] = useState<Devolution[]>([])
   const [purDevolutions, setPurDevolutions] = useState<PurchaseDevolution[]>([])
   const [sales, setSales] = useState<Sale[]>([])
@@ -83,12 +95,16 @@ export default function Devolutions({
 
   async function load() {
     const [dRes, sRes, pdRes, pRes, prRes, cfgRes] = await Promise.all([
-      supabase.from('devolutions').select('*').order('created_at', { ascending: false }),
-      supabase.from('sales').select('*').order('created_at', { ascending: false }),
-      isManager
+      canViewClientDevs
+        ? supabase.from('devolutions').select('*').order('created_at', { ascending: false })
+        : Promise.resolve({ data: [], error: null }),
+      canViewClientDevs
+        ? supabase.from('sales').select('*').order('created_at', { ascending: false })
+        : Promise.resolve({ data: [], error: null }),
+      canViewSupplierDevs
         ? supabase.from('purchase_devolutions').select('*').order('created_at', { ascending: false })
         : Promise.resolve({ data: [], error: null }),
-      isManager
+      canViewSupplierDevs
         ? supabase.from('purchases').select('*').order('created_at', { ascending: false })
         : Promise.resolve({ data: [], error: null }),
       supabase.from('products').select('*'),
@@ -161,7 +177,7 @@ export default function Devolutions({
 
   async function handleSubmitSaleReturn(e: React.FormEvent) {
     e.preventDefault()
-    if (readOnly || saving || !selectedSale || !selectedSaleItem) return
+    if (!canWriteClientDevs || saving || !selectedSale || !selectedSaleItem) return
     setFormErr('')
     setSaving(true)
 
@@ -283,7 +299,7 @@ export default function Devolutions({
 
   async function handleSubmitPurReturn(e: React.FormEvent) {
     e.preventDefault()
-    if (readOnly || !isManager || saving || !selectedPurchase || !selectedPurItem) return
+    if (!canWriteSupplierDevs || saving || !selectedPurchase || !selectedPurItem) return
     setFormErr('')
     setSaving(true)
 
@@ -308,7 +324,7 @@ export default function Devolutions({
   }
 
   async function handleVoidPurDevolution() {
-    if (!voidTarget || voiding || readOnly || !isManager) return
+    if (!voidTarget || voiding || !canWriteSupplierDevs) return
     setVoiding(true)
     setVoidErr('')
     const { error } = await supabase.rpc('anular_devolucion_compra', { p_dev_id: voidTarget.id })
@@ -482,28 +498,28 @@ export default function Devolutions({
             <Download className="w-4 h-4" /> Excel
           </button>
           {tab === 'clientes' ? (
-            <button
-              onClick={() => {
-                if (readOnly) return
-                setFormErr('')
-                setSaleForm(EMPTY_SALE_FORM)
-                setShowSaleForm(true)
-              }}
-              disabled={readOnly}
-              className="flex items-center gap-2 bg-slate-800 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              <Plus className="w-4 h-4" /> Devolución de venta
-            </button>
-          ) : (
-            isManager && (
+            canWriteClientDevs && (
               <button
                 onClick={() => {
-                  if (readOnly || purSqlMissing) return
+                  setFormErr('')
+                  setSaleForm(EMPTY_SALE_FORM)
+                  setShowSaleForm(true)
+                }}
+                className="flex items-center gap-2 bg-slate-800 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-slate-700"
+              >
+                <Plus className="w-4 h-4" /> Devolución de venta
+              </button>
+            )
+          ) : (
+            canWriteSupplierDevs && (
+              <button
+                onClick={() => {
+                  if (purSqlMissing) return
                   setFormErr('')
                   setPurForm(EMPTY_PUR_FORM)
                   setShowPurForm(true)
                 }}
-                disabled={readOnly || purSqlMissing}
+                disabled={purSqlMissing}
                 className="flex items-center gap-2 bg-slate-800 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 <Plus className="w-4 h-4" /> Devolver a proveedor
@@ -513,9 +529,12 @@ export default function Devolutions({
         </div>
       </div>
 
-      {readOnly && (
+      {(readOnly || (tab === 'proveedores' && canViewSupplierDevs && !canWriteSupplierDevs)) && (
         <div className="flex items-center gap-2 text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs">
-          <Lock className="w-3.5 h-3.5 shrink-0" /> Modo de solo lectura. Activa tu suscripción para registrar devoluciones.
+          <Lock className="w-3.5 h-3.5 shrink-0" />
+          {readOnly
+            ? 'Modo de solo lectura. Activa tu suscripción para registrar devoluciones.'
+            : 'Vista de consulta y auditoría fiscal en devoluciones a proveedores; solo Dueño o Administrador de empresa pueden registrar o anular notas débito de compra.'}
         </div>
       )}
 
@@ -527,7 +546,7 @@ export default function Devolutions({
       )}
 
       {/* Pestañas Clientes / Proveedores */}
-      {isManager && (
+      {canViewClientDevs && canViewSupplierDevs && (
         <div className="flex gap-1 p-1 bg-white rounded-xl border border-slate-200 max-w-md">
           <button
             onClick={() => setTab('clientes')}
@@ -569,7 +588,7 @@ export default function Devolutions({
       </div>
 
       {/* PESTAÑA 1: CLIENTES */}
-      {tab === 'clientes' && (
+      {tab === 'clientes' && canViewClientDevs && (
         <div className="bg-white rounded-xl border border-slate-200 overflow-hidden overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-slate-50 text-slate-600 text-xs uppercase">
@@ -628,7 +647,7 @@ export default function Devolutions({
       )}
 
       {/* PESTAÑA 2: PROVEEDORES */}
-      {tab === 'proveedores' && isManager && (
+      {tab === 'proveedores' && canViewSupplierDevs && (
         <>
           {purSqlMissing ? (
             <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 space-y-1">
@@ -697,7 +716,7 @@ export default function Devolutions({
                             >
                               <Share2 className="w-3 h-3" /> Nota
                             </button>
-                            {!readOnly && d.status === 'activa' && (
+                            {canWriteSupplierDevs && d.status === 'activa' && (
                               <button
                                 onClick={() => {
                                   setVoidErr('')
@@ -860,7 +879,7 @@ export default function Devolutions({
       )}
 
       {/* MODAL: Nueva devolución a proveedor (Compra) */}
-      {showPurForm && !readOnly && isManager && (
+      {showPurForm && canWriteSupplierDevs && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setShowPurForm(false)}>
           <div className="bg-white rounded-xl p-6 w-full max-w-md max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-4">
@@ -1012,7 +1031,7 @@ export default function Devolutions({
       )}
 
       {/* MODAL: Anular devolución a proveedor */}
-      {voidTarget && (
+      {voidTarget && canWriteSupplierDevs && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => !voiding && setVoidTarget(null)}>
           <div className="bg-white rounded-xl p-6 w-full max-w-md space-y-4" onClick={e => e.stopPropagation()}>
             <h2 className="font-bold text-slate-800">¿Anular devolución a proveedor?</h2>

@@ -21,7 +21,14 @@ import {
   X,
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
-import { useAuth, canViewAccounting } from '../lib/auth'
+import {
+  useAuth,
+  isReadOnly,
+  canViewAccounting,
+  canManagePuc,
+  canPostPendingAccounting,
+  canConfigureAccounting,
+} from '../lib/auth'
 import { useCurrency, fmtDate, fmtNum } from '../lib/currency'
 import { downloadCsv } from '../lib/csv'
 import {
@@ -143,6 +150,10 @@ export default function AccountantDesk({
   const { user } = useAuth()
   const { fmt: money, currency } = useCurrency()
   const allowed = canViewAccounting(user?.role)
+  const readOnly = isReadOnly(user)
+  const canSeedPuc = !readOnly && canManagePuc(user?.role)
+  const canPostPending = !readOnly && canPostPendingAccounting(user?.role)
+  const canConfigure = !readOnly && canConfigureAccounting(user?.role)
 
   const now = new Date()
   const [dateFrom, setDateFrom] = useState(() =>
@@ -349,6 +360,7 @@ export default function AccountantDesk({
   }
 
   async function handleSeedAccounts() {
+    if (!canSeedPuc) return
     setBusy(true)
     setFeedback(null)
     const { error } = await supabase.rpc('acc_seed_template', { p_template: 'generico' })
@@ -365,6 +377,7 @@ export default function AccountantDesk({
   }
 
   async function handlePostPendingDocuments() {
+    if (!canPostPending) return
     setBusy(true)
     setFeedback(null)
     const { data, error } = await supabase.rpc('acc_post_pending')
@@ -1148,17 +1161,21 @@ export default function AccountantDesk({
                     Inicializa el Plan de Cuentas para esta empresa
                   </h2>
                   <p className="text-xs text-slate-600 max-w-xl">
-                    Esta empresa aún no tiene cuentas contables cargadas. Puedes aplicar la estructura base editable con un clic y revisarla antes de activar la mayorización automática.
+                    {canSeedPuc
+                      ? 'Esta empresa aún no tiene cuentas contables cargadas. Puedes aplicar la estructura base editable con un clic y revisarla antes de activar la mayorización automática.'
+                      : 'Esta empresa aún no tiene cuentas contables cargadas. Solicita a Gerencia o Administración cargar la estructura PUC inicial.'}
                   </p>
                 </div>
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => void handleSeedAccounts()}
-                  className="px-4 py-2 rounded-lg bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800 whitespace-nowrap shrink-0"
-                >
-                  Cargar plan de cuentas base
-                </button>
+                {canSeedPuc && (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void handleSeedAccounts()}
+                    className="px-4 py-2 rounded-lg bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800 whitespace-nowrap shrink-0"
+                  >
+                    Cargar plan de cuentas base
+                  </button>
+                )}
               </div>
             )}
 
@@ -1181,16 +1198,18 @@ export default function AccountantDesk({
 
                 <div className="no-print flex items-center gap-2 shrink-0">
                   {accSettings?.active ? (
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => void handlePostPendingDocuments()}
-                      className="px-3.5 py-2 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 disabled:opacity-50 whitespace-nowrap"
-                    >
-                      {busy ? 'Mayorizando...' : 'Contabilizar documentos pendientes'}
-                    </button>
+                    canPostPending && (
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => void handlePostPendingDocuments()}
+                        className="px-3.5 py-2 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 disabled:opacity-50 whitespace-nowrap"
+                      >
+                        {busy ? 'Mayorizando...' : 'Contabilizar documentos pendientes'}
+                      </button>
+                    )
                   ) : (
-                    onNavigate && (
+                    onNavigate && canConfigure && (
                       <button
                         type="button"
                         onClick={() => onNavigate('accsetup')}

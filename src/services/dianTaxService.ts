@@ -234,17 +234,26 @@ export async function getFormulario350(
   startDate: Date,
   endDate: Date
 ): Promise<Form350Data> {
-  try {
-    const { data, error } = await supabase.rpc('dian_calcular_formulario_350', {
-      p_company_id: companyId || null,
-      p_start_date: startDate.toISOString(),
-      p_end_date: endDate.toISOString(),
-    })
+  const { data, error } = await supabase.rpc('dian_calcular_formulario_350', {
+    p_company_id: companyId || null,
+    p_start_date: startDate.toISOString(),
+    p_end_date: endDate.toISOString(),
+  })
 
-    if (!error && data) {
-      return data as Form350Data
+  if (!error && data) {
+    return data as Form350Data
+  }
+
+  // Nunca evadir errores de autorización o aislamiento multiempresa con fallback en cliente
+  if (error) {
+    const msg = error.message || ''
+    if (error.code === '42501' || /no autorizado|not authorized|permission/i.test(msg)) {
+      throw new Error(msg || 'No autorizado para consultar el Formulario 350 de esta empresa.')
     }
-  } catch {}
+    if (!/could not find the function|schema cache|does not exist/i.test(msg)) {
+      throw new Error(msg)
+    }
+  }
 
   // Fallback calculando sobre acc_lines si existen
   let entriesQuery = supabase

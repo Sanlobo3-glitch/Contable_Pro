@@ -1,6 +1,12 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
-import { useAuth, canViewAccounting } from '../lib/auth'
+import {
+  useAuth,
+  isReadOnly,
+  canViewAccounting,
+  canConfigureAccounting,
+  canPostPendingAccounting,
+} from '../lib/auth'
 import { CheckCircle2, AlertTriangle } from 'lucide-react'
 import { fmtNum } from '../lib/currency'
 
@@ -40,6 +46,9 @@ const today = () => new Date().toLocaleDateString('sv-SE')
 export default function AccountingSetup() {
   const { user } = useAuth()
   const isManager = canViewAccounting(user?.role)
+  const readOnly = isReadOnly(user)
+  const canConfigure = !readOnly && canConfigureAccounting(user?.role)
+  const canPostPending = !readOnly && canPostPendingAccounting(user?.role)
   const [accounts, setAccounts] = useState<Account[]>([])
   const [settings, setSettings] = useState<Settings | null>(null)
   const [map, setMap] = useState<Record<string, string>>({})
@@ -73,6 +82,7 @@ export default function AccountingSetup() {
   const reconDiffCount = recon.length - reconOkCount
 
   async function save() {
+    if (!canConfigure) return
     setBusy(true)
     const { error } = await supabase.rpc('acc_save_settings', { p_map: map })
     setBusy(false)
@@ -80,6 +90,7 @@ export default function AccountingSetup() {
   }
 
   async function executeToggle(active: boolean) {
+    if (!canConfigure) return
     setBusy(true)
     setConfirmActivate(false)
     const { error } = await supabase.rpc('acc_activate', { p_start: active ? start : null, p_active: active })
@@ -95,6 +106,7 @@ export default function AccountingSetup() {
   }
 
   async function executePostPending() {
+    if (!canPostPending) return
     setBusy(true)
     setConfirmPostPending(false)
     const { data, error } = await supabase.rpc('acc_post_pending')
@@ -122,6 +134,11 @@ export default function AccountingSetup() {
         <h1 className="text-xl font-bold text-slate-800">Configuración contable</h1>
         <p className="text-sm text-slate-500 mt-1">Relaciona tus operaciones con las cuentas y activa la contabilidad automática.</p>
       </div>
+      {!canConfigure && (
+        <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 px-3 py-2 rounded-lg">
+          Vista de auditoría y conciliación: puedes ejecutar la conciliación contable y revisar el mapeo de cuentas; solo Gerencia o Administración pueden modificar parámetros estructurales, activar la integración o mayorizar documentos en lote.
+        </p>
+      )}
       {msg && <p className={`text-sm px-3 py-2 rounded-lg ${msg.ok ? 'text-emerald-700 bg-emerald-50 border border-emerald-200' : 'text-red-700 bg-red-50 border border-red-200'}`}>{msg.text}</p>}
 
       {accounts.length === 0 && <p className="text-sm text-amber-800 bg-amber-50 px-3 py-2 rounded-lg">Primero crea tu plan de cuentas en Contabilidad.</p>}
@@ -143,7 +160,7 @@ export default function AccountingSetup() {
         {KEYS.map(([k, label]) => (
           <div key={k}>
             <label className="block text-xs text-slate-500 mb-1">{label}</label>
-            <select value={map[k] || ''} onChange={e => setMap({ ...map, [k]: e.target.value })} className={input}>
+            <select disabled={!canConfigure} value={map[k] || ''} onChange={e => setMap({ ...map, [k]: e.target.value })} className={`${input} disabled:bg-slate-100 disabled:text-slate-500`}>
               <option value="">Sin configurar</option>
               {accounts.map(a => <option key={a.id} value={a.id}>{a.code} · {a.name}</option>)}
             </select>
@@ -165,7 +182,7 @@ export default function AccountingSetup() {
           {VAT_KEYS.map(([k, label]) => (
             <div key={k}>
               <label className="block text-xs text-slate-500 mb-1">{label}</label>
-              <select value={map[k] || ''} onChange={e => setMap({ ...map, [k]: e.target.value })} className={input}>
+              <select disabled={!canConfigure} value={map[k] || ''} onChange={e => setMap({ ...map, [k]: e.target.value })} className={`${input} disabled:bg-slate-100 disabled:text-slate-500`}>
                 <option value="">Sin configurar (bloquea compras con este tratamiento)</option>
                 {vatAssetAccounts.map(a => <option key={a.id} value={a.id}>{a.code} · {a.name}</option>)}
               </select>
@@ -177,13 +194,15 @@ export default function AccountingSetup() {
         {OPT.map(([k, label]) => (
           <div key={k}>
             <label className="block text-xs text-slate-500 mb-1">{label}</label>
-            <select value={map[k] || ''} onChange={e => setMap({ ...map, [k]: e.target.value })} className={input}>
+            <select disabled={!canConfigure} value={map[k] || ''} onChange={e => setMap({ ...map, [k]: e.target.value })} className={`${input} disabled:bg-slate-100 disabled:text-slate-500`}>
               <option value="">Sin configurar</option>
               {accounts.map(a => <option key={a.id} value={a.id}>{a.code} · {a.name}</option>)}
             </select>
           </div>
         ))}
-        <button onClick={save} disabled={busy} className="w-full bg-slate-800 text-white py-2 rounded-lg text-sm font-medium disabled:opacity-50">Guardar cuentas</button>
+        {canConfigure && (
+          <button onClick={save} disabled={busy} className="w-full bg-slate-800 text-white py-2 rounded-lg text-sm font-medium disabled:opacity-50">Guardar cuentas</button>
+        )}
       </div>
 
       <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-3">
@@ -207,38 +226,40 @@ export default function AccountingSetup() {
           </span>
         </div>
         <label className="block text-xs text-slate-500">Fecha de inicio contable (los documentos anteriores no se contabilizan solos)</label>
-        <input type="date" value={start} onChange={e => setStart(e.target.value)} className={input} />
+        <input type="date" disabled={!canConfigure} value={start} onChange={e => setStart(e.target.value)} className={`${input} disabled:bg-slate-100 disabled:text-slate-500`} />
         {!complete && <p className="text-xs text-amber-800">Falta configurar todas las cuentas principales para poder activar.</p>}
 
-        {confirmActivate ? (
-          <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 space-y-2">
-            <p className="text-xs text-emerald-900">
-              Desde el <strong>{start}</strong>, cada venta, compra, abono y gasto nuevo generará su asiento contable automáticamente. ¿Deseas activarla?
-            </p>
-            <div className="flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setConfirmActivate(false)}
-                disabled={busy}
-                className="px-3 py-1.5 rounded-lg border border-emerald-200 bg-white text-xs font-medium text-slate-700"
-              >
-                Cancelar
-              </button>
-              <button
-                type="button"
-                onClick={() => void executeToggle(true)}
-                disabled={busy}
-                className="px-3.5 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700"
-              >
-                {busy ? 'Activando…' : 'Confirmar activación'}
-              </button>
+        {canConfigure && (
+          confirmActivate ? (
+            <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 space-y-2">
+              <p className="text-xs text-emerald-900">
+                Desde el <strong>{start}</strong>, cada venta, compra, abono y gasto nuevo generará su asiento contable automáticamente. ¿Deseas activarla?
+              </p>
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setConfirmActivate(false)}
+                  disabled={busy}
+                  className="px-3 py-1.5 rounded-lg border border-emerald-200 bg-white text-xs font-medium text-slate-700"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void executeToggle(true)}
+                  disabled={busy}
+                  className="px-3.5 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700"
+                >
+                  {busy ? 'Activando…' : 'Confirmar activación'}
+                </button>
+              </div>
             </div>
-          </div>
-        ) : (
-          <div className="flex gap-2">
-            <button onClick={() => setConfirmActivate(true)} disabled={busy || !complete || !!settings?.active} className="flex-1 bg-emerald-600 text-white py-2 rounded-lg text-sm font-medium disabled:opacity-40">Activar</button>
-            <button onClick={() => void executeToggle(false)} disabled={busy || !settings?.active} className="px-4 py-2 rounded-lg text-sm text-slate-700 border border-slate-200 disabled:opacity-40">Desactivar</button>
-          </div>
+          ) : (
+            <div className="flex gap-2">
+              <button onClick={() => setConfirmActivate(true)} disabled={busy || !complete || !!settings?.active} className="flex-1 bg-emerald-600 text-white py-2 rounded-lg text-sm font-medium disabled:opacity-40">Activar</button>
+              <button onClick={() => void executeToggle(false)} disabled={busy || !settings?.active} className="px-4 py-2 rounded-lg text-sm text-slate-700 border border-slate-200 disabled:opacity-40">Desactivar</button>
+            </div>
+          )
         )}
       </div>
 
@@ -255,11 +276,13 @@ export default function AccountingSetup() {
           </div>
           <div className="flex gap-2">
             <button onClick={reconcile} disabled={busy || !settings?.start_date} className="text-xs font-medium bg-slate-800 text-white px-3 py-1.5 rounded-lg disabled:opacity-40">Conciliar</button>
-            <button onClick={() => setConfirmPostPending(true)} disabled={busy || !settings?.active} className="text-xs font-medium text-slate-700 border border-slate-200 px-3 py-1.5 rounded-lg disabled:opacity-40">Contabilizar pendientes</button>
+            {canPostPending && (
+              <button onClick={() => setConfirmPostPending(true)} disabled={busy || !settings?.active} className="text-xs font-medium text-slate-700 border border-slate-200 px-3 py-1.5 rounded-lg disabled:opacity-40">Contabilizar pendientes</button>
+            )}
           </div>
         </div>
 
-        {confirmPostPending && (
+        {confirmPostPending && canPostPending && (
           <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-2">
             <p className="text-xs text-slate-700">
               Se contabilizarán todos los documentos desde la fecha de inicio que aún no tienen asiento (ventas, compras, gastos, abonos, pagos a proveedores, devoluciones, caja y ajustes).

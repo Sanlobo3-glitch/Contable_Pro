@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Receipt, RefreshCw, Search, ChevronRight, ArrowLeft, WifiOff, MessageCircle, Settings2, CheckCircle2, Ban, Download } from 'lucide-react'
 import { supabase } from '../lib/supabase'
-import { useAuth, isReadOnly, canManageInventory } from '../lib/auth'
+import { useAuth, isReadOnly, canViewPayables, canManagePayables } from '../lib/auth'
 import { useCurrency } from '../lib/currency'
 import { newId } from '../lib/offlineQueue'
 import { downloadCsv } from '../lib/csv'
@@ -38,9 +38,9 @@ const isMissing = (m: string) => /cuentas_por_pagar|cuenta_por_pagar|supplier_pa
 export default function Payables() {
   const { user } = useAuth()
   const { fmt: money } = useCurrency()
-  const canManage = canManageInventory(user?.role)
-  const readOnly = isReadOnly(user) || !canManage
-  const isManager = user?.role === 'dueno' || user?.role === 'admin'
+  const canView = canViewPayables(user?.role)
+  const isManager = canManagePayables(user?.role)
+  const readOnly = isReadOnly(user) || !isManager
 
   const [data, setData] = useState<PayablesPortfolio | null>(null)
   const [loading, setLoading] = useState(false)
@@ -82,7 +82,7 @@ export default function Payables() {
   }
 
   async function load() {
-    if (!isManager) return
+    if (!canView) return
     setLoading(true); setError('')
     const { data: res, error: err } = await supabase.rpc('cuentas_por_pagar')
     setLoading(false)
@@ -91,10 +91,12 @@ export default function Payables() {
   }
 
   async function loadCxp() {
-    if (!isManager) return
+    if (!canView) return
     const [c, a, su] = await Promise.all([
       supabase.rpc('cxp_config'),
-      supabase.from('acc_accounts').select('id, code, name, is_postable, active').order('code'),
+      isManager
+        ? supabase.from('acc_accounts').select('id, code, name, is_postable, active').order('code')
+        : Promise.resolve({ data: [], error: null }),
       supabase.from('suppliers').select('id, name').order('name'),
     ])
     if (!c.error && c.data) { const cfg = c.data as CxpCfg; setCxp(cfg); setCxpPick(cfg.account_id || '') }
@@ -102,9 +104,9 @@ export default function Payables() {
     if (!su.error && su.data) setAllSuppliers(su.data as SupplierLite[])
   }
 
-  useEffect(() => { void load(); void loadCxp() }, [isManager])
+  useEffect(() => { void load(); void loadCxp() }, [canView, isManager])
 
-  if (!canManage) return <p className="text-sm text-slate-500">No tienes permiso para ver esta página.</p>
+  if (!canView) return <p className="text-sm text-slate-500">No tienes permiso para ver esta página.</p>
 
   async function openSupplier(id: string) {
     setSel(id); setDetail(null); setDetLoading(true); setEditTerms(false)
@@ -371,11 +373,13 @@ export default function Payables() {
       {error && error !== 'sin_sql' && <div className="text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-xs">No se pudo cargar: {error}</div>}
       {note && <div className="text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 text-xs">{note}</div>}
 
-      {isManager && cxp && cxp.accounting_active && !cxp.account_id && (
+      {canView && cxp && cxp.accounting_active && !cxp.account_id && (
         <div className="text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-3 text-sm">
           <p className="font-medium">Falta elegir la cuenta contable de «Proveedores por pagar».</p>
           <p className="text-xs mt-1">Mientras no la elijas, las compras a crédito y los pagos a proveedores quedan pendientes de contabilizar (no se pierde nada).</p>
-          <button onClick={() => setShowCxp(true)} className="mt-2 bg-amber-600 text-white px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-amber-700">Elegir cuenta</button>
+          {isManager && !readOnly && (
+            <button onClick={() => setShowCxp(true)} className="mt-2 bg-amber-600 text-white px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-amber-700">Elegir cuenta</button>
+          )}
         </div>
       )}
 
@@ -439,16 +443,16 @@ export default function Payables() {
             </div>
           )}
 
-          {isManager && cxp && (
+          {canView && cxp && (
             <div className="text-xs text-slate-500 flex items-center justify-between gap-2 flex-wrap">
               <span>Cuenta contable de Proveedores por pagar: <strong className="text-slate-700">{cxp.account_id ? `${cxp.account_code} · ${cxp.account_name}` : 'sin elegir'}</strong></span>
-              {!readOnly && <button onClick={() => setShowCxp(true)} className="text-slate-700 font-medium hover:text-slate-900 inline-flex items-center gap-1"><Settings2 className="w-3.5 h-3.5" /> Cambiar</button>}
+              {isManager && !readOnly && <button onClick={() => setShowCxp(true)} className="text-slate-700 font-medium hover:text-slate-900 inline-flex items-center gap-1"><Settings2 className="w-3.5 h-3.5" /> Cambiar</button>}
             </div>
           )}
         </>
       )}
 
-      {showCxp && (
+      {showCxp && isManager && !readOnly && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-end sm:items-center justify-center p-3" onClick={() => setShowCxp(false)}>
           <div className="bg-white rounded-xl w-full max-w-md p-4 space-y-3" onClick={e => e.stopPropagation()}>
             <h2 className="text-base font-bold text-slate-800">Cuenta de Proveedores por pagar</h2>

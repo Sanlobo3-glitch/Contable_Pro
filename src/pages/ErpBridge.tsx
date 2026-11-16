@@ -29,7 +29,14 @@ import {
   X,
 } from 'lucide-react'
 import { supabase } from '../lib/supabase'
-import { useAuth, canViewAccounting, isCompanyManager, isReadOnly } from '../lib/auth'
+import {
+  useAuth,
+  canViewAccounting,
+  canManagePuc,
+  canManageSuppliers,
+  isCompanyManager,
+  isReadOnly,
+} from '../lib/auth'
 import { useCurrency, fmtNum } from '../lib/currency'
 import { downloadCsv } from '../lib/csv'
 import {
@@ -87,6 +94,8 @@ export default function ErpBridge({
   const { currency } = useCurrency()
   const readOnly = isReadOnly(user)
   const allowed = canViewAccounting(user?.role) || isCompanyManager(user?.role)
+  const canManagePucImport = !readOnly && canManagePuc(user?.role)
+  const canManageSupplierImport = !readOnly && canManageSuppliers(user?.role)
 
   const [direction, setDirection] = useState<BridgeDirection>('api_sync')
   const [targetErp, setTargetErp] = useState<ExternalErpSystem>('siigo')
@@ -146,7 +155,7 @@ export default function ErpBridge({
   const [parsedPuc, setParsedPuc] = useState<ParsedErpPucAccount[]>([])
   const [parsedVouchers, setParsedVouchers] = useState<ParsedErpVoucherGroup[]>([])
   const [syncImportedStock, setSyncImportedStock] = useState(true)
-  const [autoCreateMissingPuc, setAutoCreateMissingPuc] = useState(true)
+  const [autoCreateMissingPuc, setAutoCreateMissingPuc] = useState(false)
   const [migrating, setMigrating] = useState(false)
   const [progressText, setProgressText] = useState('')
   const [feedback, setFeedback] = useState<{ ok: boolean; text: string } | null>(null)
@@ -719,7 +728,7 @@ export default function ErpBridge({
             }
           }
 
-          if (t.role === 'proveedor' || t.role === 'ambos') {
+          if (canManageSupplierImport && (t.role === 'proveedor' || t.role === 'ambos')) {
             const existing = (docKey && supByDoc.get(docKey)) || supByName.get(nameKey)
             const payload = {
               name: t.name,
@@ -822,6 +831,13 @@ export default function ErpBridge({
       }
 
       if (importKind === 'puc' && parsedPuc.length > 0) {
+        if (!canManagePucImport) {
+          setFeedback({
+            ok: false,
+            text: 'No tienes permiso para administrar o importar el Plan Único de Cuentas (solo Gerencia o Administración).',
+          })
+          return
+        }
         const sorted = [...parsedPuc].sort((a, b) => a.code.length - b.code.length)
         const existingByCode = new Map(accounts.map(a => [a.code.replace(/\./g, ''), a]))
         let savedCount = 0
@@ -874,7 +890,7 @@ export default function ErpBridge({
           )
         }
 
-        if (autoCreateMissingPuc) {
+        if (autoCreateMissingPuc && canManagePucImport) {
           const missingMap = new Map<string, string>()
           for (const g of balancedGroups) {
             for (const l of g.lines) {
@@ -2280,45 +2296,51 @@ export default function ErpBridge({
                   {
                     id: 'terceros',
                     title: 'Terceros',
-                    sub: 'Clientes y Proveedores',
+                    sub: canManageSupplierImport ? 'Clientes y Proveedores' : 'Solo Clientes',
+                    visible: true,
                   },
                   {
                     id: 'productos',
                     title: 'Productos / Ítems',
                     sub: 'Precios, costos y stock',
+                    visible: true,
                   },
                   {
                     id: 'puc',
                     title: 'Plan de Cuentas',
                     sub: 'Catálogo PUC',
+                    visible: canManagePucImport,
                   },
                   {
                     id: 'comprobantes',
                     title: 'Comprobantes',
                     sub: 'Asientos y saldos iniciales',
+                    visible: true,
                   },
                 ] as const
-              ).map(opt => (
-                <button
-                  key={opt.id}
-                  type="button"
-                  onClick={() => handleSelectImportKind(opt.id)}
-                  className={`p-3 rounded-xl border text-left transition-colors ${
-                    importKind === opt.id
-                      ? 'border-slate-900 bg-slate-900 text-white'
-                      : 'border-slate-200 bg-slate-50/70 hover:bg-slate-100 text-slate-800'
-                  }`}
-                >
-                  <p className="text-xs font-bold">{opt.title}</p>
-                  <p
-                    className={`text-[11px] mt-0.5 ${
-                      importKind === opt.id ? 'text-slate-300' : 'text-slate-500'
+              )
+                .filter(opt => opt.visible)
+                .map(opt => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => handleSelectImportKind(opt.id)}
+                    className={`p-3 rounded-xl border text-left transition-colors ${
+                      importKind === opt.id
+                        ? 'border-slate-900 bg-slate-900 text-white'
+                        : 'border-slate-200 bg-slate-50/70 hover:bg-slate-100 text-slate-800'
                     }`}
                   >
-                    {opt.sub}
-                  </p>
-                </button>
-              ))}
+                    <p className="text-xs font-bold">{opt.title}</p>
+                    <p
+                      className={`text-[11px] mt-0.5 ${
+                        importKind === opt.id ? 'text-slate-300' : 'text-slate-500'
+                      }`}
+                    >
+                      {opt.sub}
+                    </p>
+                  </button>
+                ))}
             </div>
           </div>
 
@@ -2378,7 +2400,7 @@ export default function ErpBridge({
             </label>
           )}
 
-          {importKind === 'comprobantes' && parsedVouchers.length > 0 && (
+          {importKind === 'comprobantes' && parsedVouchers.length > 0 && canManagePucImport && (
             <label className="inline-flex items-center gap-2 text-xs text-slate-700 cursor-pointer">
               <input
                 type="checkbox"

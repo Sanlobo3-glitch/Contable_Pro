@@ -1,6 +1,13 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
-import { useAuth, isReadOnly, canManageInventory } from '../lib/auth'
+import {
+  useAuth,
+  isReadOnly,
+  canRegisterPurchases,
+  canVoidPurchases,
+  canClassifyPurchaseVat,
+  canViewPayables,
+} from '../lib/auth'
 import { useCurrency } from '../lib/currency'
 import { buildDocHtml, buildShareText, printHtml, type DocData } from '../lib/documents'
 import { downloadCsv } from '../lib/csv'
@@ -137,11 +144,12 @@ export default function Purchases({ onNavigate }: { onNavigate?: (page: string) 
   const { user } = useAuth()
   const { fmt: money } = useCurrency()
 
-  const canManage = canManageInventory(user?.role)
-  const readOnly = isReadOnly(user) || !canManage
-  const canClassifyVat =
-    !isReadOnly(user) &&
-    ['admin', 'dueno', 'admin_empresa', 'gerente', 'contador'].includes(user?.role || '')
+  const baseReadOnly = isReadOnly(user)
+  const canCreatePurchase = !baseReadOnly && canRegisterPurchases(user?.role)
+  const canVoidPurchase = !baseReadOnly && canVoidPurchases(user?.role)
+  const canOpenPayables = canViewPayables(user?.role)
+  const readOnly = !canCreatePurchase
+  const canClassifyVat = !baseReadOnly && canClassifyPurchaseVat(user?.role)
 
   const [purchases, setPurchases] = useState<Purchase[]>([])
   const [products, setProducts] = useState<Product[]>([])
@@ -536,7 +544,7 @@ export default function Purchases({ onNavigate }: { onNavigate?: (page: string) 
   }
 
   async function confirmCancelPurchase() {
-    if (!cancelTarget || readOnly || cancellingId || saving) return
+    if (!cancelTarget || !canVoidPurchase || cancellingId || saving) return
     if (cancelTarget.status === 'anulada') return
 
     setCancellingId(cancelTarget.id)
@@ -716,7 +724,7 @@ export default function Purchases({ onNavigate }: { onNavigate?: (page: string) 
               Exportar Excel
             </button>
           )}
-          {onNavigate && (
+          {onNavigate && canOpenPayables && (
             <button
               onClick={() => onNavigate('payables')}
               className="flex items-center gap-2 bg-white border border-slate-200 text-slate-700 px-3 py-2 rounded-lg text-sm font-medium hover:bg-slate-50"
@@ -725,38 +733,40 @@ export default function Purchases({ onNavigate }: { onNavigate?: (page: string) 
               Cuentas por pagar
             </button>
           )}
-          <button
-            type="button"
-            onClick={() => {
-              if (!readOnly) setShowInvoiceScanner(true)
-            }}
-            disabled={readOnly || loading}
-            title="Fotografiar o subir factura o ticket de compra para cargar mercancía automáticamente"
-            className="flex items-center gap-1.5 bg-emerald-50 border border-emerald-300 text-emerald-900 px-3 py-2 rounded-lg text-sm font-semibold hover:bg-emerald-100 disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            <ScanLine className="w-4 h-4 text-emerald-700" />
-            Escanear factura
-          </button>
-          <button
-            onClick={() => {
-              if (!readOnly) {
-                setDraftNotice('')
-                setShowForm(true)
-              }
-            }}
-            disabled={readOnly || loading}
-            className="flex items-center gap-2 bg-slate-800 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            <Plus className="w-4 h-4" />
-            Nueva compra
-          </button>
+          {canCreatePurchase && (
+            <>
+              <button
+                type="button"
+                onClick={() => setShowInvoiceScanner(true)}
+                disabled={loading}
+                title="Fotografiar o subir factura o ticket de compra para cargar mercancía automáticamente"
+                className="flex items-center gap-1.5 bg-emerald-50 border border-emerald-300 text-emerald-900 px-3 py-2 rounded-lg text-sm font-semibold hover:bg-emerald-100 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <ScanLine className="w-4 h-4 text-emerald-700" />
+                Escanear factura
+              </button>
+              <button
+                onClick={() => {
+                  setDraftNotice('')
+                  setShowForm(true)
+                }}
+                disabled={loading}
+                className="flex items-center gap-2 bg-slate-800 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                <Plus className="w-4 h-4" />
+                Nueva compra
+              </button>
+            </>
+          )}
         </div>
       </div>
 
-      {readOnly && (
+      {!canCreatePurchase && (
         <div className="flex items-center gap-2 text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-4 text-xs">
           <Lock className="w-3.5 h-3.5 shrink-0" />
-          Modo de solo lectura o sin permisos para gestionar compras.
+          {canClassifyVat
+            ? 'Vista de supervisión y clasificación fiscal de IVA: puedes consultar compras y reclasificar IVA pendiente; solo Compras o Administración pueden registrar compras nuevas.'
+            : 'Modo de solo lectura o sin permisos para registrar compras directas.'}
         </div>
       )}
 
@@ -943,7 +953,7 @@ export default function Purchases({ onNavigate }: { onNavigate?: (page: string) 
                         Ver / Enviar
                       </button>
 
-                      {!readOnly && !annulled && (
+                      {canVoidPurchase && !annulled && (
                         <button
                           onClick={() => {
                             setCancelErr('')
@@ -1676,7 +1686,7 @@ export default function Purchases({ onNavigate }: { onNavigate?: (page: string) 
       )}
 
       {/* Modal: Confirmar anulación de compra */}
-      {cancelTarget && (
+      {cancelTarget && canVoidPurchase && (
         <div
           className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4"
           onClick={() => !cancellingId && setCancelTarget(null)}

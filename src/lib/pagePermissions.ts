@@ -7,15 +7,22 @@
 import {
   canAccessCashAndAudit,
   canManageInventory,
+  canManagePurchaseOrders,
   canManagePurchases,
   canManageSettings,
+  canManageSuppliers,
   canManageTeam,
   canManageTransport,
   canManageUsers,
+  canReceivePurchaseOrders,
+  canRegisterPurchases,
   canRegisterSales,
   canViewAccounting,
   canViewDashboard,
+  canViewPayables,
+  canViewPurchaseDevolutions,
   canViewStats,
+  canViewSuppliers,
   isCompanyManager,
 } from './auth'
 import type { Role } from '../types'
@@ -24,8 +31,21 @@ type Rule = (role?: Role) => boolean
 
 /** Reglas de los roles de alcance ESTRICTO (solo ven estas páginas). */
 const STRICT_ROLE_PAGES: Partial<Record<Role, string[]>> = {
-  contador: ['accounting', 'accounting_puc', 'journal_entry', 'accstate', 'dian_compliance'],
-  // Vendedor (tienda o ruta): vende, consulta sus ventas, su ruta asignada, clientes, metas e inventario. NO maneja caja.
+  // Decisión 1A: Contador con separación de funciones (incluye clasificación de IVA en compras y módulo tributario/DIAN/cierres lectura)
+  contador: [
+    'accounting',
+    'accounting_puc',
+    'journal_entry',
+    'accstate',
+    'cpa',
+    'accsetup',
+    'accclose',
+    'taxes',
+    'dian_compliance',
+    'purchases',
+    'devolutions',
+  ],
+  // Decisión 4A: Vendedor conserva sus 10 vistas comerciales sin cierre de caja ('cash').
   vendedor: [
     'pos',
     'sales',
@@ -41,7 +61,7 @@ const STRICT_ROLE_PAGES: Partial<Record<Role, string[]>> = {
   transportador: ['warehouses', 'map', 'dispatch', 'routeplan', 'dispatch_history', 'equipment_assets'],
 }
 
-/** Reglas del resto de roles (dueño, admin empresa, almacén, compras, cajero, soporte...). */
+/** Reglas del resto de roles (dueño, admin empresa, gerente, almacén, comprador, cajero, soporte...). */
 const GENERIC_RULES: Record<string, Rule> = {
   manager_center: role => isCompanyManager(role),
   manager_summary: role => isCompanyManager(role),
@@ -57,12 +77,14 @@ const GENERIC_RULES: Record<string, Rule> = {
   myroute: role => role === 'vendedor',
   dashboard: role => canViewDashboard(role),
   command: role => isCompanyManager(role) || canViewAccounting(role),
-  summary: role => role === 'admin' || role === 'dueno',
+  summary: role => isCompanyManager(role) || canManageInventory(role) || canViewAccounting(role),
   copilot: role => true,
   ask: role => true,
   ai_actions: role => isCompanyManager(role),
+  ai_action_hub: role => isCompanyManager(role),
   pos: role => canRegisterSales(role),
   omnichannel: role => canRegisterSales(role) || isCompanyManager(role),
+  omnichannel_inbox: role => canRegisterSales(role) || isCompanyManager(role),
   catalog: role => canRegisterSales(role),
   catorders: role => canRegisterSales(role) || isCompanyManager(role) || canViewAccounting(role),
   sales: role => canRegisterSales(role) || canViewAccounting(role),
@@ -71,24 +93,25 @@ const GENERIC_RULES: Record<string, Rule> = {
   cartera: role => canRegisterSales(role) || canViewAccounting(role),
   quotations: role => canRegisterSales(role),
   customers: role => canRegisterSales(role) || canViewAccounting(role),
-  devolutions: role => canRegisterSales(role),
-  exchanges: role => canRegisterSales(role),
+  devolutions: role => canRegisterSales(role) || canViewPurchaseDevolutions(role) || isCompanyManager(role),
+  exchanges: role => canRegisterSales(role) || isCompanyManager(role),
   sellers: role => canManageTeam(role) || canViewAccounting(role),
   employee_portal: role => canRegisterSales(role),
   routeplan: role => canManageTransport(role),
   dispatch: role => canManageTransport(role) || canManageInventory(role),
   goals: role => canRegisterSales(role) || isCompanyManager(role),
-  purchaseorders: role => canManagePurchases(role) || canManageInventory(role) || canViewAccounting(role),
-  purchases: role => isCompanyManager(role) || role === 'comprador' || canViewAccounting(role),
-  payables: role => isCompanyManager(role),
-  buyplan: role => isCompanyManager(role) || role === 'comprador',
-  suppliers: role => isCompanyManager(role) || role === 'comprador',
-  supplier_intel: role => isCompanyManager(role) || role === 'comprador',
+  purchaseorders: role => canManagePurchaseOrders(role) || canReceivePurchaseOrders(role) || isCompanyManager(role) || canViewAccounting(role),
+  purchases: role => canRegisterPurchases(role) || canViewAccounting(role) || isCompanyManager(role),
+  payables: role => canViewPayables(role),
+  buyplan: role => isCompanyManager(role) || canManageInventory(role) || role === 'comprador',
+  suppliers: role => canManageSuppliers(role) || canViewSuppliers(role),
+  supplier_intel: role => canManageSuppliers(role) || isCompanyManager(role),
   products: role => true,
   priceshield: role => isCompanyManager(role),
   blindcount: role => canManageInventory(role) || canViewAccounting(role) || isCompanyManager(role),
   warehouses: role => canManageInventory(role),
   branch_balance: role => canManageInventory(role),
+  branch_rebalancing: role => canManageInventory(role),
   equipment_assets: role => canManageInventory(role) || isCompanyManager(role),
   categories: role => canManageInventory(role),
   lots: role => canManageInventory(role),

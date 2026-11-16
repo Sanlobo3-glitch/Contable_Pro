@@ -4428,4 +4428,25 @@ Aunque las migraciones base `20261114000063` y `20261114000064` implementan corr
   - `public.acc_reopen_period(integer, integer, text)`: en la base viva permitía solo `'dueno'` sin validar `active = true` ni incluir `'admin_empresa'`; se incorporó su reemplazo endurecido dentro de `20261115000065_corregir_permisos_y_seguridad_fase_b.sql` usando `public._require_company_roles(array['admin', 'dueno', 'admin_empresa'])`.
 - **Estado de ejecución en Supabase:** la migración `20261115000065_corregir_permisos_y_seguridad_fase_b.sql` **no se ha aplicado todavía en la base viva** (pendiente de revisión y autorización expresa antes de aplicarla y correr `supabase/tests/etapa1_permisos_y_seguridad_rollback_tests.sql`).
 
+---
+
+## 5. Corrección de auditoría independiente de Etapa 1 (sobre commit `77cd7d5`)
+
+**Estado de ejecución:** Implementada en código, pruebas SQL transaccionales y nueva migración incremental (**⏳ Pendiente de aplicar `000065` y `000066` en Supabase en vivo**; **NO se ejecutó SQL/DDL/DML contra producción ni se inició la Etapa 2**).
+
+### 5.1 Hallazgos corregidos
+1. **Hallazgo 1 — Eliminación de falsos positivos en `supabase/tests/etapa1_permisos_y_seguridad_rollback_tests.sql`:**
+   - Eliminados todos los bloques con `EXCEPTION WHEN OTHERS THEN NULL;` y retirado todo `RAISE EXCEPTION` interno del bloque `BEGIN ... EXCEPTION`.
+   - Toda prueba negativa ahora captura `RETURNED_SQLSTATE` y `MESSAGE_TEXT` con `GET STACKED DIAGNOSTICS`, falla **fuera** del bloque `BEGIN ... EXCEPTION` si la operación prohibida llega a ejecutarse (`v_unexpected_ok`), y exige el SQLSTATE/mensaje exacto esperado (`42501` en autorizaciones/aislamiento o `P0001` controlado en reglas de negocio).
+   - Añadidos y endurecidos los escenarios de Almacén (`draft` PO, bodega de Empresa B con `42501`, intento de cambio de `target_warehouse_id` ya asignada con `42501`), Contador (`acc_post_entry` en borrador propio vs operativo/ajeno) y `admin_empresa` (`acc_reopen_period` y `acc_post_entry`).
+2. **Hallazgo 2 — Restricción de `public.acc_post_entry(p_entry_id uuid)` para `contador` (`supabase/migrations/20261116000066_blindaje_etapa1_auditoria_77cd7d5.sql`):**
+   - Sin modificar la migración `000065`, la migración incremental `000066` exige perfil activo en `current_company_id()` con rol autorizado (`admin`, `dueno`, `admin_empresa`, `gerente`, `contador`, sin bypass de plataforma entre empresas), bloquea la fila `FOR UPDATE`, verifica periodo abierto (`acc_period_is_open`) y cuando `role = 'contador'` impone exclusivamente `coalesce(source_type, '') IN ('manual', 'ajuste')` **y** `created_by = auth.uid()` (error `42501` en caso contrario).
+   - Acompañado en UI (`src/pages/AccountantDesk.tsx`) y respaldo demo (`src/lib/supabase.ts`) manteniendo compatibilidad con `acc_create_entry(..., p_post := true)`.
+3. **Hallazgo 3 — Validación estricta de bodega destino en `public.recibir_orden_compra(...)` (`000066` y `src/pages/PurchaseOrders.tsx`):**
+   - Valida existencia, pertenencia a `company_id = current_company_id()` (`ERRCODE = '42501'` ante bodega de otra empresa), estado `active = true`, coherencia con `v_po.branch_id` cuando ambos están definidos, y bloquea expresamente con `ERRCODE = '42501'` que el rol `almacen` cambie una `target_warehouse_id` ya asignada en la orden de compra (preservando la asignación previa en `purchase_orders.target_warehouse_id = coalesce(v_po.target_warehouse_id, v_wh)`).
+   - En `src/pages/PurchaseOrders.tsx`, cuando `isAlmacenRole && Boolean(receiveTarget.target_warehouse_id)`, el selector de bodega queda deshabilitado y bloqueado también en el flujo de respaldo local.
+4. **Hallazgo 4 — Política *deny-by-default* en `src/lib/pagePermissions.ts`:**
+   - `isPageAllowedForRole(...)` retorna `false` si falta `effectiveRole` o si la página no tiene regla declarada en `GENERIC_RULES` ni en `STRICT_ROLE_PAGES` (`return rule ? rule(effectiveRole) : false`), manteniendo cobertura explícita de todas las rutas legítimas de `src/App.tsx`, `src/components/AppLayout.tsx` y navegaciones internas.
+
+
 

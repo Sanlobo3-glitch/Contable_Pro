@@ -5656,7 +5656,8 @@ function createMockSupabase(silent = false): SupabaseClient {
           entry_date: args.p_date || daysFromNowYmd(0),
           description: args.p_description || 'Asiento manual',
           status: args.p_post ? 'contabilizado' : 'borrador',
-          source_type: 'manual',
+          source_type: String(args.p_source_type || 'manual'),
+          created_by: currentSession?.user?.id || null,
         })
         for (const l of (args.p_lines || [])) {
           const ac = accs.find(a => a.id === l.account_id)
@@ -5674,7 +5675,20 @@ function createMockSupabase(silent = false): SupabaseClient {
       }
       case 'acc_post_entry': {
         const e = getTable('acc_entries').find(x => x.id === args.p_entry_id)
-        if (e) e.status = 'contabilizado'
+        if (!e || e.status !== 'borrador') {
+          return { data: null, error: { message: 'El asiento no existe o ya no es un borrador' } }
+        }
+        const actorRole = String(currentSession?.user?.role || '')
+        if (
+          actorRole === 'contador' &&
+          (!['manual', 'ajuste'].includes(String(e.source_type || '')) || e.created_by !== currentSession?.user?.id)
+        ) {
+          return {
+            data: null,
+            error: { message: 'No autorizado: el contador solo puede contabilizar sus propios asientos manuales o de ajuste' },
+          }
+        }
+        e.status = 'contabilizado'
         return { data: null, error: null }
       }
       case 'acc_reverse_entry': {
@@ -6499,8 +6513,20 @@ function createMockSupabase(silent = false): SupabaseClient {
         const poId = String(args.p_po_id || '')
         const po = getTable('purchase_orders').find(p => p.id === poId)
         if (!po) return { data: null, error: { message: 'Orden de compra no encontrada' } }
-        if (po.status === 'received' || po.status === 'cancelled') {
-          return { data: null, error: { message: 'Esta orden ya fue recibida o cancelada' } }
+        if (po.status === 'received' || po.status === 'cancelled' || po.status === 'draft') {
+          return { data: null, error: { message: 'Solo se pueden recibir órdenes de compra aprobadas, enviadas o parciales' } }
+        }
+        const actorRole = String(currentSession?.user?.role || '')
+        if (
+          actorRole === 'almacen' &&
+          po.target_warehouse_id &&
+          args.p_warehouse_id &&
+          String(args.p_warehouse_id) !== String(po.target_warehouse_id)
+        ) {
+          return {
+            data: null,
+            error: { message: 'El rol almacén no puede cambiar la bodega destino asignada en la orden de compra' },
+          }
         }
         const whId = args.p_warehouse_id ? String(args.p_warehouse_id) : (po.target_warehouse_id ? String(po.target_warehouse_id) : null)
         const lines = Array.isArray(args.p_lines) ? args.p_lines : []

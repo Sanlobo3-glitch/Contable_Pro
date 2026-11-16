@@ -659,6 +659,11 @@ export default function PurchaseOrders({ onNavigate }: { onNavigate?: (page: str
     setReceivingBusy(true)
     const creditDays = Math.max(1, Math.round(Number(receiveCreditDays) || 30))
 
+    const effectiveWarehouseId =
+      isAlmacenRole && receiveTarget.target_warehouse_id
+        ? receiveTarget.target_warehouse_id
+        : receiveWarehouseId
+
     if (usingLocalFallback) {
       // Respaldo transaccional contra registrar_compra + register_warehouse_movement reales
       const purchaseItems = receiveLines
@@ -691,10 +696,10 @@ export default function PurchaseOrders({ onNavigate }: { onNavigate?: (page: str
         return
       }
 
-      if (receiveWarehouseId) {
+      if (effectiveWarehouseId) {
         for (const it of purchaseItems) {
           await supabase.rpc('register_warehouse_movement', {
-            p_warehouse_id: receiveWarehouseId,
+            p_warehouse_id: effectiveWarehouseId,
             p_product_id: it.product_id,
             p_movement_type: 'entry',
             p_quantity: it.quantity,
@@ -722,7 +727,7 @@ export default function PurchaseOrders({ onNavigate }: { onNavigate?: (page: str
           ? {
               ...o,
               status: receiveSummary.allComplete ? 'received' : 'partial',
-              target_warehouse_id: receiveWarehouseId || o.target_warehouse_id,
+              target_warehouse_id: effectiveWarehouseId || o.target_warehouse_id,
               linked_purchase_id: typeof purchaseId === 'string' ? purchaseId : o.linked_purchase_id,
               received_at: new Date().toISOString(),
             }
@@ -743,7 +748,7 @@ export default function PurchaseOrders({ onNavigate }: { onNavigate?: (page: str
 
     const { error } = await supabase.rpc('recibir_orden_compra', {
       p_po_id: receiveTarget.id,
-      p_warehouse_id: receiveWarehouseId || null,
+      p_warehouse_id: effectiveWarehouseId || null,
       p_lines: receiveLines.map(l => ({
         item_id: l.item_id,
         received_now: Math.max(0, Number(l.received_now) || 0),
@@ -1605,8 +1610,9 @@ export default function PurchaseOrders({ onNavigate }: { onNavigate?: (page: str
                   </label>
                   <select
                     value={receiveWarehouseId}
+                    disabled={isAlmacenRole && Boolean(receiveTarget.target_warehouse_id)}
                     onChange={e => setReceiveWarehouseId(e.target.value)}
-                    className="w-full px-3 py-2 rounded-lg border border-slate-300 text-xs bg-white"
+                    className="w-full px-3 py-2 rounded-lg border border-slate-300 text-xs bg-white disabled:bg-slate-100 disabled:text-slate-500"
                   >
                     <option value="">Inventario general (sin bodega específica)</option>
                     {activeWarehouses.map(w => (
@@ -1658,7 +1664,7 @@ export default function PurchaseOrders({ onNavigate }: { onNavigate?: (page: str
 
               {isAlmacenRole && (
                 <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
-                  Recepción física de Almacén: las condiciones de pago, días de crédito y costos unitarios pactados en la orden quedan bloqueados por control financiero.
+                  Recepción física de Almacén: las condiciones de pago, días de crédito, costos unitarios y la bodega destino asignada en la orden quedan bloqueados por control financiero y de inventario.
                 </div>
               )}
 

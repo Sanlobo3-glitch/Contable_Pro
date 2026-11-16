@@ -55,6 +55,7 @@ interface AccEntry {
   description: string
   status: 'borrador' | 'contabilizado' | 'reversado'
   source_type: string
+  created_by?: string | null
 }
 
 interface TrialRow {
@@ -1361,29 +1362,40 @@ export default function AccountantDesk({
                 </div>
               ) : (
                 <div className="divide-y divide-slate-100">
-                  {summary.drafts.map(d => (
-                    <div
-                      key={d.id}
-                      className="px-5 py-3 flex items-center justify-between gap-3 hover:bg-slate-50/70"
-                    >
-                      <div className="min-w-0">
-                        <p className="text-sm font-medium text-slate-900 truncate">
-                          <span className="font-mono">{d.number}</span> · {d.description}
-                        </p>
-                        <p className="text-xs text-slate-500 tabular-nums">
-                          Fecha {d.entry_date} · Origen: {d.source_type}
-                        </p>
-                      </div>
-                      <button
-                        type="button"
-                        disabled={busy}
-                        onClick={() => void handlePostDraftEntry(d.id)}
-                        className="no-print px-3 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-medium hover:bg-slate-800 whitespace-nowrap shrink-0"
+                  {summary.drafts.map(d => {
+                    const canPostThisDraft =
+                      user?.role !== 'contador' ||
+                      ((d.source_type === 'manual' || d.source_type === 'ajuste') && d.created_by === user?.id)
+                    return (
+                      <div
+                        key={d.id}
+                        className="px-5 py-3 flex items-center justify-between gap-3 hover:bg-slate-50/70"
                       >
-                        Mayorizar asiento
-                      </button>
-                    </div>
-                  ))}
+                        <div className="min-w-0">
+                          <p className="text-sm font-medium text-slate-900 truncate">
+                            <span className="font-mono">{d.number}</span> · {d.description}
+                          </p>
+                          <p className="text-xs text-slate-500 tabular-nums">
+                            Fecha {d.entry_date} · Origen: {d.source_type}
+                          </p>
+                        </div>
+                        {canPostThisDraft ? (
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => void handlePostDraftEntry(d.id)}
+                            className="no-print px-3 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-medium hover:bg-slate-800 whitespace-nowrap shrink-0"
+                          >
+                            Mayorizar asiento
+                          </button>
+                        ) : (
+                          <span className="text-[11px] font-medium text-slate-500 whitespace-nowrap shrink-0">
+                            Requiere gerencia / autor
+                          </span>
+                        )}
+                      </div>
+                    )
+                  })}
                 </div>
               )}
             </div>

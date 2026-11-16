@@ -160,6 +160,8 @@ export function isPageAllowedForRole(
   opts?: { isMasterAccount?: boolean; isDemo?: boolean; masterRoleOverride?: Role | null }
 ): boolean {
   const effectiveRole = opts?.masterRoleOverride || role
+  if (!effectiveRole) return false
+
   // Centro de Scripts SQL y Supabase: solo Administrador Central; nunca roles de alcance estricto
   if (page === 'sqlcenter') {
     if (
@@ -179,8 +181,8 @@ export function isPageAllowedForRole(
       (!opts?.masterRoleOverride || opts.masterRoleOverride === 'admin')
     )
   }
-  const strict = effectiveRole ? STRICT_ROLE_PAGES[effectiveRole] : undefined
+  const strict = STRICT_ROLE_PAGES[effectiveRole]
   if (strict) return strict.includes(page)
   const rule = GENERIC_RULES[page]
-  return rule ? rule(effectiveRole) : true
+  return rule ? rule(effectiveRole) : false
 }

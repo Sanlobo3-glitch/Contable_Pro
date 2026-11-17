@@ -89,33 +89,45 @@ DECLARE
   v_stock_wh_br1      numeric;
   v_json              jsonb;
 
-  -- Snapshots de atomicidad para PRUEBA 5
-  v_snap_purchases_cnt int;
-  v_snap_prod_stock    numeric;
-  v_snap_kardex_cnt    int;
-  v_snap_wh_stock_sum  numeric;
-  v_snap_wh_moves_cnt  int;
-  v_snap_cxp_owed      numeric;
-  v_snap_po_status     text;
-  v_snap_po_wh         uuid;
-  v_snap_po_link       uuid;
-  v_snap_item_rec      numeric;
-  v_snap_item_rej      numeric;
-  v_after_purchases_cnt int;
-  v_after_prod_stock   numeric;
-  v_after_kardex_cnt   int;
-  v_after_wh_stock_sum numeric;
-  v_after_wh_moves_cnt int;
-  v_after_cxp_owed     numeric;
-  v_after_po_status    text;
-  v_after_po_wh        uuid;
-  v_after_po_link      uuid;
-  v_after_item_rec     numeric;
-  v_after_item_rej     numeric;
-  v_wh_id_chk          uuid;
-  v_br_id_chk          uuid;
-  v_pay_chk            text;
-  v_days_chk           int;
+  -- Snapshots de atomicidad para PRUEBA 5 (incluye desglose por warehouse_id y product_id)
+  v_snap_purchases_cnt  int;
+  v_snap_purchase_ids   jsonb;
+  v_snap_prod_stock     numeric;
+  v_snap_prod_b_stock   numeric;
+  v_snap_kardex_cnt     int;
+  v_snap_kardex_ids     jsonb;
+  v_snap_wh_stock_sum   numeric;
+  v_snap_wh_stock_rows  jsonb;
+  v_snap_wh_moves_cnt   int;
+  v_snap_wh_move_ids    jsonb;
+  v_snap_cxp_owed       numeric;
+  v_snap_cxp_b_owed     numeric;
+  v_snap2_prod_stock    numeric;
+  v_snap2_cxp_owed      numeric;
+  v_snap_pos_state      jsonb;
+  v_snap_po_items_state jsonb;
+  v_after_purchases_cnt  int;
+  v_after_purchase_ids   jsonb;
+  v_after_prod_stock     numeric;
+  v_after_prod_b_stock   numeric;
+  v_after_kardex_cnt     int;
+  v_after_kardex_ids     jsonb;
+  v_after_wh_stock_sum   numeric;
+  v_after_wh_stock_rows  jsonb;
+  v_after_wh_moves_cnt   int;
+  v_after_wh_move_ids    jsonb;
+  v_after_cxp_owed       numeric;
+  v_after_cxp_b_owed     numeric;
+  v_after_pos_state      jsonb;
+  v_after_po_items_state jsonb;
+  v_after_po_status     text;
+  v_after_po_wh         uuid;
+  v_after_po_link       uuid;
+  v_after_item_rec      numeric;
+  v_wh_id_chk           uuid;
+  v_br_id_chk           uuid;
+  v_pay_chk             text;
+  v_days_chk            int;
 
   -- Variables de control estricto de excepciones (fuera de los bloques BEGIN...EXCEPTION)
   v_unexpected_ok boolean;
@@ -949,18 +961,78 @@ BEGIN
   SELECT id INTO v_po_inact_item_a FROM public.purchase_order_items WHERE po_id = v_po_inact_target_a LIMIT 1;
 
   -- Snapshot basal ANTES de las pruebas negativas (para verificar CERO cambios en BD ante rechazo)
-  SELECT count(*) INTO v_snap_purchases_cnt FROM public.purchases WHERE company_id = v_co_a;
-  SELECT stock INTO v_snap_prod_stock FROM public.products WHERE id = v_prod_a AND company_id = v_co_a;
-  SELECT count(*) INTO v_snap_kardex_cnt FROM public.kardex WHERE company_id = v_co_a;
-  SELECT coalesce(sum(quantity), 0) INTO v_snap_wh_stock_sum FROM public.warehouse_stock WHERE company_id = v_co_a;
-  SELECT count(*) INTO v_snap_wh_moves_cnt FROM public.warehouse_movements WHERE company_id = v_co_a;
-  v_snap_cxp_owed := public._supplier_owed(v_co_a, v_sup_a);
-  SELECT status, target_warehouse_id, linked_purchase_id
-    INTO v_snap_po_status, v_snap_po_wh, v_snap_po_link
-    FROM public.purchase_orders WHERE id = v_po_br1_wh_a;
-  SELECT received_qty, rejected_qty
-    INTO v_snap_item_rec, v_snap_item_rej
-    FROM public.purchase_order_items WHERE id = v_po_br1_wh_item_a;
+  SELECT count(*), coalesce(jsonb_agg(id ORDER BY id), '[]'::jsonb)
+    INTO v_snap_purchases_cnt, v_snap_purchase_ids
+    FROM public.purchases
+   WHERE company_id IN (v_co_a, v_co_b);
+
+  SELECT stock INTO v_snap_prod_stock   FROM public.products WHERE id = v_prod_a AND company_id = v_co_a;
+  SELECT stock INTO v_snap_prod_b_stock FROM public.products WHERE id = v_prod_b AND company_id = v_co_b;
+
+  SELECT count(*), coalesce(jsonb_agg(id ORDER BY id), '[]'::jsonb)
+    INTO v_snap_kardex_cnt, v_snap_kardex_ids
+    FROM public.kardex
+   WHERE company_id IN (v_co_a, v_co_b);
+
+  SELECT coalesce(sum(ws.quantity), 0),
+         coalesce(
+           jsonb_agg(
+             jsonb_build_object(
+               'company_id', ws.company_id,
+               'warehouse_id', ws.warehouse_id,
+               'product_id', ws.product_id,
+               'quantity', ws.quantity,
+               'reserved_quantity', ws.reserved_quantity
+             )
+             ORDER BY ws.company_id, ws.warehouse_id, ws.product_id
+           ),
+           '[]'::jsonb
+         )
+    INTO v_snap_wh_stock_sum, v_snap_wh_stock_rows
+    FROM public.warehouse_stock ws
+   WHERE ws.company_id IN (v_co_a, v_co_b);
+
+  SELECT count(*), coalesce(jsonb_agg(id ORDER BY id), '[]'::jsonb)
+    INTO v_snap_wh_moves_cnt, v_snap_wh_move_ids
+    FROM public.warehouse_movements
+   WHERE company_id IN (v_co_a, v_co_b);
+
+  v_snap_cxp_owed   := public._supplier_owed(v_co_a, v_sup_a);
+  v_snap_cxp_b_owed := public._supplier_owed(v_co_b, v_sup_b);
+
+  SELECT coalesce(
+           jsonb_agg(
+             jsonb_build_object(
+               'id', po.id,
+               'status', po.status,
+               'target_warehouse_id', po.target_warehouse_id,
+               'linked_purchase_id', po.linked_purchase_id,
+               'received_at', po.received_at
+             )
+             ORDER BY po.id
+           ),
+           '[]'::jsonb
+         )
+    INTO v_snap_pos_state
+    FROM public.purchase_orders po
+   WHERE po.company_id IN (v_co_a, v_co_b);
+
+  SELECT coalesce(
+           jsonb_agg(
+             jsonb_build_object(
+               'id', poi.id,
+               'po_id', poi.po_id,
+               'received_qty', poi.received_qty,
+               'rejected_qty', poi.rejected_qty,
+               'unit_cost', poi.unit_cost
+             )
+             ORDER BY poi.id
+           ),
+           '[]'::jsonb
+         )
+    INTO v_snap_po_items_state
+    FROM public.purchase_order_items poi
+   WHERE poi.company_id IN (v_co_a, v_co_b);
 
   -- 5.1 Almacén NO puede recibir con p_warehouse_id = NULL y target_warehouse_id = NULL (42501)
   PERFORM set_config('request.jwt.claim.sub', v_u_almacen_a::text, true);
@@ -1121,39 +1193,101 @@ BEGIN
   RESET ROLE;
 
   -- 5.7 VERIFICACIÓN ESTRICTA DE ATOMICIDAD: todos los rechazos anteriores dejaron CERO cambios
-  SELECT count(*) INTO v_after_purchases_cnt FROM public.purchases WHERE company_id = v_co_a;
-  SELECT stock INTO v_after_prod_stock FROM public.products WHERE id = v_prod_a AND company_id = v_co_a;
-  SELECT count(*) INTO v_after_kardex_cnt FROM public.kardex WHERE company_id = v_co_a;
-  SELECT coalesce(sum(quantity), 0) INTO v_after_wh_stock_sum FROM public.warehouse_stock WHERE company_id = v_co_a;
-  SELECT count(*) INTO v_after_wh_moves_cnt FROM public.warehouse_movements WHERE company_id = v_co_a;
-  v_after_cxp_owed := public._supplier_owed(v_co_a, v_sup_a);
-  SELECT status, target_warehouse_id, linked_purchase_id
-    INTO v_after_po_status, v_after_po_wh, v_after_po_link
-    FROM public.purchase_orders WHERE id = v_po_br1_wh_a;
-  SELECT received_qty, rejected_qty
-    INTO v_after_item_rec, v_after_item_rej
-    FROM public.purchase_order_items WHERE id = v_po_br1_wh_item_a;
+  SELECT count(*), coalesce(jsonb_agg(id ORDER BY id), '[]'::jsonb)
+    INTO v_after_purchases_cnt, v_after_purchase_ids
+    FROM public.purchases
+   WHERE company_id IN (v_co_a, v_co_b);
 
-  ASSERT v_after_purchases_cnt = v_snap_purchases_cnt, 'FALLO ATOMICIDAD: una recepción rechazada insertó registros en purchases';
-  ASSERT v_after_prod_stock    = v_snap_prod_stock,    'FALLO ATOMICIDAD: una recepción rechazada alteró products.stock';
-  ASSERT v_after_kardex_cnt    = v_snap_kardex_cnt,    'FALLO ATOMICIDAD: una recepción rechazada insertó registros en kardex';
-  ASSERT v_after_wh_stock_sum  = v_snap_wh_stock_sum,  'FALLO ATOMICIDAD: una recepción rechazada alteró warehouse_stock';
-  ASSERT v_after_wh_moves_cnt  = v_snap_wh_moves_cnt,  'FALLO ATOMICIDAD: una recepción rechazada insertó en warehouse_movements';
-  ASSERT v_after_cxp_owed      = v_snap_cxp_owed,      'FALLO ATOMICIDAD: una recepción rechazada alteró el saldo CxP';
-  ASSERT v_after_po_status     = v_snap_po_status
-     AND v_after_po_wh         IS NOT DISTINCT FROM v_snap_po_wh
-     AND v_after_po_link       IS NOT DISTINCT FROM v_snap_po_link,
-    'FALLO ATOMICIDAD: una recepción rechazada alteró purchase_orders (v_po_br1_wh_a)';
-  ASSERT v_after_item_rec      = v_snap_item_rec
-     AND v_after_item_rej      = v_snap_item_rej,
+  SELECT stock INTO v_after_prod_stock   FROM public.products WHERE id = v_prod_a AND company_id = v_co_a;
+  SELECT stock INTO v_after_prod_b_stock FROM public.products WHERE id = v_prod_b AND company_id = v_co_b;
+
+  SELECT count(*), coalesce(jsonb_agg(id ORDER BY id), '[]'::jsonb)
+    INTO v_after_kardex_cnt, v_after_kardex_ids
+    FROM public.kardex
+   WHERE company_id IN (v_co_a, v_co_b);
+
+  SELECT coalesce(sum(ws.quantity), 0),
+         coalesce(
+           jsonb_agg(
+             jsonb_build_object(
+               'company_id', ws.company_id,
+               'warehouse_id', ws.warehouse_id,
+               'product_id', ws.product_id,
+               'quantity', ws.quantity,
+               'reserved_quantity', ws.reserved_quantity
+             )
+             ORDER BY ws.company_id, ws.warehouse_id, ws.product_id
+           ),
+           '[]'::jsonb
+         )
+    INTO v_after_wh_stock_sum, v_after_wh_stock_rows
+    FROM public.warehouse_stock ws
+   WHERE ws.company_id IN (v_co_a, v_co_b);
+
+  SELECT count(*), coalesce(jsonb_agg(id ORDER BY id), '[]'::jsonb)
+    INTO v_after_wh_moves_cnt, v_after_wh_move_ids
+    FROM public.warehouse_movements
+   WHERE company_id IN (v_co_a, v_co_b);
+
+  v_after_cxp_owed   := public._supplier_owed(v_co_a, v_sup_a);
+  v_after_cxp_b_owed := public._supplier_owed(v_co_b, v_sup_b);
+
+  SELECT coalesce(
+           jsonb_agg(
+             jsonb_build_object(
+               'id', po.id,
+               'status', po.status,
+               'target_warehouse_id', po.target_warehouse_id,
+               'linked_purchase_id', po.linked_purchase_id,
+               'received_at', po.received_at
+             )
+             ORDER BY po.id
+           ),
+           '[]'::jsonb
+         )
+    INTO v_after_pos_state
+    FROM public.purchase_orders po
+   WHERE po.company_id IN (v_co_a, v_co_b);
+
+  SELECT coalesce(
+           jsonb_agg(
+             jsonb_build_object(
+               'id', poi.id,
+               'po_id', poi.po_id,
+               'received_qty', poi.received_qty,
+               'rejected_qty', poi.rejected_qty,
+               'unit_cost', poi.unit_cost
+             )
+             ORDER BY poi.id
+           ),
+           '[]'::jsonb
+         )
+    INTO v_after_po_items_state
+    FROM public.purchase_order_items poi
+   WHERE poi.company_id IN (v_co_a, v_co_b);
+
+  ASSERT v_after_purchases_cnt = v_snap_purchases_cnt
+     AND v_after_purchase_ids  IS NOT DISTINCT FROM v_snap_purchase_ids,
+    'FALLO ATOMICIDAD: una recepción rechazada insertó o alteró registros en purchases';
+  ASSERT v_after_prod_stock    = v_snap_prod_stock
+     AND v_after_prod_b_stock  = v_snap_prod_b_stock,
+    'FALLO ATOMICIDAD: una recepción rechazada alteró products.stock';
+  ASSERT v_after_kardex_cnt    = v_snap_kardex_cnt
+     AND v_after_kardex_ids    IS NOT DISTINCT FROM v_snap_kardex_ids,
+    'FALLO ATOMICIDAD: una recepción rechazada insertó o alteró movimientos en kardex';
+  ASSERT v_after_wh_stock_sum  = v_snap_wh_stock_sum
+     AND v_after_wh_stock_rows IS NOT DISTINCT FROM v_snap_wh_stock_rows,
+    'FALLO ATOMICIDAD: una recepción rechazada creó o modificó existencias en warehouse_stock por (warehouse_id, product_id)';
+  ASSERT v_after_wh_moves_cnt  = v_snap_wh_moves_cnt
+     AND v_after_wh_move_ids   IS NOT DISTINCT FROM v_snap_wh_move_ids,
+    'FALLO ATOMICIDAD: una recepción rechazada insertó o alteró registros en warehouse_movements';
+  ASSERT v_after_cxp_owed      = v_snap_cxp_owed
+     AND v_after_cxp_b_owed    = v_snap_cxp_b_owed,
+    'FALLO ATOMICIDAD: una recepción rechazada alteró la obligación CxP con el proveedor';
+  ASSERT v_after_pos_state     IS NOT DISTINCT FROM v_snap_pos_state,
+    'FALLO ATOMICIDAD: una recepción rechazada alteró purchase_orders';
+  ASSERT v_after_po_items_state IS NOT DISTINCT FROM v_snap_po_items_state,
     'FALLO ATOMICIDAD: una recepción rechazada alteró purchase_order_items';
-
-  SELECT status INTO v_status FROM public.purchase_orders WHERE id = v_po_no_wh_a;
-  ASSERT v_status = 'approved', 'FALLO ATOMICIDAD: v_po_no_wh_a no debió cambiar tras rechazo';
-  SELECT status INTO v_status FROM public.purchase_orders WHERE id = v_po_br1_a;
-  ASSERT v_status = 'approved', 'FALLO ATOMICIDAD: v_po_br1_a no debió cambiar tras rechazo';
-  SELECT status INTO v_status FROM public.purchase_orders WHERE id = v_po_cancel_a;
-  ASSERT v_status = 'cancelled', 'FALLO ATOMICIDAD: v_po_cancel_a no debió cambiar tras rechazo';
 
   -- 5.8 Recepción legítima en inventario general (NULL) por rol autorizado (comprador)
   PERFORM set_config('request.jwt.claim.sub', v_u_compra_a::text, true);
@@ -1205,7 +1339,77 @@ BEGIN
     NULL, NULL
   ) IS NOT NULL, 'FALLO OC: almacén debe poder recibir OC sin bodega previa indicando bodega activa compatible de la sucursal';
 
+  -- Snapshot previo al intento rechazado sobre OC ya recibida ('received')
+  RESET ROLE;
+
+  SELECT count(*), coalesce(jsonb_agg(id ORDER BY id), '[]'::jsonb)
+    INTO v_snap_purchases_cnt, v_snap_purchase_ids
+    FROM public.purchases
+   WHERE company_id IN (v_co_a, v_co_b);
+  SELECT stock INTO v_snap2_prod_stock FROM public.products WHERE id = v_prod_a AND company_id = v_co_a;
+  SELECT count(*), coalesce(jsonb_agg(id ORDER BY id), '[]'::jsonb)
+    INTO v_snap_kardex_cnt, v_snap_kardex_ids
+    FROM public.kardex
+   WHERE company_id IN (v_co_a, v_co_b);
+  SELECT coalesce(
+           jsonb_agg(
+             jsonb_build_object(
+               'company_id', ws.company_id,
+               'warehouse_id', ws.warehouse_id,
+               'product_id', ws.product_id,
+               'quantity', ws.quantity,
+               'reserved_quantity', ws.reserved_quantity
+             )
+             ORDER BY ws.company_id, ws.warehouse_id, ws.product_id
+           ),
+           '[]'::jsonb
+         )
+    INTO v_snap_wh_stock_rows
+    FROM public.warehouse_stock ws
+   WHERE ws.company_id IN (v_co_a, v_co_b);
+  SELECT count(*), coalesce(jsonb_agg(id ORDER BY id), '[]'::jsonb)
+    INTO v_snap_wh_moves_cnt, v_snap_wh_move_ids
+    FROM public.warehouse_movements
+   WHERE company_id IN (v_co_a, v_co_b);
+  v_snap2_cxp_owed := public._supplier_owed(v_co_a, v_sup_a);
+  SELECT coalesce(
+           jsonb_agg(
+             jsonb_build_object(
+               'id', po.id,
+               'status', po.status,
+               'target_warehouse_id', po.target_warehouse_id,
+               'linked_purchase_id', po.linked_purchase_id,
+               'received_at', po.received_at
+             )
+             ORDER BY po.id
+           ),
+           '[]'::jsonb
+         )
+    INTO v_snap_pos_state
+    FROM public.purchase_orders po
+   WHERE po.company_id IN (v_co_a, v_co_b);
+  SELECT coalesce(
+           jsonb_agg(
+             jsonb_build_object(
+               'id', poi.id,
+               'po_id', poi.po_id,
+               'received_qty', poi.received_qty,
+               'rejected_qty', poi.rejected_qty,
+               'unit_cost', poi.unit_cost
+             )
+             ORDER BY poi.id
+           ),
+           '[]'::jsonb
+         )
+    INTO v_snap_po_items_state
+    FROM public.purchase_order_items poi
+   WHERE poi.company_id IN (v_co_a, v_co_b);
+
   -- Intentar recibir nuevamente una OC ya recibida ('received') -> P0001
+  PERFORM set_config('request.jwt.claim.sub', v_u_almacen_a::text, true);
+  PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', v_u_almacen_a::text, 'role', 'authenticated')::text, true);
+  SET LOCAL ROLE authenticated;
+
   v_unexpected_ok := false; v_err_state := NULL; v_err_msg := NULL;
   BEGIN
     PERFORM public.recibir_orden_compra(
@@ -1223,6 +1427,85 @@ BEGIN
   END IF;
 
   RESET ROLE;
+
+  SELECT count(*), coalesce(jsonb_agg(id ORDER BY id), '[]'::jsonb)
+    INTO v_after_purchases_cnt, v_after_purchase_ids
+    FROM public.purchases
+   WHERE company_id IN (v_co_a, v_co_b);
+  SELECT stock INTO v_after_prod_stock FROM public.products WHERE id = v_prod_a AND company_id = v_co_a;
+  SELECT count(*), coalesce(jsonb_agg(id ORDER BY id), '[]'::jsonb)
+    INTO v_after_kardex_cnt, v_after_kardex_ids
+    FROM public.kardex
+   WHERE company_id IN (v_co_a, v_co_b);
+  SELECT coalesce(
+           jsonb_agg(
+             jsonb_build_object(
+               'company_id', ws.company_id,
+               'warehouse_id', ws.warehouse_id,
+               'product_id', ws.product_id,
+               'quantity', ws.quantity,
+               'reserved_quantity', ws.reserved_quantity
+             )
+             ORDER BY ws.company_id, ws.warehouse_id, ws.product_id
+           ),
+           '[]'::jsonb
+         )
+    INTO v_after_wh_stock_rows
+    FROM public.warehouse_stock ws
+   WHERE ws.company_id IN (v_co_a, v_co_b);
+  SELECT count(*), coalesce(jsonb_agg(id ORDER BY id), '[]'::jsonb)
+    INTO v_after_wh_moves_cnt, v_after_wh_move_ids
+    FROM public.warehouse_movements
+   WHERE company_id IN (v_co_a, v_co_b);
+  v_after_cxp_owed := public._supplier_owed(v_co_a, v_sup_a);
+  SELECT coalesce(
+           jsonb_agg(
+             jsonb_build_object(
+               'id', po.id,
+               'status', po.status,
+               'target_warehouse_id', po.target_warehouse_id,
+               'linked_purchase_id', po.linked_purchase_id,
+               'received_at', po.received_at
+             )
+             ORDER BY po.id
+           ),
+           '[]'::jsonb
+         )
+    INTO v_after_pos_state
+    FROM public.purchase_orders po
+   WHERE po.company_id IN (v_co_a, v_co_b);
+  SELECT coalesce(
+           jsonb_agg(
+             jsonb_build_object(
+               'id', poi.id,
+               'po_id', poi.po_id,
+               'received_qty', poi.received_qty,
+               'rejected_qty', poi.rejected_qty,
+               'unit_cost', poi.unit_cost
+             )
+             ORDER BY poi.id
+           ),
+           '[]'::jsonb
+         )
+    INTO v_after_po_items_state
+    FROM public.purchase_order_items poi
+   WHERE poi.company_id IN (v_co_a, v_co_b);
+
+  ASSERT v_after_purchases_cnt  = v_snap_purchases_cnt AND v_after_purchase_ids IS NOT DISTINCT FROM v_snap_purchase_ids,
+    'FALLO ATOMICIDAD (received): creó o alteró compras tras rechazo';
+  ASSERT v_after_prod_stock     = v_snap2_prod_stock,
+    'FALLO ATOMICIDAD (received): alteró products.stock tras rechazo';
+  ASSERT v_after_kardex_cnt     = v_snap_kardex_cnt AND v_after_kardex_ids IS NOT DISTINCT FROM v_snap_kardex_ids,
+    'FALLO ATOMICIDAD (received): creó o alteró kardex tras rechazo';
+  ASSERT v_after_wh_stock_rows  IS NOT DISTINCT FROM v_snap_wh_stock_rows,
+    'FALLO ATOMICIDAD (received): creó o modificó warehouse_stock por (warehouse_id, product_id) tras rechazo';
+  ASSERT v_after_wh_moves_cnt   = v_snap_wh_moves_cnt AND v_after_wh_move_ids IS NOT DISTINCT FROM v_snap_wh_move_ids,
+    'FALLO ATOMICIDAD (received): creó o alteró warehouse_movements tras rechazo';
+  ASSERT v_after_cxp_owed       = v_snap2_cxp_owed,
+    'FALLO ATOMICIDAD (received): alteró obligación CxP tras rechazo';
+  ASSERT v_after_pos_state      IS NOT DISTINCT FROM v_snap_pos_state
+     AND v_after_po_items_state IS NOT DISTINCT FROM v_snap_po_items_state,
+    'FALLO ATOMICIDAD (received): alteró OC o sus renglones tras rechazo';
 
   SELECT branch_id, warehouse_id, payment_method, credit_days
     INTO v_br_id_chk, v_wh_id_chk, v_pay_chk, v_days_chk

@@ -6510,25 +6510,71 @@ function createMockSupabase(silent = false): SupabaseClient {
         return { data: null, error: null }
       }
       case 'recibir_orden_compra': {
+        const uid = currentSession?.user?.id
+        const actorProfile = uid
+          ? getTable('profiles').find(x => x.id === uid)
+          : getTable('profiles')[0]
+        if (actorProfile && actorProfile.active === false) {
+          return { data: null, error: { message: 'No autorizado: perfil inactivo' } }
+        }
+        const actorRole = String(actorProfile?.role || currentSession?.user?.role || '').trim().toLowerCase()
+        const actorCompanyId = String(actorProfile?.company_id || DEMO_COMPANY_ID)
+        const allowedRoles = ['admin', 'dueno', 'admin_empresa', 'comprador', 'almacen']
+        if (actorRole && !allowedRoles.includes(actorRole)) {
+          return { data: null, error: { message: 'No autorizado para recibir órdenes de compra' } }
+        }
+
         const poId = String(args.p_po_id || '')
-        const po = getTable('purchase_orders').find(p => p.id === poId)
+        const po = getTable('purchase_orders').find(p => p.id === poId && (!p.company_id || p.company_id === actorCompanyId))
         if (!po) return { data: null, error: { message: 'Orden de compra no encontrada' } }
-        if (po.status === 'received' || po.status === 'cancelled' || po.status === 'draft') {
+        if (po.status !== 'approved' && po.status !== 'sent' && po.status !== 'partial') {
           return { data: null, error: { message: 'Solo se pueden recibir órdenes de compra aprobadas, enviadas o parciales' } }
         }
-        const actorRole = String(currentSession?.user?.role || '')
-        if (
-          actorRole === 'almacen' &&
-          po.target_warehouse_id &&
-          args.p_warehouse_id &&
-          String(args.p_warehouse_id) !== String(po.target_warehouse_id)
-        ) {
-          return {
-            data: null,
-            error: { message: 'El rol almacén no puede cambiar la bodega destino asignada en la orden de compra' },
+        if (po.branch_id) {
+          const allBranches = getTable('branches')
+          if (allBranches.length > 0) {
+            const brOk = allBranches.some(b => b.id === po.branch_id && (!b.company_id || b.company_id === actorCompanyId))
+            if (!brOk) {
+              return { data: null, error: { message: 'La sucursal asociada a la orden de compra no pertenece a tu empresa' } }
+            }
           }
         }
-        const whId = args.p_warehouse_id ? String(args.p_warehouse_id) : (po.target_warehouse_id ? String(po.target_warehouse_id) : null)
+
+        const lines = Array.isArray(args.p_lines) ? args.p_lines : []
+        if (lines.length === 0) {
+          return { data: null, error: { message: 'Debes enviar las líneas a recibir de la orden de compra' } }
+        }
+
+        const reqWhId = args.p_warehouse_id !== undefined && args.p_warehouse_id !== null
+          ? String(args.p_warehouse_id).trim()
+          : ''
+        if (reqWhId) {
+          const reqWh = getTable('warehouses').find(w => w.id === reqWhId)
+          if (!reqWh) {
+            return { data: null, error: { message: 'La bodega destino no existe' } }
+          }
+          if (reqWh.company_id && reqWh.company_id !== actorCompanyId) {
+            return { data: null, error: { message: 'No autorizado: la bodega destino pertenece a otra empresa' } }
+          }
+          if (reqWh.active === false) {
+            return { data: null, error: { message: 'La bodega destino está inactiva' } }
+          }
+          if (po.branch_id && String(reqWh.branch_id || '') !== String(po.branch_id)) {
+            return { data: null, error: { message: 'La bodega destino no pertenece a la sucursal de la orden de compra' } }
+          }
+          if (
+            actorRole === 'almacen' &&
+            po.target_warehouse_id &&
+            reqWhId !== String(po.target_warehouse_id)
+          ) {
+            return {
+              data: null,
+              error: { message: 'El rol almacén no puede cambiar la bodega destino asignada en la orden de compra' },
+            }
+          }
+        }
+
+        const whId = reqWhId || (po.target_warehouse_id ? String(po.target_warehouse_id) : null)
         if (actorRole === 'almacen' && !whId) {
           return {
             data: null,
@@ -6540,7 +6586,7 @@ function createMockSupabase(silent = false): SupabaseClient {
           if (!whRow) {
             return { data: null, error: { message: 'La bodega destino no existe' } }
           }
-          if (whRow.company_id && whRow.company_id !== DEMO_COMPANY_ID) {
+          if (whRow.company_id && whRow.company_id !== actorCompanyId) {
             return { data: null, error: { message: 'No autorizado: la bodega destino pertenece a otra empresa' } }
           }
           if (whRow.active === false) {
@@ -6550,21 +6596,103 @@ function createMockSupabase(silent = false): SupabaseClient {
             return { data: null, error: { message: 'La bodega destino no pertenece a la sucursal de la orden de compra' } }
           }
         }
-        const lines = Array.isArray(args.p_lines) ? args.p_lines : []
-        const poItems = getTable('purchase_order_items').filter(i => i.po_id === poId)
+
+        const poMethod = String(po.payment_terms || 'credito').trim() || 'credito'
+        const poCreditDays = po.credit_days !== undefined && po.credit_days !== null ? Number(po.credit_days) : 30
+        const reqMethodRaw = args.p_payment_method !== undefined && args.p_payment_method !== null
+          ? String(args.p_payment_method).trim()
+          : ''
+        const reqCreditDaysRaw = args.p_credit_days !== undefined && args.p_credit_days !== null && args.p_credit_days !== ''
+          ? Number(args.p_credit_days)
+          : null
+
+        let method = poMethod
+        let creditDays = poCreditDays
+        if (actorRole === 'almacen') {
+          if (reqMethodRaw && reqMethodRaw !== poMethod) {
+            return {
+              data: null,
+              error: { message: 'El rol almacén no puede modificar la condición de pago de la orden de compra' },
+            }
+          }
+          if (reqCreditDaysRaw !== null) {
+            if (!Number.isFinite(reqCreditDaysRaw) || reqCreditDaysRaw !== poCreditDays) {
+              return {
+                data: null,
+                error: { message: 'El rol almacén no puede modificar los días de crédito de la orden de compra' },
+              }
+            }
+          }
+        } else {
+          method = reqMethodRaw || poMethod
+          creditDays = reqCreditDaysRaw !== null && Number.isFinite(reqCreditDaysRaw) ? reqCreditDaysRaw : poCreditDays
+        }
+
+        const poItems = getTable('purchase_order_items').filter(i => i.po_id === poId && (!i.company_id || i.company_id === actorCompanyId))
         const purchaseItems: Row[] = []
+        const seenIds = new Set<string>()
+        const stagedUpdates: Array<{
+          item: Row
+          recNow: number
+          rejNow: number
+          uCost: number
+          lotCode: string
+          expiryDate: string
+        }> = []
 
         for (const ln of lines) {
-          const item = poItems.find(i => i.id === ln.item_id)
-          if (!item) continue
-          const recNow = Math.max(0, Number(ln.received_now) || 0)
-          const rejNow = Math.max(0, Number(ln.rejected_now) || 0)
-          const uCost = Math.max(0, Number(ln.unit_cost ?? item.unit_cost) || 0)
-          item.received_qty = (Number(item.received_qty) || 0) + recNow
-          item.rejected_qty = (Number(item.rejected_qty) || 0) + rejNow
-          item.unit_cost = uCost
-          if (ln.lot_code) item.lot_code = String(ln.lot_code)
-          if (ln.expiry_date) item.expiry_date = String(ln.expiry_date)
+          const itemId = ln?.item_id ? String(ln.item_id).trim() : ''
+          if (!itemId) {
+            return { data: null, error: { message: 'Falta item_id en línea de recepción de OC' } }
+          }
+          if (seenIds.has(itemId)) {
+            return { data: null, error: { message: `Línea duplicada (${itemId}) en recepción de orden de compra` } }
+          }
+          seenIds.add(itemId)
+
+          const item = poItems.find(i => i.id === itemId)
+          if (!item) {
+            return { data: null, error: { message: `El renglón ${itemId} no pertenece a esta orden de compra` } }
+          }
+
+          const recNow = ln.received_now === undefined || ln.received_now === null || ln.received_now === ''
+            ? 0
+            : Number(ln.received_now)
+          const rejNow = ln.rejected_now === undefined || ln.rejected_now === null || ln.rejected_now === ''
+            ? 0
+            : Number(ln.rejected_now)
+          if (!Number.isFinite(recNow) || !Number.isFinite(rejNow) || recNow < 0 || rejNow < 0) {
+            return { data: null, error: { message: 'Las cantidades recibidas y rechazadas no pueden ser negativas ni inválidas' } }
+          }
+
+          const prevRec = Number(item.received_qty) || 0
+          const prevRej = Number(item.rejected_qty) || 0
+          const ordered = Number(item.ordered_qty) || 0
+          if (prevRec + prevRej + recNow + rejNow > ordered + 0.0001) {
+            return { data: null, error: { message: `La cantidad recibida/rechazada de "${item.product_name}" supera lo ordenado (${ordered})` } }
+          }
+
+          const origCost = Number(item.unit_cost) || 0
+          const hasUnitCost = ln.unit_cost !== undefined && ln.unit_cost !== null && String(ln.unit_cost).trim() !== ''
+          let uCost = origCost
+          if (hasUnitCost) {
+            const reqCost = Number(ln.unit_cost)
+            if (!Number.isFinite(reqCost) || reqCost < 0) {
+              return { data: null, error: { message: 'El costo unitario no puede ser negativo ni inválido' } }
+            }
+            if (actorRole === 'almacen' && Math.abs(reqCost - origCost) > 0.0001) {
+              return {
+                data: null,
+                error: { message: 'El rol almacén no puede modificar el costo unitario pactado en la orden de compra' },
+              }
+            }
+            uCost = reqCost
+          }
+
+          const lotCode = ln.lot_code !== undefined && ln.lot_code !== null ? String(ln.lot_code).trim() : ''
+          const expiryDate = ln.expiry_date !== undefined && ln.expiry_date !== null ? String(ln.expiry_date).trim() : ''
+
+          stagedUpdates.push({ item, recNow, rejNow, uCost, lotCode, expiryDate })
           if (recNow > 0) {
             purchaseItems.push({
               product_id: item.product_id,
@@ -6572,24 +6700,31 @@ function createMockSupabase(silent = false): SupabaseClient {
               quantity: recNow,
               cost: uCost,
               subtotal: Math.round(recNow * uCost * 100) / 100,
-              ...(ln.expiry_date ? { lot_code: ln.lot_code || '', expiry_date: ln.expiry_date } : {}),
+              ...(lotCode ? { lot_code: lotCode } : {}),
+              ...(expiryDate ? { expiry_date: expiryDate } : {}),
             })
           }
         }
 
         if (purchaseItems.length === 0) {
-          return { data: null, error: { message: 'Indica al menos una unidad recibida conforme' } }
+          return { data: null, error: { message: 'Indica al menos una unidad recibida conforme para ingresar al inventario' } }
         }
 
-        const method = String(args.p_payment_method || po.payment_terms || 'credito')
-        const creditDays = Number(args.p_credit_days ?? po.credit_days ?? 30)
         const purRes = await handleRpc('registrar_compra', {
           p_supplier_id: po.supplier_id,
           p_items: purchaseItems,
           p_payment_method: method,
-          p_credit_days: creditDays,
+          p_credit_days: method === 'credito' ? creditDays : null,
         })
         if (purRes.error) return purRes
+
+        for (const upd of stagedUpdates) {
+          upd.item.received_qty = (Number(upd.item.received_qty) || 0) + upd.recNow
+          upd.item.rejected_qty = (Number(upd.item.rejected_qty) || 0) + upd.rejNow
+          upd.item.unit_cost = upd.uCost
+          if (upd.lotCode) upd.item.lot_code = upd.lotCode
+          if (upd.expiryDate) upd.item.expiry_date = upd.expiryDate
+        }
 
         const purId = (purRes.data as Row)?.id || getTable('purchases')[0]?.id || genId()
         const purRow = getTable('purchases').find(p => p.id === purId)
@@ -6603,7 +6738,7 @@ function createMockSupabase(silent = false): SupabaseClient {
           for (const pit of purchaseItems) {
             let ws = wsTable.find(w => w.warehouse_id === whId && w.product_id === pit.product_id)
             if (!ws) {
-              ws = { company_id: DEMO_COMPANY_ID, warehouse_id: whId, product_id: pit.product_id, quantity: 0, reserved_quantity: 0, updated_at: nowIso() }
+              ws = { company_id: actorCompanyId, warehouse_id: whId, product_id: pit.product_id, quantity: 0, reserved_quantity: 0, updated_at: nowIso() }
               wsTable.push(ws)
             }
             const before = Number(ws.quantity) || 0
@@ -6612,7 +6747,7 @@ function createMockSupabase(silent = false): SupabaseClient {
             ws.updated_at = nowIso()
             getTable('warehouse_movements').unshift({
               id: genId(),
-              company_id: DEMO_COMPANY_ID,
+              company_id: actorCompanyId,
               warehouse_id: whId,
               product_id: pit.product_id,
               movement_type: 'entry',
@@ -6622,7 +6757,7 @@ function createMockSupabase(silent = false): SupabaseClient {
               reference_type: 'purchase_order',
               reference_id: poId,
               notes: `Recepción auditada ${po.po_number}`,
-              created_by: currentSession?.user?.id || 'demo-almacen-1',
+              created_by: uid || 'demo-almacen-1',
               created_at: nowIso(),
             })
           }
@@ -6630,7 +6765,7 @@ function createMockSupabase(silent = false): SupabaseClient {
 
         const allDone = poItems.every(i => (Number(i.received_qty) || 0) + (Number(i.rejected_qty) || 0) >= (Number(i.ordered_qty) || 0))
         po.status = allDone ? 'received' : 'partial'
-        if (whId) po.target_warehouse_id = whId
+        if (!po.target_warehouse_id && whId) po.target_warehouse_id = whId
         po.linked_purchase_id = purId
         po.received_at = nowIso()
         po.updated_at = nowIso()

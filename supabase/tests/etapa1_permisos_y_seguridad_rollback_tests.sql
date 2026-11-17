@@ -10,7 +10,7 @@
 --      éxito inesperado FUERA del bloque EXCEPTION y exige el SQLSTATE/mensaje exacto esperado.
 --
 -- USO: Ejecutar en SQL Editor o psql contra una instancia donde ya se hayan aplicado
---      las migraciones 20261115000065 y 20261116000066.
+--      las migraciones 20261115000065, 20261116000066 y 20261117000067.
 --      Al terminar con ROLLBACK, no deja datos ni alteraciones persistentes.
 
 BEGIN;
@@ -33,9 +33,14 @@ DECLARE
   v_u_inact_a   uuid := '11111111-0000-4000-8000-000000000009';
   v_u_dueno_b   uuid := '22222222-0000-4000-8000-000000000001';
 
-  -- Datos base en Empresa A (dos bodegas activas) y Empresa B
+  -- Sucursales y bodegas adicionales en Empresa A (incluye bodega inactiva y sin sucursal)
+  v_br_a1       uuid := 'aaaaaaaa-4444-4000-8000-000000000001';
+  v_br_a2       uuid := 'aaaaaaaa-4444-4000-8000-000000000002';
   v_wh_a        uuid := 'aaaaaaaa-1111-4000-8000-000000000001';
   v_wh_a2       uuid := 'aaaaaaaa-1111-4000-8000-000000000099';
+  v_wh_br1      uuid := 'aaaaaaaa-1111-4000-8000-000000000011';
+  v_wh_br2      uuid := 'aaaaaaaa-1111-4000-8000-000000000012';
+  v_wh_inact_a  uuid := 'aaaaaaaa-1111-4000-8000-000000000013';
   v_wh_b        uuid := 'bbbbbbbb-1111-4000-8000-000000000002';
   v_sup_a       uuid := 'aaaaaaaa-2222-4000-8000-000000000001';
   v_sup_b       uuid := 'bbbbbbbb-2222-4000-8000-000000000002';
@@ -59,6 +64,18 @@ DECLARE
   v_po_draft_item_a   uuid;
   v_po_app_a          uuid;
   v_po_item_a         uuid;
+  v_po_no_wh_a        uuid;
+  v_po_no_wh_item_a   uuid;
+  v_po_br1_a          uuid;
+  v_po_br1_item_a     uuid;
+  v_po_br1_wh_a       uuid;
+  v_po_br1_wh_item_a  uuid;
+  v_po_cancel_a       uuid;
+  v_po_cancel_item_a  uuid;
+  v_po_inact_target_a uuid;
+  v_po_inact_item_a   uuid;
+  v_pur_gen_a         uuid;
+  v_pur_br1_a         uuid;
   v_dev_a             uuid;
   v_entry_a           uuid;
   v_entry_conta_draft uuid;
@@ -69,7 +86,36 @@ DECLARE
   v_status            text;
   v_stock_wh_a        numeric;
   v_stock_wh_a2       numeric;
+  v_stock_wh_br1      numeric;
   v_json              jsonb;
+
+  -- Snapshots de atomicidad para PRUEBA 5
+  v_snap_purchases_cnt int;
+  v_snap_prod_stock    numeric;
+  v_snap_kardex_cnt    int;
+  v_snap_wh_stock_sum  numeric;
+  v_snap_wh_moves_cnt  int;
+  v_snap_cxp_owed      numeric;
+  v_snap_po_status     text;
+  v_snap_po_wh         uuid;
+  v_snap_po_link       uuid;
+  v_snap_item_rec      numeric;
+  v_snap_item_rej      numeric;
+  v_after_purchases_cnt int;
+  v_after_prod_stock   numeric;
+  v_after_kardex_cnt   int;
+  v_after_wh_stock_sum numeric;
+  v_after_wh_moves_cnt int;
+  v_after_cxp_owed     numeric;
+  v_after_po_status    text;
+  v_after_po_wh        uuid;
+  v_after_po_link      uuid;
+  v_after_item_rec     numeric;
+  v_after_item_rej     numeric;
+  v_wh_id_chk          uuid;
+  v_br_id_chk          uuid;
+  v_pay_chk            text;
+  v_days_chk           int;
 
   -- Variables de control estricto de excepciones (fuera de los bloques BEGIN...EXCEPTION)
   v_unexpected_ok boolean;
@@ -116,11 +162,20 @@ BEGIN
     company_id = EXCLUDED.company_id,
     active = EXCLUDED.active;
 
-  INSERT INTO public.warehouses (id, company_id, name, active)
+  INSERT INTO public.branches (id, company_id, name, code, is_main, active)
   VALUES
-    (v_wh_a,  v_co_a, 'Bodega Principal A', true),
-    (v_wh_a2, v_co_a, 'Bodega Secundaria A', true),
-    (v_wh_b,  v_co_b, 'Bodega Principal B', true)
+    (v_br_a1, v_co_a, 'Sucursal Norte A', 'SUC-A1', true,  true),
+    (v_br_a2, v_co_a, 'Sucursal Sur A',   'SUC-A2', false, true)
+  ON CONFLICT (id) DO NOTHING;
+
+  INSERT INTO public.warehouses (id, company_id, branch_id, name, active)
+  VALUES
+    (v_wh_a,       v_co_a, NULL,    'Bodega Corporativa Sin Sede A', true),
+    (v_wh_a2,      v_co_a, NULL,    'Bodega Secundaria Sin Sede A',  true),
+    (v_wh_br1,     v_co_a, v_br_a1, 'Bodega Sucursal Norte A',       true),
+    (v_wh_br2,     v_co_a, v_br_a2, 'Bodega Sucursal Sur A',         true),
+    (v_wh_inact_a, v_co_a, v_br_a1, 'Bodega Inactiva A',             false),
+    (v_wh_b,       v_co_b, NULL,    'Bodega Principal B',            true)
   ON CONFLICT (id) DO NOTHING;
 
   INSERT INTO public.suppliers (id, company_id, name, document)
@@ -817,7 +872,404 @@ BEGIN
 
   RESET ROLE;
 
-  RAISE NOTICE 'ETAPA 1 TEST SUITE OK: todas las aserciones de permisos, separación de funciones, bodega OC, acc_post_entry, perfil activo, aislamiento multiempresa y privilegios aprobaron.';
+  -- ===========================================================================
+  -- PRUEBA 5 (Auditoría recibir_orden_compra + atomicidad ante rechazo)
+  --   - Bloqueo de almacen con p_warehouse_id=NULL y target_warehouse_id=NULL (42501)
+  --   - Rechazo de bodega inactiva (vía parámetro y vía target_warehouse_id desactivada)
+  --   - Rechazo de bodega de otra empresa (v_wh_b -> 42501)
+  --   - Rechazo de bodega de sucursal incompatible (incl. warehouses.branch_id IS NULL)
+  --   - Rechazo de OC cancelled / ya received
+  --   - Verificación estricta de CERO efectos colaterales ante rechazo (atomicidad)
+  --   - Recepción legítima en inventario general (NULL) por comprador
+  --   - Recepción legítima por almacén en bodega de sucursal compatible y efectos completos
+  -- ===========================================================================
+  PERFORM set_config('request.jwt.claim.sub', v_u_compra_a::text, true);
+  PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', v_u_compra_a::text, 'role', 'authenticated')::text, true);
+  SET LOCAL ROLE authenticated;
+
+  -- Coherencia en crear_orden_compra: no permite asignar bodega de sucursal incompatible ni branch_id IS NULL si p_branch_id != NULL
+  v_unexpected_ok := false; v_err_state := NULL; v_err_msg := NULL;
+  BEGIN
+    PERFORM public.crear_orden_compra(
+      v_sup_a,
+      jsonb_build_array(jsonb_build_object('product_id', v_prod_a, 'ordered_qty', 2, 'unit_cost', 1500)),
+      v_br_a1, v_wh_a, 'credito', 30, current_date + 3, 'OC incoherente wh sin sucursal', true
+    );
+    v_unexpected_ok := true;
+  EXCEPTION WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS v_err_state = RETURNED_SQLSTATE, v_err_msg = MESSAGE_TEXT;
+  END;
+  IF v_unexpected_ok THEN RAISE EXCEPTION 'FALLO OC: crear_orden_compra permitió bodega con branch_id NULL para OC de Sucursal 1'; END IF;
+  IF v_err_state <> 'P0001' OR coalesce(v_err_msg, '') NOT ILIKE '%no pertenece a la sucursal%' THEN
+    RAISE EXCEPTION 'FALLO OC (crear_orden_compra branch NULL): error inesperado [%] %', v_err_state, v_err_msg;
+  END IF;
+
+  -- Crear órdenes de prueba
+  v_po_no_wh_a := public.crear_orden_compra(
+    v_sup_a,
+    jsonb_build_array(jsonb_build_object('product_id', v_prod_a, 'ordered_qty', 4, 'unit_cost', 1500)),
+    NULL, NULL, 'credito', 30, current_date + 5, 'OC corporativa sin bodega', true
+  );
+  v_po_br1_a := public.crear_orden_compra(
+    v_sup_a,
+    jsonb_build_array(jsonb_build_object('product_id', v_prod_a, 'ordered_qty', 3, 'unit_cost', 1500)),
+    v_br_a1, NULL, 'credito', 30, current_date + 5, 'OC Sucursal 1 por asignar bodega', true
+  );
+  v_po_br1_wh_a := public.crear_orden_compra(
+    v_sup_a,
+    jsonb_build_array(jsonb_build_object('product_id', v_prod_a, 'ordered_qty', 5, 'unit_cost', 1500)),
+    v_br_a1, v_wh_br1, 'credito', 45, current_date + 5, 'OC Sucursal 1 con bodega asignada', true
+  );
+  v_po_cancel_a := public.crear_orden_compra(
+    v_sup_a,
+    jsonb_build_array(jsonb_build_object('product_id', v_prod_a, 'ordered_qty', 2, 'unit_cost', 1500)),
+    NULL, v_wh_a, 'credito', 30, current_date + 5, 'OC para cancelar', true
+  );
+  PERFORM public.cambiar_estado_orden_compra(v_po_cancel_a, 'cancelled');
+
+  RESET ROLE;
+
+  SELECT id INTO v_po_no_wh_item_a  FROM public.purchase_order_items WHERE po_id = v_po_no_wh_a  LIMIT 1;
+  SELECT id INTO v_po_br1_item_a    FROM public.purchase_order_items WHERE po_id = v_po_br1_a    LIMIT 1;
+  SELECT id INTO v_po_br1_wh_item_a FROM public.purchase_order_items WHERE po_id = v_po_br1_wh_a LIMIT 1;
+  SELECT id INTO v_po_cancel_item_a FROM public.purchase_order_items WHERE po_id = v_po_cancel_a LIMIT 1;
+
+  -- Orden apuntando a bodega que luego queda inactiva antes de la recepción
+  UPDATE public.warehouses SET active = true WHERE id = v_wh_inact_a;
+  PERFORM set_config('request.jwt.claim.sub', v_u_compra_a::text, true);
+  PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', v_u_compra_a::text, 'role', 'authenticated')::text, true);
+  SET LOCAL ROLE authenticated;
+  v_po_inact_target_a := public.crear_orden_compra(
+    v_sup_a,
+    jsonb_build_array(jsonb_build_object('product_id', v_prod_a, 'ordered_qty', 2, 'unit_cost', 1500)),
+    v_br_a1, v_wh_inact_a, 'credito', 30, current_date + 5, 'OC con bodega luego desactivada', true
+  );
+  RESET ROLE;
+  UPDATE public.warehouses SET active = false WHERE id = v_wh_inact_a;
+  SELECT id INTO v_po_inact_item_a FROM public.purchase_order_items WHERE po_id = v_po_inact_target_a LIMIT 1;
+
+  -- Snapshot basal ANTES de las pruebas negativas (para verificar CERO cambios en BD ante rechazo)
+  SELECT count(*) INTO v_snap_purchases_cnt FROM public.purchases WHERE company_id = v_co_a;
+  SELECT stock INTO v_snap_prod_stock FROM public.products WHERE id = v_prod_a AND company_id = v_co_a;
+  SELECT count(*) INTO v_snap_kardex_cnt FROM public.kardex WHERE company_id = v_co_a;
+  SELECT coalesce(sum(quantity), 0) INTO v_snap_wh_stock_sum FROM public.warehouse_stock WHERE company_id = v_co_a;
+  SELECT count(*) INTO v_snap_wh_moves_cnt FROM public.warehouse_movements WHERE company_id = v_co_a;
+  v_snap_cxp_owed := public._supplier_owed(v_co_a, v_sup_a);
+  SELECT status, target_warehouse_id, linked_purchase_id
+    INTO v_snap_po_status, v_snap_po_wh, v_snap_po_link
+    FROM public.purchase_orders WHERE id = v_po_br1_wh_a;
+  SELECT received_qty, rejected_qty
+    INTO v_snap_item_rec, v_snap_item_rej
+    FROM public.purchase_order_items WHERE id = v_po_br1_wh_item_a;
+
+  -- 5.1 Almacén NO puede recibir con p_warehouse_id = NULL y target_warehouse_id = NULL (42501)
+  PERFORM set_config('request.jwt.claim.sub', v_u_almacen_a::text, true);
+  PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', v_u_almacen_a::text, 'role', 'authenticated')::text, true);
+  SET LOCAL ROLE authenticated;
+
+  v_unexpected_ok := false; v_err_state := NULL; v_err_msg := NULL;
+  BEGIN
+    PERFORM public.recibir_orden_compra(
+      v_po_no_wh_a, NULL,
+      jsonb_build_array(jsonb_build_object('item_id', v_po_no_wh_item_a, 'received_now', 2)),
+      'credito', 30
+    );
+    v_unexpected_ok := true;
+  EXCEPTION WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS v_err_state = RETURNED_SQLSTATE, v_err_msg = MESSAGE_TEXT;
+  END;
+  IF v_unexpected_ok THEN RAISE EXCEPTION 'FALLO OC: almacén NO debe recibir en inventario general (p_warehouse_id=NULL y target_warehouse_id=NULL)'; END IF;
+  IF v_err_state <> '42501' THEN RAISE EXCEPTION 'FALLO OC (almacén sin bodega): se esperaba 42501 y ocurrió [%] %', v_err_state, v_err_msg; END IF;
+
+  -- 5.2 Recepción en bodega inactiva (pasada por parámetro cuando target_warehouse_id=NULL) -> P0001
+  v_unexpected_ok := false; v_err_state := NULL; v_err_msg := NULL;
+  BEGIN
+    PERFORM public.recibir_orden_compra(
+      v_po_br1_a, v_wh_inact_a,
+      jsonb_build_array(jsonb_build_object('item_id', v_po_br1_item_a, 'received_now', 1)),
+      'credito', 30
+    );
+    v_unexpected_ok := true;
+  EXCEPTION WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS v_err_state = RETURNED_SQLSTATE, v_err_msg = MESSAGE_TEXT;
+  END;
+  IF v_unexpected_ok THEN RAISE EXCEPTION 'FALLO OC: no se debe recibir en bodega inactiva (v_wh_inact_a)'; END IF;
+  IF v_err_state <> 'P0001' OR coalesce(v_err_msg, '') NOT ILIKE '%inactiva%' THEN
+    RAISE EXCEPTION 'FALLO OC (bodega inactiva param): error inesperado [%] %', v_err_state, v_err_msg;
+  END IF;
+
+  -- 5.2b Recepción cuando la bodega target_warehouse_id asignada quedó inactiva -> P0001
+  v_unexpected_ok := false; v_err_state := NULL; v_err_msg := NULL;
+  BEGIN
+    PERFORM public.recibir_orden_compra(
+      v_po_inact_target_a, NULL,
+      jsonb_build_array(jsonb_build_object('item_id', v_po_inact_item_a, 'received_now', 1)),
+      'credito', 30
+    );
+    v_unexpected_ok := true;
+  EXCEPTION WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS v_err_state = RETURNED_SQLSTATE, v_err_msg = MESSAGE_TEXT;
+  END;
+  IF v_unexpected_ok THEN RAISE EXCEPTION 'FALLO OC: no se debe recibir en OC cuya target_warehouse_id quedó inactiva'; END IF;
+  IF v_err_state <> 'P0001' OR coalesce(v_err_msg, '') NOT ILIKE '%inactiva%' THEN
+    RAISE EXCEPTION 'FALLO OC (target_warehouse_id inactiva): error inesperado [%] %', v_err_state, v_err_msg;
+  END IF;
+
+  -- 5.3 Recepción con bodega de sucursal incompatible: otra sucursal (v_wh_br2) -> P0001
+  v_unexpected_ok := false; v_err_state := NULL; v_err_msg := NULL;
+  BEGIN
+    PERFORM public.recibir_orden_compra(
+      v_po_br1_a, v_wh_br2,
+      jsonb_build_array(jsonb_build_object('item_id', v_po_br1_item_a, 'received_now', 1)),
+      'credito', 30
+    );
+    v_unexpected_ok := true;
+  EXCEPTION WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS v_err_state = RETURNED_SQLSTATE, v_err_msg = MESSAGE_TEXT;
+  END;
+  IF v_unexpected_ok THEN RAISE EXCEPTION 'FALLO OC: no debe recibir OC de Sucursal 1 en bodega de Sucursal 2'; END IF;
+  IF v_err_state <> 'P0001' OR coalesce(v_err_msg, '') NOT ILIKE '%no pertenece a la sucursal%' THEN
+    RAISE EXCEPTION 'FALLO OC (sucursal incompatible br2): error inesperado [%] %', v_err_state, v_err_msg;
+  END IF;
+
+  -- 5.4 Caso crítico explícito: purchase_orders.branch_id != NULL (v_br_a1) y warehouses.branch_id IS NULL (v_wh_a) -> P0001
+  v_unexpected_ok := false; v_err_state := NULL; v_err_msg := NULL;
+  BEGIN
+    PERFORM public.recibir_orden_compra(
+      v_po_br1_a, v_wh_a,
+      jsonb_build_array(jsonb_build_object('item_id', v_po_br1_item_a, 'received_now', 1)),
+      'credito', 30
+    );
+    v_unexpected_ok := true;
+  EXCEPTION WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS v_err_state = RETURNED_SQLSTATE, v_err_msg = MESSAGE_TEXT;
+  END;
+  IF v_unexpected_ok THEN RAISE EXCEPTION 'FALLO OC: bodega con warehouses.branch_id IS NULL NO debe recibir OC con branch_id asignado'; END IF;
+  IF v_err_state <> 'P0001' OR coalesce(v_err_msg, '') NOT ILIKE '%no pertenece a la sucursal%' THEN
+    RAISE EXCEPTION 'FALLO OC (wh.branch_id NULL con po.branch_id): error inesperado [%] %', v_err_state, v_err_msg;
+  END IF;
+
+  -- 5.5 Recepción de OC cancelada -> P0001
+  v_unexpected_ok := false; v_err_state := NULL; v_err_msg := NULL;
+  BEGIN
+    PERFORM public.recibir_orden_compra(
+      v_po_cancel_a, v_wh_a,
+      jsonb_build_array(jsonb_build_object('item_id', v_po_cancel_item_a, 'received_now', 1)),
+      'credito', 30
+    );
+    v_unexpected_ok := true;
+  EXCEPTION WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS v_err_state = RETURNED_SQLSTATE, v_err_msg = MESSAGE_TEXT;
+  END;
+  IF v_unexpected_ok THEN RAISE EXCEPTION 'FALLO OC: NO se debe recibir una orden de compra cancelada'; END IF;
+  IF v_err_state <> 'P0001' OR coalesce(v_err_msg, '') NOT ILIKE '%aprobadas, enviadas o parciales%' THEN
+    RAISE EXCEPTION 'FALLO OC (cancelled): error inesperado [%] %', v_err_state, v_err_msg;
+  END IF;
+
+  -- 5.6 Almacén tampoco puede recibir OC de sucursal en bodega de otra empresa (v_wh_b -> 42501)
+  v_unexpected_ok := false; v_err_state := NULL; v_err_msg := NULL;
+  BEGIN
+    PERFORM public.recibir_orden_compra(
+      v_po_br1_wh_a, v_wh_b,
+      jsonb_build_array(jsonb_build_object('item_id', v_po_br1_wh_item_a, 'received_now', 2)),
+      'credito', 45
+    );
+    v_unexpected_ok := true;
+  EXCEPTION WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS v_err_state = RETURNED_SQLSTATE, v_err_msg = MESSAGE_TEXT;
+  END;
+  IF v_unexpected_ok THEN RAISE EXCEPTION 'FALLO OC: almacén NO debe recibir en bodega de otra empresa'; END IF;
+  IF v_err_state <> '42501' THEN RAISE EXCEPTION 'FALLO OC (bodega otra empresa almacén): SQLSTATE inesperado [%] %', v_err_state, v_err_msg; END IF;
+
+  RESET ROLE;
+
+  -- También comprador debe fallar al intentar recibir con bodega de Empresa B o con bodega wh.branch_id IS NULL para OC con branch_id
+  PERFORM set_config('request.jwt.claim.sub', v_u_compra_a::text, true);
+  PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', v_u_compra_a::text, 'role', 'authenticated')::text, true);
+  SET LOCAL ROLE authenticated;
+
+  v_unexpected_ok := false; v_err_state := NULL; v_err_msg := NULL;
+  BEGIN
+    PERFORM public.recibir_orden_compra(
+      v_po_no_wh_a, v_wh_b,
+      jsonb_build_array(jsonb_build_object('item_id', v_po_no_wh_item_a, 'received_now', 1)),
+      'credito', 30
+    );
+    v_unexpected_ok := true;
+  EXCEPTION WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS v_err_state = RETURNED_SQLSTATE, v_err_msg = MESSAGE_TEXT;
+  END;
+  IF v_unexpected_ok THEN RAISE EXCEPTION 'FALLO OC: comprador NO debe recibir en bodega de Empresa B'; END IF;
+  IF v_err_state <> '42501' THEN RAISE EXCEPTION 'FALLO OC (comprador bodega B): SQLSTATE inesperado [%] %', v_err_state, v_err_msg; END IF;
+
+  v_unexpected_ok := false; v_err_state := NULL; v_err_msg := NULL;
+  BEGIN
+    PERFORM public.recibir_orden_compra(
+      v_po_br1_a, v_wh_a,
+      jsonb_build_array(jsonb_build_object('item_id', v_po_br1_item_a, 'received_now', 1)),
+      'credito', 30
+    );
+    v_unexpected_ok := true;
+  EXCEPTION WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS v_err_state = RETURNED_SQLSTATE, v_err_msg = MESSAGE_TEXT;
+  END;
+  IF v_unexpected_ok THEN RAISE EXCEPTION 'FALLO OC: comprador NO debe recibir OC con branch_id en bodega con branch_id IS NULL'; END IF;
+  IF v_err_state <> 'P0001' OR coalesce(v_err_msg, '') NOT ILIKE '%no pertenece a la sucursal%' THEN
+    RAISE EXCEPTION 'FALLO OC (comprador wh.branch_id NULL): error inesperado [%] %', v_err_state, v_err_msg;
+  END IF;
+
+  RESET ROLE;
+
+  -- 5.7 VERIFICACIÓN ESTRICTA DE ATOMICIDAD: todos los rechazos anteriores dejaron CERO cambios
+  SELECT count(*) INTO v_after_purchases_cnt FROM public.purchases WHERE company_id = v_co_a;
+  SELECT stock INTO v_after_prod_stock FROM public.products WHERE id = v_prod_a AND company_id = v_co_a;
+  SELECT count(*) INTO v_after_kardex_cnt FROM public.kardex WHERE company_id = v_co_a;
+  SELECT coalesce(sum(quantity), 0) INTO v_after_wh_stock_sum FROM public.warehouse_stock WHERE company_id = v_co_a;
+  SELECT count(*) INTO v_after_wh_moves_cnt FROM public.warehouse_movements WHERE company_id = v_co_a;
+  v_after_cxp_owed := public._supplier_owed(v_co_a, v_sup_a);
+  SELECT status, target_warehouse_id, linked_purchase_id
+    INTO v_after_po_status, v_after_po_wh, v_after_po_link
+    FROM public.purchase_orders WHERE id = v_po_br1_wh_a;
+  SELECT received_qty, rejected_qty
+    INTO v_after_item_rec, v_after_item_rej
+    FROM public.purchase_order_items WHERE id = v_po_br1_wh_item_a;
+
+  ASSERT v_after_purchases_cnt = v_snap_purchases_cnt, 'FALLO ATOMICIDAD: una recepción rechazada insertó registros en purchases';
+  ASSERT v_after_prod_stock    = v_snap_prod_stock,    'FALLO ATOMICIDAD: una recepción rechazada alteró products.stock';
+  ASSERT v_after_kardex_cnt    = v_snap_kardex_cnt,    'FALLO ATOMICIDAD: una recepción rechazada insertó registros en kardex';
+  ASSERT v_after_wh_stock_sum  = v_snap_wh_stock_sum,  'FALLO ATOMICIDAD: una recepción rechazada alteró warehouse_stock';
+  ASSERT v_after_wh_moves_cnt  = v_snap_wh_moves_cnt,  'FALLO ATOMICIDAD: una recepción rechazada insertó en warehouse_movements';
+  ASSERT v_after_cxp_owed      = v_snap_cxp_owed,      'FALLO ATOMICIDAD: una recepción rechazada alteró el saldo CxP';
+  ASSERT v_after_po_status     = v_snap_po_status
+     AND v_after_po_wh         IS NOT DISTINCT FROM v_snap_po_wh
+     AND v_after_po_link       IS NOT DISTINCT FROM v_snap_po_link,
+    'FALLO ATOMICIDAD: una recepción rechazada alteró purchase_orders (v_po_br1_wh_a)';
+  ASSERT v_after_item_rec      = v_snap_item_rec
+     AND v_after_item_rej      = v_snap_item_rej,
+    'FALLO ATOMICIDAD: una recepción rechazada alteró purchase_order_items';
+
+  SELECT status INTO v_status FROM public.purchase_orders WHERE id = v_po_no_wh_a;
+  ASSERT v_status = 'approved', 'FALLO ATOMICIDAD: v_po_no_wh_a no debió cambiar tras rechazo';
+  SELECT status INTO v_status FROM public.purchase_orders WHERE id = v_po_br1_a;
+  ASSERT v_status = 'approved', 'FALLO ATOMICIDAD: v_po_br1_a no debió cambiar tras rechazo';
+  SELECT status INTO v_status FROM public.purchase_orders WHERE id = v_po_cancel_a;
+  ASSERT v_status = 'cancelled', 'FALLO ATOMICIDAD: v_po_cancel_a no debió cambiar tras rechazo';
+
+  -- 5.8 Recepción legítima en inventario general (NULL) por rol autorizado (comprador)
+  PERFORM set_config('request.jwt.claim.sub', v_u_compra_a::text, true);
+  PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', v_u_compra_a::text, 'role', 'authenticated')::text, true);
+  SET LOCAL ROLE authenticated;
+
+  v_pur_gen_a := public.recibir_orden_compra(
+    v_po_no_wh_a, NULL,
+    jsonb_build_array(jsonb_build_object('item_id', v_po_no_wh_item_a, 'received_now', 4)),
+    'credito', 30
+  );
+  ASSERT v_pur_gen_a IS NOT NULL, 'FALLO OC: comprador debe poder recibir OC sin bodega en inventario general (NULL)';
+
+  RESET ROLE;
+
+  SELECT warehouse_id, payment_method, credit_days
+    INTO v_wh_id_chk, v_pay_chk, v_days_chk
+    FROM public.purchases WHERE id = v_pur_gen_a;
+  ASSERT v_wh_id_chk IS NULL AND v_pay_chk = 'credito' AND v_days_chk = 30,
+    'FALLO OC: la compra en inventario general debe quedar con warehouse_id IS NULL y condiciones intactas';
+
+  SELECT count(*) INTO v_cnt FROM public.warehouse_movements
+   WHERE company_id = v_co_a AND reference_type = 'purchase_order' AND reference_id = v_po_no_wh_a;
+  ASSERT v_cnt = 0, 'FALLO OC: la recepción en inventario general no debe crear movimientos de bodega';
+
+  SELECT stock INTO v_after_prod_stock FROM public.products WHERE id = v_prod_a AND company_id = v_co_a;
+  ASSERT v_after_prod_stock = v_snap_prod_stock + 4,
+    'FALLO OC: la recepción en inventario general debe sumar 4 a products.stock';
+
+  ASSERT public._supplier_owed(v_co_a, v_sup_a) = v_snap_cxp_owed + 6000,
+    'FALLO OC: la recepción en inventario general a crédito debe incrementar CxP en 6000';
+
+  -- 5.9 Recepción legítima completa por almacén con sucursal y bodega compatibles + verificación integral de efectos
+  PERFORM set_config('request.jwt.claim.sub', v_u_almacen_a::text, true);
+  PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', v_u_almacen_a::text, 'role', 'authenticated')::text, true);
+  SET LOCAL ROLE authenticated;
+
+  v_pur_br1_a := public.recibir_orden_compra(
+    v_po_br1_wh_a, NULL,
+    jsonb_build_array(jsonb_build_object('item_id', v_po_br1_wh_item_a, 'received_now', 5)),
+    NULL, NULL
+  );
+  ASSERT v_pur_br1_a IS NOT NULL, 'FALLO OC: almacén debe recibir legítimamente OC de sucursal con bodega asignada compatible';
+
+  -- Almacén también puede recibir OC sin bodega previa cuando selecciona una bodega activa compatible de la sucursal
+  ASSERT public.recibir_orden_compra(
+    v_po_br1_a, v_wh_br1,
+    jsonb_build_array(jsonb_build_object('item_id', v_po_br1_item_a, 'received_now', 3)),
+    NULL, NULL
+  ) IS NOT NULL, 'FALLO OC: almacén debe poder recibir OC sin bodega previa indicando bodega activa compatible de la sucursal';
+
+  -- Intentar recibir nuevamente una OC ya recibida ('received') -> P0001
+  v_unexpected_ok := false; v_err_state := NULL; v_err_msg := NULL;
+  BEGIN
+    PERFORM public.recibir_orden_compra(
+      v_po_br1_wh_a, v_wh_br1,
+      jsonb_build_array(jsonb_build_object('item_id', v_po_br1_wh_item_a, 'received_now', 1)),
+      NULL, NULL
+    );
+    v_unexpected_ok := true;
+  EXCEPTION WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS v_err_state = RETURNED_SQLSTATE, v_err_msg = MESSAGE_TEXT;
+  END;
+  IF v_unexpected_ok THEN RAISE EXCEPTION 'FALLO OC: NO se debe recibir una orden ya marcada como received'; END IF;
+  IF v_err_state <> 'P0001' OR coalesce(v_err_msg, '') NOT ILIKE '%aprobadas, enviadas o parciales%' THEN
+    RAISE EXCEPTION 'FALLO OC (received): error inesperado [%] %', v_err_state, v_err_msg;
+  END IF;
+
+  RESET ROLE;
+
+  SELECT branch_id, warehouse_id, payment_method, credit_days
+    INTO v_br_id_chk, v_wh_id_chk, v_pay_chk, v_days_chk
+    FROM public.purchases WHERE id = v_pur_br1_a;
+  ASSERT v_br_id_chk = v_br_a1 AND v_wh_id_chk = v_wh_br1 AND v_pay_chk = 'credito' AND v_days_chk = 45,
+    'FALLO OC: purchases debe quedar vinculada a v_br_a1, v_wh_br1, credito y 45 días';
+
+  SELECT coalesce(quantity, 0) INTO v_stock_wh_br1
+    FROM public.warehouse_stock WHERE company_id = v_co_a AND warehouse_id = v_wh_br1 AND product_id = v_prod_a;
+  ASSERT coalesce(v_stock_wh_br1, 0) = 8,
+    'FALLO OC: warehouse_stock de v_wh_br1 debió incrementar en 8 unidades (5 + 3)';
+
+  SELECT count(*) INTO v_cnt FROM public.warehouse_movements
+   WHERE company_id = v_co_a AND warehouse_id = v_wh_br1 AND product_id = v_prod_a
+     AND movement_type = 'entry' AND quantity_delta = 5
+     AND reference_type = 'purchase_order' AND reference_id = v_po_br1_wh_a;
+  ASSERT v_cnt = 1, 'FALLO OC: debe existir el movimiento entry en warehouse_movements para v_po_br1_wh_a';
+
+  SELECT count(*) INTO v_cnt FROM public.kardex
+   WHERE company_id = v_co_a AND product_id = v_prod_a
+     AND reference_type = 'purchase' AND reference_id = v_pur_br1_a
+     AND type = 'entrada' AND quantity = 5 AND seq_verified = true;
+  ASSERT v_cnt = 1, 'FALLO OC: debe existir entrada verificada en kardex para v_pur_br1_a';
+
+  SELECT status, target_warehouse_id, linked_purchase_id
+    INTO v_after_po_status, v_after_po_wh, v_after_po_link
+    FROM public.purchase_orders WHERE id = v_po_br1_wh_a;
+  ASSERT v_after_po_status = 'received' AND v_after_po_wh = v_wh_br1 AND v_after_po_link = v_pur_br1_a,
+    'FALLO OC: purchase_orders debió pasar a received y quedar enlazada a v_pur_br1_a';
+
+  SELECT target_warehouse_id, status INTO v_after_po_wh, v_after_po_status
+    FROM public.purchase_orders WHERE id = v_po_br1_a;
+  ASSERT v_after_po_status = 'received' AND v_after_po_wh = v_wh_br1,
+    'FALLO OC: v_po_br1_a debió quedar recibida con target_warehouse_id = v_wh_br1';
+
+  SELECT received_qty INTO v_after_item_rec
+    FROM public.purchase_order_items WHERE id = v_po_br1_wh_item_a;
+  ASSERT v_after_item_rec = 5, 'FALLO OC: purchase_order_items.received_qty debió quedar en 5';
+
+  SELECT stock INTO v_after_prod_stock FROM public.products WHERE id = v_prod_a AND company_id = v_co_a;
+  ASSERT v_after_prod_stock = v_snap_prod_stock + 4 + 5 + 3,
+    'FALLO OC: products.stock debe acumular las tres recepciones legítimas (+12)';
+
+  ASSERT public._supplier_owed(v_co_a, v_sup_a) = v_snap_cxp_owed + 6000 + 7500 + 4500,
+    'FALLO OC: CxP del proveedor debe reflejar exactamente las compras a crédito recibidas (+18000)';
+
+  RAISE NOTICE 'ETAPA 1 TEST SUITE OK: todas las aserciones de permisos, separación de funciones, bodega/sucursal OC, atomicidad, acc_post_entry, perfil activo, aislamiento multiempresa y privilegios aprobaron.';
 END $$;
 
 ROLLBACK;

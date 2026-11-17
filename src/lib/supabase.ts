@@ -6529,6 +6529,27 @@ function createMockSupabase(silent = false): SupabaseClient {
           }
         }
         const whId = args.p_warehouse_id ? String(args.p_warehouse_id) : (po.target_warehouse_id ? String(po.target_warehouse_id) : null)
+        if (actorRole === 'almacen' && !whId) {
+          return {
+            data: null,
+            error: { message: 'El rol almacén debe recibir la orden de compra en una bodega destino específica y activa' },
+          }
+        }
+        if (whId) {
+          const whRow = getTable('warehouses').find(w => w.id === whId)
+          if (!whRow) {
+            return { data: null, error: { message: 'La bodega destino no existe' } }
+          }
+          if (whRow.company_id && whRow.company_id !== DEMO_COMPANY_ID) {
+            return { data: null, error: { message: 'No autorizado: la bodega destino pertenece a otra empresa' } }
+          }
+          if (whRow.active === false) {
+            return { data: null, error: { message: 'La bodega destino está inactiva' } }
+          }
+          if (po.branch_id && String(whRow.branch_id || '') !== String(po.branch_id)) {
+            return { data: null, error: { message: 'La bodega destino no pertenece a la sucursal de la orden de compra' } }
+          }
+        }
         const lines = Array.isArray(args.p_lines) ? args.p_lines : []
         const poItems = getTable('purchase_order_items').filter(i => i.po_id === poId)
         const purchaseItems: Row[] = []

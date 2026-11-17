@@ -266,11 +266,20 @@ export default function PurchaseOrders({ onNavigate }: { onNavigate?: (page: str
     const incoming = consumePurchaseOrderDraft()
     if (!incoming || incoming.items.length === 0) return
 
+    const initialBranchId = activeBranch?.id || branches[0]?.id || ''
+    const branchWhs = initialBranchId
+      ? activeWarehouses.filter(w => w.branch_id === initialBranchId)
+      : activeWarehouses
+    const initialWarehouseId =
+      activeWarehouseId && branchWhs.some(w => w.id === activeWarehouseId)
+        ? activeWarehouseId
+        : branchWhs[0]?.id || ''
+
     setPoForm(prev => ({
       ...prev,
       supplier_id: incoming.supplier_id || '',
-      branch_id: activeBranch?.id || branches[0]?.id || '',
-      target_warehouse_id: activeWarehouseId || activeWarehouses[0]?.id || '',
+      branch_id: initialBranchId,
+      target_warehouse_id: initialWarehouseId,
       auto_approve: canApprove,
     }))
     setDraftLines(
@@ -406,13 +415,43 @@ export default function PurchaseOrders({ onNavigate }: { onNavigate?: (page: str
     [draftLines]
   )
 
+  const createCompatibleWarehouses = useMemo(
+    () =>
+      poForm.branch_id
+        ? activeWarehouses.filter(w => w.branch_id === poForm.branch_id)
+        : activeWarehouses,
+    [activeWarehouses, poForm.branch_id]
+  )
+
+  const receiveCompatibleWarehouses = useMemo(() => {
+    if (!receiveTarget?.branch_id) return activeWarehouses
+    return activeWarehouses.filter(w => w.branch_id === receiveTarget.branch_id)
+  }, [activeWarehouses, receiveTarget?.branch_id])
+
+  const assignedReceiveWarehouse = useMemo(
+    () =>
+      receiveTarget?.target_warehouse_id
+        ? warehouses.find(w => w.id === receiveTarget.target_warehouse_id) ?? null
+        : null,
+    [warehouses, receiveTarget?.target_warehouse_id]
+  )
+
   function openNewOrderModal() {
     setCreateErr('')
     setProdQuery('')
+    const initialBranchId = activeBranch?.id || branches[0]?.id || ''
+    const branchWhs = initialBranchId
+      ? activeWarehouses.filter(w => w.branch_id === initialBranchId)
+      : activeWarehouses
+    const initialWarehouseId =
+      activeWarehouseId && branchWhs.some(w => w.id === activeWarehouseId)
+        ? activeWarehouseId
+        : branchWhs[0]?.id || ''
+
     setPoForm({
       supplier_id: suppliers[0]?.id || '',
-      branch_id: activeBranch?.id || branches[0]?.id || '',
-      target_warehouse_id: activeWarehouseId || activeWarehouses[0]?.id || '',
+      branch_id: initialBranchId,
+      target_warehouse_id: initialWarehouseId,
       payment_terms: 'credito',
       credit_days: '30',
       expected_date: defaultExpectedIso(),
@@ -591,8 +630,16 @@ export default function PurchaseOrders({ onNavigate }: { onNavigate?: (page: str
 
   function openReceiveModal(po: PurchaseOrder) {
     const items = itemsByPo[po.id] || []
+    const compatible = po.branch_id
+      ? activeWarehouses.filter(w => w.branch_id === po.branch_id)
+      : activeWarehouses
+    const preferredActive =
+      activeWarehouseId && compatible.some(w => w.id === activeWarehouseId)
+        ? activeWarehouseId
+        : compatible[0]?.id || ''
+
     setReceiveTarget(po)
-    setReceiveWarehouseId(po.target_warehouse_id || activeWarehouseId || activeWarehouses[0]?.id || '')
+    setReceiveWarehouseId(po.target_warehouse_id || preferredActive)
     setReceiveMethod(po.payment_terms || 'credito')
     setReceiveCreditDays(String(po.credit_days || 30))
     setReceiveErr('')
@@ -656,13 +703,32 @@ export default function PurchaseOrders({ onNavigate }: { onNavigate?: (page: str
       return
     }
 
-    setReceivingBusy(true)
-    const creditDays = Math.max(1, Math.round(Number(receiveCreditDays) || 30))
-
     const effectiveWarehouseId =
       isAlmacenRole && receiveTarget.target_warehouse_id
         ? receiveTarget.target_warehouse_id
         : receiveWarehouseId
+
+    if (isAlmacenRole && !effectiveWarehouseId) {
+      setReceiveErr('El rol almacén debe recibir la orden en una bodega destino activa compatible.')
+      return
+    }
+
+    if (effectiveWarehouseId) {
+      const selectedWh = warehouses.find(w => w.id === effectiveWarehouseId)
+      if (selectedWh) {
+        if (selectedWh.active === false) {
+          setReceiveErr('La bodega destino seleccionada está inactiva y no puede recibir mercancía.')
+          return
+        }
+        if (receiveTarget.branch_id && selectedWh.branch_id !== receiveTarget.branch_id) {
+          setReceiveErr('La bodega destino no pertenece a la sucursal de esta orden de compra.')
+          return
+        }
+      }
+    }
+
+    setReceivingBusy(true)
+    const creditDays = Math.max(1, Math.round(Number(receiveCreditDays) || 30))
 
     if (usingLocalFallback) {
       // Respaldo transaccional contra registrar_compra + register_warehouse_movement reales
@@ -1317,7 +1383,22 @@ export default function PurchaseOrders({ onNavigate }: { onNavigate?: (page: str
                   </label>
                   <select
                     value={poForm.branch_id}
-                    onChange={e => setPoForm({ ...poForm, branch_id: e.target.value })}
+                    onChange={e => {
+                      const nextBranchId = e.target.value
+                      const compatible = nextBranchId
+                        ? activeWarehouses.filter(w => w.branch_id === nextBranchId)
+                        : activeWarehouses
+                      const keepCurrent =
+                        poForm.target_warehouse_id &&
+                        compatible.some(w => w.id === poForm.target_warehouse_id)
+                      setPoForm({
+                        ...poForm,
+                        branch_id: nextBranchId,
+                        target_warehouse_id: keepCurrent
+                          ? poForm.target_warehouse_id
+                          : compatible[0]?.id || '',
+                      })
+                    }}
                     className="w-full px-3 py-2 rounded-lg border border-slate-300 text-xs bg-white"
                   >
                     <option value="">Corporativo / General</option>
@@ -1339,7 +1420,7 @@ export default function PurchaseOrders({ onNavigate }: { onNavigate?: (page: str
                     className="w-full px-3 py-2 rounded-lg border border-slate-300 text-xs bg-white"
                   >
                     <option value="">Definir al recibir</option>
-                    {activeWarehouses.map(w => (
+                    {createCompatibleWarehouses.map(w => (
                       <option key={w.id} value={w.id}>
                         {w.code ? `${w.code} · ` : ''}{w.name}
                       </option>
@@ -1614,8 +1695,23 @@ export default function PurchaseOrders({ onNavigate }: { onNavigate?: (page: str
                     onChange={e => setReceiveWarehouseId(e.target.value)}
                     className="w-full px-3 py-2 rounded-lg border border-slate-300 text-xs bg-white disabled:bg-slate-100 disabled:text-slate-500"
                   >
-                    <option value="">Inventario general (sin bodega específica)</option>
-                    {activeWarehouses.map(w => (
+                    {!isAlmacenRole && !receiveTarget.target_warehouse_id && (
+                      <option value="">Inventario general (sin bodega específica)</option>
+                    )}
+                    {isAlmacenRole && !receiveWarehouseId && (
+                      <option value="" disabled>
+                        Selecciona una bodega activa...
+                      </option>
+                    )}
+                    {assignedReceiveWarehouse &&
+                      !receiveCompatibleWarehouses.some(w => w.id === assignedReceiveWarehouse.id) && (
+                        <option value={assignedReceiveWarehouse.id}>
+                          {assignedReceiveWarehouse.code ? `${assignedReceiveWarehouse.code} · ` : ''}
+                          {assignedReceiveWarehouse.name}
+                          {assignedReceiveWarehouse.active === false ? ' (Inactiva)' : ' (Otra sede)'}
+                        </option>
+                      )}
+                    {receiveCompatibleWarehouses.map(w => (
                       <option key={w.id} value={w.id}>
                         {w.code ? `${w.code} · ` : ''}{w.name}
                       </option>
@@ -1662,9 +1758,15 @@ export default function PurchaseOrders({ onNavigate }: { onNavigate?: (page: str
                 )}
               </div>
 
+              {isAlmacenRole && !receiveTarget.target_warehouse_id && receiveCompatibleWarehouses.length === 0 && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+                  No hay bodegas activas compatibles con esta orden de compra. Almacén requiere una bodega destino activa para registrar la entrada física.
+                </div>
+              )}
+
               {isAlmacenRole && (
                 <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
-                  Recepción física de Almacén: las condiciones de pago, días de crédito, costos unitarios y la bodega destino asignada en la orden quedan bloqueados por control financiero y de inventario.
+                  Recepción física de Almacén: requiere una bodega destino activa compatible; las condiciones de pago, días de crédito, costos unitarios y la bodega ya asignada en la orden quedan bloqueados por control financiero y de inventario.
                 </div>
               )}
 

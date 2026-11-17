@@ -501,6 +501,7 @@ function createMockSupabase(silent = false): SupabaseClient {
     products: [
       {
         id: 'prod-1',
+        company_id: DEMO_COMPANY_ID,
         name: 'Café Molido Gourmet 500g',
         sku: '75910001',
         category_id: 'cat-2',
@@ -527,6 +528,7 @@ function createMockSupabase(silent = false): SupabaseClient {
       },
       {
         id: 'prod-2',
+        company_id: DEMO_COMPANY_ID,
         name: 'Aceite Vegetal Puro 1L',
         sku: '75910002',
         category_id: 'cat-1',
@@ -552,6 +554,7 @@ function createMockSupabase(silent = false): SupabaseClient {
       },
       {
         id: 'prod-3',
+        company_id: DEMO_COMPANY_ID,
         name: 'Harina de Maíz Precocida 1kg',
         sku: '75910003',
         category_id: 'cat-1',
@@ -577,6 +580,7 @@ function createMockSupabase(silent = false): SupabaseClient {
       },
       {
         id: 'prod-4',
+        company_id: DEMO_COMPANY_ID,
         name: 'Azúcar Refinada 1kg',
         sku: '75910004',
         category_id: 'cat-1',
@@ -598,6 +602,7 @@ function createMockSupabase(silent = false): SupabaseClient {
       },
       {
         id: 'prod-5',
+        company_id: DEMO_COMPANY_ID,
         name: 'Queso Blanco Pasteurizado 1kg',
         sku: '75910005',
         category_id: 'cat-3',
@@ -623,6 +628,7 @@ function createMockSupabase(silent = false): SupabaseClient {
       },
       {
         id: 'prod-6',
+        company_id: DEMO_COMPANY_ID,
         name: 'Leche Entera UHT 1L',
         sku: '75910006',
         category_id: 'cat-3',
@@ -647,6 +653,7 @@ function createMockSupabase(silent = false): SupabaseClient {
       },
       {
         id: 'prod-7',
+        company_id: DEMO_COMPANY_ID,
         name: 'Arroz Blanco Extra 1kg',
         sku: '75910007',
         category_id: 'cat-1',
@@ -671,6 +678,7 @@ function createMockSupabase(silent = false): SupabaseClient {
       },
       {
         id: 'prod-8',
+        company_id: DEMO_COMPANY_ID,
         name: 'Detergente Multiuso 2kg',
         sku: '75910008',
         category_id: 'cat-4',
@@ -841,6 +849,7 @@ function createMockSupabase(silent = false): SupabaseClient {
     suppliers: [
       {
         id: 'sup-1',
+        company_id: DEMO_COMPANY_ID,
         name: 'Distribuidora Nacional C.A.',
         document: 'J-30987654-0',
         email: 'ventas@distribuidora.com',
@@ -850,6 +859,7 @@ function createMockSupabase(silent = false): SupabaseClient {
       },
       {
         id: 'sup-2',
+        company_id: DEMO_COMPANY_ID,
         name: 'Molinos del Sur C.A.',
         document: 'J-31445566-8',
         email: 'cobranzas@molinosdelsur.com',
@@ -859,6 +869,7 @@ function createMockSupabase(silent = false): SupabaseClient {
       },
       {
         id: 'sup-3',
+        company_id: DEMO_COMPANY_ID,
         name: 'Lácteos La Pradera C.A.',
         document: 'J-30711223-4',
         email: 'despachos@lapradera.com',
@@ -6510,33 +6521,60 @@ function createMockSupabase(silent = false): SupabaseClient {
         return { data: null, error: null }
       }
       case 'recibir_orden_compra': {
-        const uid = currentSession?.user?.id
-        const actorProfile = uid
-          ? getTable('profiles').find(x => x.id === uid)
-          : getTable('profiles')[0]
-        if (actorProfile && actorProfile.active === false) {
+        const uid = typeof currentSession?.user?.id === 'string' ? currentSession.user.id.trim() : ''
+        if (!uid) {
+          return { data: null, error: { message: 'No autorizado: sesión sin identidad válida' } }
+        }
+        const actorProfile = getTable('profiles').find(x => typeof x.id === 'string' && x.id.trim() === uid)
+        if (!actorProfile) {
+          return { data: null, error: { message: 'No autorizado: perfil de usuario inexistente' } }
+        }
+        if (actorProfile.active !== true) {
           return { data: null, error: { message: 'No autorizado: perfil inactivo' } }
         }
-        const actorRole = String(actorProfile?.role || currentSession?.user?.role || '').trim().toLowerCase()
-        const actorCompanyId = String(actorProfile?.company_id || DEMO_COMPANY_ID)
-        const allowedRoles = ['admin', 'dueno', 'admin_empresa', 'comprador', 'almacen']
-        if (actorRole && !allowedRoles.includes(actorRole)) {
+        const actorRole = typeof actorProfile.role === 'string' ? actorProfile.role.trim().toLowerCase() : ''
+        const allowedRoles = new Set(['admin', 'dueno', 'admin_empresa', 'comprador', 'almacen'])
+        if (!actorRole || !allowedRoles.has(actorRole)) {
           return { data: null, error: { message: 'No autorizado para recibir órdenes de compra' } }
         }
+        const actorCompanyId = typeof actorProfile.company_id === 'string' ? actorProfile.company_id.trim() : ''
+        if (!actorCompanyId) {
+          return { data: null, error: { message: 'No autorizado: perfil sin empresa asignada' } }
+        }
 
-        const poId = String(args.p_po_id || '')
-        const po = getTable('purchase_orders').find(p => p.id === poId && (!p.company_id || p.company_id === actorCompanyId))
-        if (!po) return { data: null, error: { message: 'Orden de compra no encontrada' } }
+        const companyRows = getTable('companies')
+        const matchedCompanyRow = companyRows.find(c => String(c.id || '').trim() === actorCompanyId)
+        if (matchedCompanyRow && matchedCompanyRow.active === false) {
+          return { data: null, error: { message: 'No autorizado: empresa inactiva' } }
+        }
+        const companyExists =
+          Boolean(matchedCompanyRow) ||
+          getTable('company_config').some(c => String(c.company_id || '').trim() === actorCompanyId)
+        if (!companyExists) {
+          return { data: null, error: { message: 'No autorizado: empresa inexistente o inválida' } }
+        }
+
+        const poId = String(args.p_po_id || '').trim()
+        if (!poId) {
+          return { data: null, error: { message: 'Orden de compra no encontrada' } }
+        }
+        const po = getTable('purchase_orders').find(p => String(p.id || '') === poId)
+        if (!po || String(po.company_id || '').trim() !== actorCompanyId) {
+          return { data: null, error: { message: 'Orden de compra no encontrada' } }
+        }
         if (po.status !== 'approved' && po.status !== 'sent' && po.status !== 'partial') {
           return { data: null, error: { message: 'Solo se pueden recibir órdenes de compra aprobadas, enviadas o parciales' } }
         }
         if (po.branch_id) {
-          const allBranches = getTable('branches')
-          if (allBranches.length > 0) {
-            const brOk = allBranches.some(b => b.id === po.branch_id && (!b.company_id || b.company_id === actorCompanyId))
-            if (!brOk) {
-              return { data: null, error: { message: 'La sucursal asociada a la orden de compra no pertenece a tu empresa' } }
-            }
+          const brRow = getTable('branches').find(b => String(b.id || '') === String(po.branch_id))
+          if (!brRow || String(brRow.company_id || '').trim() !== actorCompanyId) {
+            return { data: null, error: { message: 'La sucursal asociada a la orden de compra no pertenece a tu empresa' } }
+          }
+        }
+        if (po.supplier_id) {
+          const supRow = getTable('suppliers').find(s => String(s.id || '') === String(po.supplier_id))
+          if (!supRow || String(supRow.company_id || '').trim() !== actorCompanyId) {
+            return { data: null, error: { message: 'El proveedor de la orden de compra no pertenece a tu empresa' } }
           }
         }
 
@@ -6549,14 +6587,14 @@ function createMockSupabase(silent = false): SupabaseClient {
           ? String(args.p_warehouse_id).trim()
           : ''
         if (reqWhId) {
-          const reqWh = getTable('warehouses').find(w => w.id === reqWhId)
+          const reqWh = getTable('warehouses').find(w => String(w.id || '') === reqWhId)
           if (!reqWh) {
             return { data: null, error: { message: 'La bodega destino no existe' } }
           }
-          if (reqWh.company_id && reqWh.company_id !== actorCompanyId) {
+          if (String(reqWh.company_id || '').trim() !== actorCompanyId) {
             return { data: null, error: { message: 'No autorizado: la bodega destino pertenece a otra empresa' } }
           }
-          if (reqWh.active === false) {
+          if (reqWh.active !== true) {
             return { data: null, error: { message: 'La bodega destino está inactiva' } }
           }
           if (po.branch_id && String(reqWh.branch_id || '') !== String(po.branch_id)) {
@@ -6574,7 +6612,7 @@ function createMockSupabase(silent = false): SupabaseClient {
           }
         }
 
-        const whId = reqWhId || (po.target_warehouse_id ? String(po.target_warehouse_id) : null)
+        const whId = reqWhId || (po.target_warehouse_id ? String(po.target_warehouse_id).trim() : null)
         if (actorRole === 'almacen' && !whId) {
           return {
             data: null,
@@ -6582,14 +6620,14 @@ function createMockSupabase(silent = false): SupabaseClient {
           }
         }
         if (whId) {
-          const whRow = getTable('warehouses').find(w => w.id === whId)
+          const whRow = getTable('warehouses').find(w => String(w.id || '') === whId)
           if (!whRow) {
             return { data: null, error: { message: 'La bodega destino no existe' } }
           }
-          if (whRow.company_id && whRow.company_id !== actorCompanyId) {
+          if (String(whRow.company_id || '').trim() !== actorCompanyId) {
             return { data: null, error: { message: 'No autorizado: la bodega destino pertenece a otra empresa' } }
           }
-          if (whRow.active === false) {
+          if (whRow.active !== true) {
             return { data: null, error: { message: 'La bodega destino está inactiva' } }
           }
           if (po.branch_id && String(whRow.branch_id || '') !== String(po.branch_id)) {
@@ -6628,7 +6666,9 @@ function createMockSupabase(silent = false): SupabaseClient {
           creditDays = reqCreditDaysRaw !== null && Number.isFinite(reqCreditDaysRaw) ? reqCreditDaysRaw : poCreditDays
         }
 
-        const poItems = getTable('purchase_order_items').filter(i => i.po_id === poId && (!i.company_id || i.company_id === actorCompanyId))
+        const poItems = getTable('purchase_order_items').filter(
+          i => String(i.po_id || '') === poId && String(i.company_id || '').trim() === actorCompanyId
+        )
         const purchaseItems: Row[] = []
         const seenIds = new Set<string>()
         const stagedUpdates: Array<{
@@ -6650,9 +6690,14 @@ function createMockSupabase(silent = false): SupabaseClient {
           }
           seenIds.add(itemId)
 
-          const item = poItems.find(i => i.id === itemId)
+          const item = poItems.find(i => String(i.id || '') === itemId)
           if (!item) {
             return { data: null, error: { message: `El renglón ${itemId} no pertenece a esta orden de compra` } }
+          }
+
+          const prodRow = prods.find(p => String(p.id || '') === String(item.product_id || ''))
+          if (!prodRow || String(prodRow.company_id || '').trim() !== actorCompanyId) {
+            return { data: null, error: { message: 'No autorizado: el producto no existe o pertenece a otra empresa' } }
           }
 
           const recNow = ln.received_now === undefined || ln.received_now === null || ln.received_now === ''
@@ -6726,17 +6771,27 @@ function createMockSupabase(silent = false): SupabaseClient {
           if (upd.expiryDate) upd.item.expiry_date = upd.expiryDate
         }
 
-        const purId = (purRes.data as Row)?.id || getTable('purchases')[0]?.id || genId()
+        const purId = typeof purRes.data === 'string'
+          ? purRes.data
+          : ((purRes.data as Row)?.id || getTable('purchases')[0]?.id || genId())
         const purRow = getTable('purchases').find(p => p.id === purId)
         if (purRow) {
+          purRow.company_id = actorCompanyId
           purRow.branch_id = po.branch_id || null
           purRow.warehouse_id = whId
+        }
+        for (const k of getTable('kardex')) {
+          if (k.reference_type === 'purchase' && k.reference_id === purId && !k.company_id) {
+            k.company_id = actorCompanyId
+          }
         }
 
         if (whId) {
           const wsTable = getTable('warehouse_stock')
           for (const pit of purchaseItems) {
-            let ws = wsTable.find(w => w.warehouse_id === whId && w.product_id === pit.product_id)
+            let ws = wsTable.find(
+              w => String(w.company_id || '').trim() === actorCompanyId && w.warehouse_id === whId && w.product_id === pit.product_id
+            )
             if (!ws) {
               ws = { company_id: actorCompanyId, warehouse_id: whId, product_id: pit.product_id, quantity: 0, reserved_quantity: 0, updated_at: nowIso() }
               wsTable.push(ws)
@@ -6757,7 +6812,7 @@ function createMockSupabase(silent = false): SupabaseClient {
               reference_type: 'purchase_order',
               reference_id: poId,
               notes: `Recepción auditada ${po.po_number}`,
-              created_by: uid || 'demo-almacen-1',
+              created_by: uid,
               created_at: nowIso(),
             })
           }

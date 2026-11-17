@@ -94,6 +94,7 @@ DECLARE
   v_snap_purchase_ids   jsonb;
   v_snap_prod_stock     numeric;
   v_snap_prod_b_stock   numeric;
+  v_snap_products_stock jsonb;
   v_snap_kardex_cnt     int;
   v_snap_kardex_ids     jsonb;
   v_snap_wh_stock_sum   numeric;
@@ -102,14 +103,16 @@ DECLARE
   v_snap_wh_move_ids    jsonb;
   v_snap_cxp_owed       numeric;
   v_snap_cxp_b_owed     numeric;
-  v_snap2_prod_stock    numeric;
-  v_snap2_cxp_owed      numeric;
+  v_snap2_prod_stock     numeric;
+  v_snap2_products_stock jsonb;
+  v_snap2_cxp_owed       numeric;
   v_snap_pos_state      jsonb;
   v_snap_po_items_state jsonb;
   v_after_purchases_cnt  int;
   v_after_purchase_ids   jsonb;
   v_after_prod_stock     numeric;
   v_after_prod_b_stock   numeric;
+  v_after_products_stock jsonb;
   v_after_kardex_cnt     int;
   v_after_kardex_ids     jsonb;
   v_after_wh_stock_sum   numeric;
@@ -968,6 +971,20 @@ BEGIN
 
   SELECT stock INTO v_snap_prod_stock   FROM public.products WHERE id = v_prod_a AND company_id = v_co_a;
   SELECT stock INTO v_snap_prod_b_stock FROM public.products WHERE id = v_prod_b AND company_id = v_co_b;
+  SELECT coalesce(
+           jsonb_agg(
+             jsonb_build_object(
+               'id', p.id,
+               'company_id', p.company_id,
+               'stock', p.stock
+             )
+             ORDER BY p.company_id, p.id
+           ),
+           '[]'::jsonb
+         )
+    INTO v_snap_products_stock
+    FROM public.products p
+   WHERE p.company_id IN (v_co_a, v_co_b);
 
   SELECT count(*), coalesce(jsonb_agg(id ORDER BY id), '[]'::jsonb)
     INTO v_snap_kardex_cnt, v_snap_kardex_ids
@@ -1053,6 +1070,13 @@ BEGIN
   IF v_unexpected_ok THEN RAISE EXCEPTION 'FALLO OC: almacén NO debe recibir en inventario general (p_warehouse_id=NULL y target_warehouse_id=NULL)'; END IF;
   IF v_err_state <> '42501' THEN RAISE EXCEPTION 'FALLO OC (almacén sin bodega): se esperaba 42501 y ocurrió [%] %', v_err_state, v_err_msg; END IF;
 
+  RESET ROLE;
+  SELECT coalesce(jsonb_agg(jsonb_build_object('id', p.id, 'company_id', p.company_id, 'stock', p.stock) ORDER BY p.company_id, p.id), '[]'::jsonb)
+    INTO v_after_products_stock FROM public.products p WHERE p.company_id IN (v_co_a, v_co_b);
+  ASSERT v_after_products_stock IS NOT DISTINCT FROM v_snap_products_stock,
+    'FALLO ATOMICIDAD (5.1): alteró products.stock en alguna empresa tras rechazo';
+  SET LOCAL ROLE authenticated;
+
   -- 5.2 Recepción en bodega inactiva (pasada por parámetro cuando target_warehouse_id=NULL) -> P0001
   v_unexpected_ok := false; v_err_state := NULL; v_err_msg := NULL;
   BEGIN
@@ -1069,6 +1093,13 @@ BEGIN
   IF v_err_state <> 'P0001' OR coalesce(v_err_msg, '') NOT ILIKE '%inactiva%' THEN
     RAISE EXCEPTION 'FALLO OC (bodega inactiva param): error inesperado [%] %', v_err_state, v_err_msg;
   END IF;
+
+  RESET ROLE;
+  SELECT coalesce(jsonb_agg(jsonb_build_object('id', p.id, 'company_id', p.company_id, 'stock', p.stock) ORDER BY p.company_id, p.id), '[]'::jsonb)
+    INTO v_after_products_stock FROM public.products p WHERE p.company_id IN (v_co_a, v_co_b);
+  ASSERT v_after_products_stock IS NOT DISTINCT FROM v_snap_products_stock,
+    'FALLO ATOMICIDAD (5.2): alteró products.stock en alguna empresa tras rechazo';
+  SET LOCAL ROLE authenticated;
 
   -- 5.2b Recepción cuando la bodega target_warehouse_id asignada quedó inactiva -> P0001
   v_unexpected_ok := false; v_err_state := NULL; v_err_msg := NULL;
@@ -1087,6 +1118,13 @@ BEGIN
     RAISE EXCEPTION 'FALLO OC (target_warehouse_id inactiva): error inesperado [%] %', v_err_state, v_err_msg;
   END IF;
 
+  RESET ROLE;
+  SELECT coalesce(jsonb_agg(jsonb_build_object('id', p.id, 'company_id', p.company_id, 'stock', p.stock) ORDER BY p.company_id, p.id), '[]'::jsonb)
+    INTO v_after_products_stock FROM public.products p WHERE p.company_id IN (v_co_a, v_co_b);
+  ASSERT v_after_products_stock IS NOT DISTINCT FROM v_snap_products_stock,
+    'FALLO ATOMICIDAD (5.2b): alteró products.stock en alguna empresa tras rechazo';
+  SET LOCAL ROLE authenticated;
+
   -- 5.3 Recepción con bodega de sucursal incompatible: otra sucursal (v_wh_br2) -> P0001
   v_unexpected_ok := false; v_err_state := NULL; v_err_msg := NULL;
   BEGIN
@@ -1103,6 +1141,13 @@ BEGIN
   IF v_err_state <> 'P0001' OR coalesce(v_err_msg, '') NOT ILIKE '%no pertenece a la sucursal%' THEN
     RAISE EXCEPTION 'FALLO OC (sucursal incompatible br2): error inesperado [%] %', v_err_state, v_err_msg;
   END IF;
+
+  RESET ROLE;
+  SELECT coalesce(jsonb_agg(jsonb_build_object('id', p.id, 'company_id', p.company_id, 'stock', p.stock) ORDER BY p.company_id, p.id), '[]'::jsonb)
+    INTO v_after_products_stock FROM public.products p WHERE p.company_id IN (v_co_a, v_co_b);
+  ASSERT v_after_products_stock IS NOT DISTINCT FROM v_snap_products_stock,
+    'FALLO ATOMICIDAD (5.3): alteró products.stock en alguna empresa tras rechazo';
+  SET LOCAL ROLE authenticated;
 
   -- 5.4 Caso crítico explícito: purchase_orders.branch_id != NULL (v_br_a1) y warehouses.branch_id IS NULL (v_wh_a) -> P0001
   v_unexpected_ok := false; v_err_state := NULL; v_err_msg := NULL;
@@ -1121,6 +1166,13 @@ BEGIN
     RAISE EXCEPTION 'FALLO OC (wh.branch_id NULL con po.branch_id): error inesperado [%] %', v_err_state, v_err_msg;
   END IF;
 
+  RESET ROLE;
+  SELECT coalesce(jsonb_agg(jsonb_build_object('id', p.id, 'company_id', p.company_id, 'stock', p.stock) ORDER BY p.company_id, p.id), '[]'::jsonb)
+    INTO v_after_products_stock FROM public.products p WHERE p.company_id IN (v_co_a, v_co_b);
+  ASSERT v_after_products_stock IS NOT DISTINCT FROM v_snap_products_stock,
+    'FALLO ATOMICIDAD (5.4): alteró products.stock en alguna empresa tras rechazo';
+  SET LOCAL ROLE authenticated;
+
   -- 5.5 Recepción de OC cancelada -> P0001
   v_unexpected_ok := false; v_err_state := NULL; v_err_msg := NULL;
   BEGIN
@@ -1138,6 +1190,13 @@ BEGIN
     RAISE EXCEPTION 'FALLO OC (cancelled): error inesperado [%] %', v_err_state, v_err_msg;
   END IF;
 
+  RESET ROLE;
+  SELECT coalesce(jsonb_agg(jsonb_build_object('id', p.id, 'company_id', p.company_id, 'stock', p.stock) ORDER BY p.company_id, p.id), '[]'::jsonb)
+    INTO v_after_products_stock FROM public.products p WHERE p.company_id IN (v_co_a, v_co_b);
+  ASSERT v_after_products_stock IS NOT DISTINCT FROM v_snap_products_stock,
+    'FALLO ATOMICIDAD (5.5): alteró products.stock en alguna empresa tras rechazo';
+  SET LOCAL ROLE authenticated;
+
   -- 5.6 Almacén tampoco puede recibir OC de sucursal en bodega de otra empresa (v_wh_b -> 42501)
   v_unexpected_ok := false; v_err_state := NULL; v_err_msg := NULL;
   BEGIN
@@ -1154,6 +1213,10 @@ BEGIN
   IF v_err_state <> '42501' THEN RAISE EXCEPTION 'FALLO OC (bodega otra empresa almacén): SQLSTATE inesperado [%] %', v_err_state, v_err_msg; END IF;
 
   RESET ROLE;
+  SELECT coalesce(jsonb_agg(jsonb_build_object('id', p.id, 'company_id', p.company_id, 'stock', p.stock) ORDER BY p.company_id, p.id), '[]'::jsonb)
+    INTO v_after_products_stock FROM public.products p WHERE p.company_id IN (v_co_a, v_co_b);
+  ASSERT v_after_products_stock IS NOT DISTINCT FROM v_snap_products_stock,
+    'FALLO ATOMICIDAD (5.6): alteró products.stock en alguna empresa tras rechazo';
 
   -- También comprador debe fallar al intentar recibir con bodega de Empresa B o con bodega wh.branch_id IS NULL para OC con branch_id
   PERFORM set_config('request.jwt.claim.sub', v_u_compra_a::text, true);
@@ -1173,6 +1236,13 @@ BEGIN
   END;
   IF v_unexpected_ok THEN RAISE EXCEPTION 'FALLO OC: comprador NO debe recibir en bodega de Empresa B'; END IF;
   IF v_err_state <> '42501' THEN RAISE EXCEPTION 'FALLO OC (comprador bodega B): SQLSTATE inesperado [%] %', v_err_state, v_err_msg; END IF;
+
+  RESET ROLE;
+  SELECT coalesce(jsonb_agg(jsonb_build_object('id', p.id, 'company_id', p.company_id, 'stock', p.stock) ORDER BY p.company_id, p.id), '[]'::jsonb)
+    INTO v_after_products_stock FROM public.products p WHERE p.company_id IN (v_co_a, v_co_b);
+  ASSERT v_after_products_stock IS NOT DISTINCT FROM v_snap_products_stock,
+    'FALLO ATOMICIDAD (comprador bodega B): alteró products.stock en alguna empresa tras rechazo';
+  SET LOCAL ROLE authenticated;
 
   v_unexpected_ok := false; v_err_state := NULL; v_err_msg := NULL;
   BEGIN
@@ -1200,6 +1270,20 @@ BEGIN
 
   SELECT stock INTO v_after_prod_stock   FROM public.products WHERE id = v_prod_a AND company_id = v_co_a;
   SELECT stock INTO v_after_prod_b_stock FROM public.products WHERE id = v_prod_b AND company_id = v_co_b;
+  SELECT coalesce(
+           jsonb_agg(
+             jsonb_build_object(
+               'id', p.id,
+               'company_id', p.company_id,
+               'stock', p.stock
+             )
+             ORDER BY p.company_id, p.id
+           ),
+           '[]'::jsonb
+         )
+    INTO v_after_products_stock
+    FROM public.products p
+   WHERE p.company_id IN (v_co_a, v_co_b);
 
   SELECT count(*), coalesce(jsonb_agg(id ORDER BY id), '[]'::jsonb)
     INTO v_after_kardex_cnt, v_after_kardex_ids
@@ -1270,8 +1354,9 @@ BEGIN
      AND v_after_purchase_ids  IS NOT DISTINCT FROM v_snap_purchase_ids,
     'FALLO ATOMICIDAD: una recepción rechazada insertó o alteró registros en purchases';
   ASSERT v_after_prod_stock    = v_snap_prod_stock
-     AND v_after_prod_b_stock  = v_snap_prod_b_stock,
-    'FALLO ATOMICIDAD: una recepción rechazada alteró products.stock';
+     AND v_after_prod_b_stock  = v_snap_prod_b_stock
+     AND v_after_products_stock IS NOT DISTINCT FROM v_snap_products_stock,
+    'FALLO ATOMICIDAD: una recepción rechazada alteró products.stock en alguna de las empresas';
   ASSERT v_after_kardex_cnt    = v_snap_kardex_cnt
      AND v_after_kardex_ids    IS NOT DISTINCT FROM v_snap_kardex_ids,
     'FALLO ATOMICIDAD: una recepción rechazada insertó o alteró movimientos en kardex';
@@ -1347,6 +1432,20 @@ BEGIN
     FROM public.purchases
    WHERE company_id IN (v_co_a, v_co_b);
   SELECT stock INTO v_snap2_prod_stock FROM public.products WHERE id = v_prod_a AND company_id = v_co_a;
+  SELECT coalesce(
+           jsonb_agg(
+             jsonb_build_object(
+               'id', p.id,
+               'company_id', p.company_id,
+               'stock', p.stock
+             )
+             ORDER BY p.company_id, p.id
+           ),
+           '[]'::jsonb
+         )
+    INTO v_snap2_products_stock
+    FROM public.products p
+   WHERE p.company_id IN (v_co_a, v_co_b);
   SELECT count(*), coalesce(jsonb_agg(id ORDER BY id), '[]'::jsonb)
     INTO v_snap_kardex_cnt, v_snap_kardex_ids
     FROM public.kardex
@@ -1433,6 +1532,20 @@ BEGIN
     FROM public.purchases
    WHERE company_id IN (v_co_a, v_co_b);
   SELECT stock INTO v_after_prod_stock FROM public.products WHERE id = v_prod_a AND company_id = v_co_a;
+  SELECT coalesce(
+           jsonb_agg(
+             jsonb_build_object(
+               'id', p.id,
+               'company_id', p.company_id,
+               'stock', p.stock
+             )
+             ORDER BY p.company_id, p.id
+           ),
+           '[]'::jsonb
+         )
+    INTO v_after_products_stock
+    FROM public.products p
+   WHERE p.company_id IN (v_co_a, v_co_b);
   SELECT count(*), coalesce(jsonb_agg(id ORDER BY id), '[]'::jsonb)
     INTO v_after_kardex_cnt, v_after_kardex_ids
     FROM public.kardex
@@ -1493,8 +1606,9 @@ BEGIN
 
   ASSERT v_after_purchases_cnt  = v_snap_purchases_cnt AND v_after_purchase_ids IS NOT DISTINCT FROM v_snap_purchase_ids,
     'FALLO ATOMICIDAD (received): creó o alteró compras tras rechazo';
-  ASSERT v_after_prod_stock     = v_snap2_prod_stock,
-    'FALLO ATOMICIDAD (received): alteró products.stock tras rechazo';
+  ASSERT v_after_prod_stock     = v_snap2_prod_stock
+     AND v_after_products_stock IS NOT DISTINCT FROM v_snap2_products_stock,
+    'FALLO ATOMICIDAD (received): alteró products.stock en alguna de las empresas tras rechazo';
   ASSERT v_after_kardex_cnt     = v_snap_kardex_cnt AND v_after_kardex_ids IS NOT DISTINCT FROM v_snap_kardex_ids,
     'FALLO ATOMICIDAD (received): creó o alteró kardex tras rechazo';
   ASSERT v_after_wh_stock_rows  IS NOT DISTINCT FROM v_snap_wh_stock_rows,

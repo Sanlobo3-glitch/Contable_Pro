@@ -4,7 +4,7 @@
 # numeración atómica de órdenes de compra (Bloqueante B / migración 000068).
 #
 # IMPORTANTE:
-# - Ejecutar EXCLUSIVAMENTE contra una base PostgreSQL 17 de PRUEBAS (nunca contra producción).
+# - Ejecutar EXCLUSIVAMENTE contra una base PostgreSQL 17 de PRUEBAS (nunca contra producción ni Supabase).
 # - Requiere haber aplicado previamente hasta la migración 20261118000068_cierre_bloqueantes_etapa1.sql.
 #
 # Uso:
@@ -17,76 +17,146 @@ if [[ -z "${TEST_PG_URI:-}" ]]; then
   exit 1
 fi
 
-if [[ "${TEST_PG_URI}" =~ supabase\.(co|in) ]]; then
-  echo "ABORTADO: TEST_PG_URI apunta a Supabase; esta prueba solo puede ejecutarse en PostgreSQL de pruebas local o aislado." >&2
+URI_LOWER=$(printf '%s' "${TEST_PG_URI}" | tr '[:upper:]' '[:lower:]')
+PGHOST_LOWER=$(printf '%s' "${PGHOST:-}" | tr '[:upper:]' '[:lower:]')
+
+if [[ "${URI_LOWER}" =~ (supabase\.(co|in|com)|\.supabase\.) ]] || [[ "${PGHOST_LOWER}" =~ (supabase\.(co|in|com)|\.supabase\.) ]]; then
+  echo "ABORTADO: Se detectó un dominio de Supabase; esta prueba solo puede ejecutarse en PostgreSQL de pruebas local o aislado." >&2
   exit 1
 fi
 
-CO_A="cccccccc-0000-4000-8000-000000000001"
-CO_B="cccccccc-0000-4000-8000-000000000002"
-U_A="cccccccc-1111-4000-8000-000000000001"
-U_B="cccccccc-1111-4000-8000-000000000002"
-WH_A="cccccccc-2222-4000-8000-000000000001"
-WH_B="cccccccc-2222-4000-8000-000000000002"
-SUP_A="cccccccc-3333-4000-8000-000000000001"
-SUP_B="cccccccc-3333-4000-8000-000000000002"
-PROD_A="cccccccc-4444-4000-8000-000000000001"
-PROD_B="cccccccc-4444-4000-8000-000000000002"
+if [[ "${URI_LOWER}" =~ (^|[^[:alnum:]])prod(uction)?([^[:alnum:]]|$) ]] || [[ "${APP_ENV:-}" == "production" ]] || [[ "${NODE_ENV:-}" == "production" ]]; then
+  echo "ABORTADO: Se detectó un indicador de entorno de producción en TEST_PG_URI o variables de entorno; ejecución prohibida." >&2
+  exit 1
+fi
+
+gen_uuid() {
+  if [[ -r /proc/sys/kernel/random/uuid ]]; then
+    tr '[:upper:]' '[:lower:]' < /proc/sys/kernel/random/uuid
+  elif command -v uuidgen >/dev/null 2>&1; then
+    uuidgen | tr '[:upper:]' '[:lower:]'
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -c 'import uuid; print(str(uuid.uuid4()))'
+  elif command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex 16 | sed -E 's/^(.{8})(.{4}).(.{3}).(.{3})(.{12})$/\1-\2-4\3-8\4-\5/'
+  else
+    echo "ERROR: No hay generador de UUID disponible en el sistema." >&2
+    exit 1
+  fi
+}
+
+RUN_TAG="$(date -u +%Y%m%d%H%M%S)_$$_${RANDOM}"
+CO_A="$(gen_uuid)"
+CO_B="$(gen_uuid)"
+U_A="$(gen_uuid)"
+U_B="$(gen_uuid)"
+WH_A="$(gen_uuid)"
+WH_B="$(gen_uuid)"
+SUP_A="$(gen_uuid)"
+SUP_B="$(gen_uuid)"
+PROD_A="$(gen_uuid)"
+PROD_B="$(gen_uuid)"
+
+UNIQUE_COUNT=$(printf '%s\n' "${CO_A}" "${CO_B}" "${U_A}" "${U_B}" "${WH_A}" "${WH_B}" "${SUP_A}" "${SUP_B}" "${PROD_A}" "${PROD_B}" | sort -u | wc -l | tr -d ' ')
+if [[ "${UNIQUE_COUNT}" -ne 10 ]]; then
+  echo "ERROR: Colisión interna al generar UUIDs exclusivos para la ejecución." >&2
+  exit 1
+fi
+
+EMAIL_A="conc_a_${RUN_TAG}@test.local"
+EMAIL_B="conc_b_${RUN_TAG}@test.local"
+
+SETUP_COMMITTED=0
+TMP_OUT_1=""
+TMP_OUT_2=""
 
 cleanup() {
+  rm -f "${TMP_OUT_1:-}" "${TMP_OUT_2:-}" 2>/dev/null || true
+  if [[ "${SETUP_COMMITTED}" -ne 1 ]]; then
+    return 0
+  fi
+
   psql "${TEST_PG_URI}" -v ON_ERROR_STOP=1 -q <<SQL || true
 DELETE FROM public.purchase_order_items WHERE company_id IN ('${CO_A}', '${CO_B}');
 DELETE FROM public.purchase_orders WHERE company_id IN ('${CO_A}', '${CO_B}');
 DELETE FROM public.purchase_order_counters WHERE company_id IN ('${CO_A}', '${CO_B}');
-DELETE FROM public.products WHERE id IN ('${PROD_A}', '${PROD_B}');
-DELETE FROM public.suppliers WHERE id IN ('${SUP_A}', '${SUP_B}');
-DELETE FROM public.warehouses WHERE id IN ('${WH_A}', '${WH_B}');
-DELETE FROM public.profiles WHERE id IN ('${U_A}', '${U_B}');
+DELETE FROM public.audit_log WHERE company_id IN ('${CO_A}', '${CO_B}');
+DELETE FROM public.products WHERE id IN ('${PROD_A}', '${PROD_B}') AND company_id IN ('${CO_A}', '${CO_B}');
+DELETE FROM public.suppliers WHERE id IN ('${SUP_A}', '${SUP_B}') AND company_id IN ('${CO_A}', '${CO_B}');
+DELETE FROM public.warehouses WHERE id IN ('${WH_A}', '${WH_B}') AND company_id IN ('${CO_A}', '${CO_B}');
+DELETE FROM public.profiles WHERE id IN ('${U_A}', '${U_B}') AND company_id IN ('${CO_A}', '${CO_B}');
 DELETE FROM auth.users WHERE id IN ('${U_A}', '${U_B}');
 DELETE FROM public.companies WHERE id IN ('${CO_A}', '${CO_B}');
 SQL
 }
 trap cleanup EXIT
 
-echo "[1/4] Preparando empresas aisladas e historial previo (OC-0005 en Empresa A)..."
+echo "[1/4] Verificando ausencia de colisiones y preparando empresas aisladas (${RUN_TAG})..."
 psql "${TEST_PG_URI}" -v ON_ERROR_STOP=1 -q <<SQL
+BEGIN;
+
+DO \$\$
+DECLARE
+  v_hits int := 0;
+BEGIN
+  SELECT count(*) INTO v_hits FROM public.companies WHERE id IN ('${CO_A}', '${CO_B}');
+  IF v_hits > 0 THEN RAISE EXCEPTION 'Abortado: UUID de empresa ya existe en la base'; END IF;
+
+  SELECT count(*) INTO v_hits FROM auth.users WHERE id IN ('${U_A}', '${U_B}') OR email IN ('${EMAIL_A}', '${EMAIL_B}');
+  IF v_hits > 0 THEN RAISE EXCEPTION 'Abortado: usuario o email de prueba ya existe en auth.users'; END IF;
+
+  SELECT count(*) INTO v_hits FROM public.profiles WHERE id IN ('${U_A}', '${U_B}') OR company_id IN ('${CO_A}', '${CO_B}');
+  IF v_hits > 0 THEN RAISE EXCEPTION 'Abortado: perfil de prueba ya existe en public.profiles'; END IF;
+
+  SELECT count(*) INTO v_hits FROM public.warehouses WHERE id IN ('${WH_A}', '${WH_B}') OR company_id IN ('${CO_A}', '${CO_B}');
+  IF v_hits > 0 THEN RAISE EXCEPTION 'Abortado: bodega de prueba ya existe en public.warehouses'; END IF;
+
+  SELECT count(*) INTO v_hits FROM public.suppliers WHERE id IN ('${SUP_A}', '${SUP_B}') OR company_id IN ('${CO_A}', '${CO_B}');
+  IF v_hits > 0 THEN RAISE EXCEPTION 'Abortado: proveedor de prueba ya existe en public.suppliers'; END IF;
+
+  SELECT count(*) INTO v_hits FROM public.products WHERE id IN ('${PROD_A}', '${PROD_B}') OR company_id IN ('${CO_A}', '${CO_B}');
+  IF v_hits > 0 THEN RAISE EXCEPTION 'Abortado: producto de prueba ya existe en public.products'; END IF;
+
+  SELECT count(*) INTO v_hits FROM public.purchase_orders WHERE company_id IN ('${CO_A}', '${CO_B}');
+  IF v_hits > 0 THEN RAISE EXCEPTION 'Abortado: órdenes preexistentes para UUID generado'; END IF;
+
+  SELECT count(*) INTO v_hits FROM public.purchase_order_counters WHERE company_id IN ('${CO_A}', '${CO_B}');
+  IF v_hits > 0 THEN RAISE EXCEPTION 'Abortado: contador preexistente para UUID generado'; END IF;
+END \$\$;
+
 INSERT INTO public.companies (id, name, active)
-VALUES ('${CO_A}', 'Test Concurrencia A', true), ('${CO_B}', 'Test Concurrencia B', true)
-ON CONFLICT (id) DO NOTHING;
+VALUES ('${CO_A}', 'Test Concurrencia A ${RUN_TAG}', true), ('${CO_B}', 'Test Concurrencia B ${RUN_TAG}', true);
 
 INSERT INTO auth.users (id, instance_id, aud, role, email, encrypted_password, email_confirmed_at, created_at, updated_at, raw_app_meta_data, raw_user_meta_data)
 VALUES
-  ('${U_A}', '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'conc_a@test.local', '', now(), now(), now(), '{"provider":"email"}'::jsonb, '{}'::jsonb),
-  ('${U_B}', '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'conc_b@test.local', '', now(), now(), now(), '{"provider":"email"}'::jsonb, '{}'::jsonb)
-ON CONFLICT (id) DO NOTHING;
+  ('${U_A}', '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', '${EMAIL_A}', '', now(), now(), now(), '{"provider":"email"}'::jsonb, '{}'::jsonb),
+  ('${U_B}', '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', '${EMAIL_B}', '', now(), now(), now(), '{"provider":"email"}'::jsonb, '{}'::jsonb);
 
 INSERT INTO public.profiles (id, email, full_name, role, company_id, active)
 VALUES
-  ('${U_A}', 'conc_a@test.local', 'Comprador Conc A', 'comprador', '${CO_A}', true),
-  ('${U_B}', 'conc_b@test.local', 'Dueño Conc B', 'dueno', '${CO_B}', true)
-ON CONFLICT (id) DO UPDATE SET role = excluded.role, company_id = excluded.company_id, active = true;
+  ('${U_A}', '${EMAIL_A}', 'Comprador Conc A', 'comprador', '${CO_A}', true),
+  ('${U_B}', '${EMAIL_B}', 'Dueño Conc B', 'dueno', '${CO_B}', true);
 
 INSERT INTO public.warehouses (id, company_id, name, code, active)
-VALUES ('${WH_A}', '${CO_A}', 'Bodega Conc A', 'CA-1', true), ('${WH_B}', '${CO_B}', 'Bodega Conc B', 'CB-1', true)
-ON CONFLICT (id) DO NOTHING;
+VALUES ('${WH_A}', '${CO_A}', 'Bodega Conc A', 'CA-${RUN_TAG}', true), ('${WH_B}', '${CO_B}', 'Bodega Conc B', 'CB-${RUN_TAG}', true);
 
 INSERT INTO public.suppliers (id, company_id, name, active)
-VALUES ('${SUP_A}', '${CO_A}', 'Prov Conc A', true), ('${SUP_B}', '${CO_B}', 'Prov Conc B', true)
-ON CONFLICT (id) DO NOTHING;
+VALUES ('${SUP_A}', '${CO_A}', 'Prov Conc A', true), ('${SUP_B}', '${CO_B}', 'Prov Conc B', true);
 
 INSERT INTO public.products (id, company_id, name, sku, stock, cost, price, active)
-VALUES ('${PROD_A}', '${CO_A}', 'Prod Conc A', 'SKU-CA', 100, 1000, 1500, true),
-       ('${PROD_B}', '${CO_B}', 'Prod Conc B', 'SKU-CB', 100, 1000, 1500, true)
-ON CONFLICT (id) DO NOTHING;
+VALUES ('${PROD_A}', '${CO_A}', 'Prod Conc A', 'SKU-CA-${RUN_TAG}', 100, 1000, 1500, true),
+       ('${PROD_B}', '${CO_B}', 'Prod Conc B', 'SKU-CB-${RUN_TAG}', 100, 1000, 1500, true);
 
 -- Orden histórica previa OC-0005 (simula historial y salto previo sin reiniciar contador)
 INSERT INTO public.purchase_orders (company_id, po_number, supplier_id, supplier_name, status, payment_terms, subtotal, total, created_by)
 VALUES ('${CO_A}', 'OC-0005', '${SUP_A}', 'Prov Conc A', 'draft', 'credito', 1000, 1000, '${U_A}');
 
 INSERT INTO public.purchase_order_counters (company_id, last_seq)
-VALUES ('${CO_A}', 5)
-ON CONFLICT (company_id) DO UPDATE SET last_seq = greatest(public.purchase_order_counters.last_seq, 5);
+VALUES ('${CO_A}', 5);
+
+COMMIT;
 SQL
+SETUP_COMMITTED=1
 
 run_create_po() {
   local user_id="$1"
@@ -121,7 +191,6 @@ SQL
 echo "[2/4] Prueba 1: Contención simultánea de 2 sesiones con transacción abierta en Empresa A..."
 TMP_OUT_1=$(mktemp)
 TMP_OUT_2=$(mktemp)
-trap 'rm -f "$TMP_OUT_1" "$TMP_OUT_2"; cleanup' EXIT
 
 run_create_po "${U_A}" "${SUP_A}" "${PROD_A}" "${WH_A}" "2" "contencion-s1" >"$TMP_OUT_1" &
 PID_1=$!

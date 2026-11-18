@@ -660,12 +660,66 @@ alter table public.purchase_order_counters enable row level security;
 revoke all on table public.purchase_order_counters from public, anon, authenticated;
 grant all on table public.purchase_order_counters to service_role;
 
--- Comprobación explícita de duplicados históricos antes de crear UNIQUE (company_id, po_number):
--- si existen duplicados, la migración se detiene sin borrar, renumerar ni sobrescribir órdenes históricas.
+-- Comprobación explícita de nulabilidad (NOT NULL) y duplicados históricos antes de crear UNIQUE (company_id, po_number):
+-- si existen nulos o duplicados, la migración se detiene sin borrar, modificar ni renumerar órdenes históricas.
 do $$
 declare
+  v_null_rows integer := 0;
+  v_company_not_null boolean := false;
+  v_po_number_not_null boolean := false;
   v_dups text;
 begin
+  select count(*)
+    into v_null_rows
+    from public.purchase_orders
+   where company_id is null
+      or po_number is null;
+
+  if v_null_rows > 0 then
+    raise exception
+      'No se puede crear UNIQUE (company_id, po_number) en public.purchase_orders: existen % órdenes históricas con company_id o po_number NULL. Resuélvalas manualmente sin borrar, modificar ni renumerar órdenes históricas.',
+      v_null_rows;
+  end if;
+
+  select
+    coalesce(bool_or(a.attname = 'company_id' and a.attnotnull), false),
+    coalesce(bool_or(a.attname = 'po_number' and a.attnotnull), false)
+    into v_company_not_null, v_po_number_not_null
+    from pg_attribute a
+    join pg_class t on t.oid = a.attrelid
+    join pg_namespace n on n.oid = t.relnamespace
+   where n.nspname = 'public'
+     and t.relname = 'purchase_orders'
+     and a.attnum > 0
+     and not a.attisdropped
+     and a.attname in ('company_id', 'po_number');
+
+  if not v_company_not_null then
+    alter table public.purchase_orders alter column company_id set not null;
+  end if;
+
+  if not v_po_number_not_null then
+    alter table public.purchase_orders alter column po_number set not null;
+  end if;
+
+  select
+    coalesce(bool_or(a.attname = 'company_id' and a.attnotnull), false),
+    coalesce(bool_or(a.attname = 'po_number' and a.attnotnull), false)
+    into v_company_not_null, v_po_number_not_null
+    from pg_attribute a
+    join pg_class t on t.oid = a.attrelid
+    join pg_namespace n on n.oid = t.relnamespace
+   where n.nspname = 'public'
+     and t.relname = 'purchase_orders'
+     and a.attnum > 0
+     and not a.attisdropped
+     and a.attname in ('company_id', 'po_number');
+
+  if not v_company_not_null or not v_po_number_not_null then
+    raise exception
+      'No se puede crear UNIQUE (company_id, po_number) en public.purchase_orders: las restricciones NOT NULL de company_id/po_number no están garantizadas.';
+  end if;
+
   select string_agg(
     format('%s:%s (x%s)', coalesce(company_id::text, '<NULL>'), coalesce(po_number, '<NULL>'), cnt),
     ', '
@@ -687,7 +741,29 @@ begin
 end $$;
 
 do $$
+declare
+  v_not_null_ok boolean := false;
 begin
+  select
+    coalesce(bool_or(a.attname = 'company_id' and a.attnotnull), false)
+    and coalesce(bool_or(a.attname = 'po_number' and a.attnotnull), false)
+    into v_not_null_ok
+    from pg_attribute a
+    join pg_class t on t.oid = a.attrelid
+    join pg_namespace n on n.oid = t.relnamespace
+   where n.nspname = 'public'
+     and t.relname = 'purchase_orders'
+     and a.attnum > 0
+     and not a.attisdropped
+     and a.attname in ('company_id', 'po_number');
+
+  if not v_not_null_ok or exists (
+    select 1 from public.purchase_orders where company_id is null or po_number is null
+  ) then
+    raise exception
+      'No se puede crear UNIQUE (company_id, po_number) en public.purchase_orders sin NOT NULL garantizado y cero nulos.';
+  end if;
+
   if not exists (
     select 1
     from pg_constraint c

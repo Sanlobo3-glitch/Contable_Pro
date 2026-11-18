@@ -4,7 +4,8 @@
 # numeración atómica de órdenes de compra (Bloqueante B / migración 000068).
 #
 # IMPORTANTE:
-# - Ejecutar EXCLUSIVAMENTE contra una base PostgreSQL 17 de PRUEBAS (nunca contra producción ni Supabase).
+# - Ejecutar EXCLUSIVAMENTE contra una base PostgreSQL 17 LOCAL de PRUEBAS (localhost / 127.0.0.1 / ::1).
+# - Prohibido ejecutar contra Supabase, hosts remotos, IPs externas o entornos de producción.
 # - Requiere haber aplicado previamente hasta la migración 20261118000068_cierre_bloqueantes_etapa1.sql.
 #
 # Uso:
@@ -12,23 +13,129 @@
 
 set -euo pipefail
 
+abort_conn() {
+  echo "ABORTADO: $1" >&2
+  exit 1
+}
+
+is_allowed_local_host() {
+  local h
+  h=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+  h="${h#[}"
+  h="${h%]}"
+  case "$h" in
+    localhost|127.0.0.1|::1) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 if [[ -z "${TEST_PG_URI:-}" ]]; then
-  echo "ERROR: Debes definir TEST_PG_URI apuntando a una instancia PostgreSQL de pruebas." >&2
-  exit 1
+  abort_conn "Debes definir TEST_PG_URI apuntando exclusivamente a una instancia PostgreSQL local (localhost, 127.0.0.1 o ::1)."
 fi
 
-URI_LOWER=$(printf '%s' "${TEST_PG_URI}" | tr '[:upper:]' '[:lower:]')
-PGHOST_LOWER=$(printf '%s' "${PGHOST:-}" | tr '[:upper:]' '[:lower:]')
-
-if [[ "${URI_LOWER}" =~ (supabase\.(co|in|com)|\.supabase\.) ]] || [[ "${PGHOST_LOWER}" =~ (supabase\.(co|in|com)|\.supabase\.) ]]; then
-  echo "ABORTADO: Se detectó un dominio de Supabase; esta prueba solo puede ejecutarse en PostgreSQL de pruebas local o aislado." >&2
-  exit 1
+# 1. Bloqueo estricto de variables libpq que puedan redirigir la conexión
+if [[ -n "${PGSERVICE:-}" ]] || [[ -n "${PGSERVICEFILE:-}" ]] || [[ -n "${PGSYSCONFDIR:-}" ]]; then
+  abort_conn "Variables libpq de servicio (PGSERVICE/PGSERVICEFILE/PGSYSCONFDIR) no están permitidas en esta prueba."
 fi
 
-if [[ "${URI_LOWER}" =~ (^|[^[:alnum:]])prod(uction)?([^[:alnum:]]|$) ]] || [[ "${APP_ENV:-}" == "production" ]] || [[ "${NODE_ENV:-}" == "production" ]]; then
-  echo "ABORTADO: Se detectó un indicador de entorno de producción en TEST_PG_URI o variables de entorno; ejecución prohibida." >&2
-  exit 1
+if [[ -n "${PGOPTIONS:-}" ]]; then
+  abort_conn "La variable PGOPTIONS no está permitida en esta prueba."
 fi
+
+if [[ -n "${PGHOST:-}" ]] && ! is_allowed_local_host "${PGHOST}"; then
+  abort_conn "PGHOST no apunta a un host local permitido (localhost, 127.0.0.1, ::1): ${PGHOST}"
+fi
+
+if [[ -n "${PGHOSTADDR:-}" ]]; then
+  PGHOSTADDR_LOWER=$(printf '%s' "${PGHOSTADDR}" | tr '[:upper:]' '[:lower:]')
+  case "${PGHOSTADDR_LOWER}" in
+    127.0.0.1|::1) ;;
+    *) abort_conn "PGHOSTADDR no apunta a loopback permitido (127.0.0.1 o ::1): ${PGHOSTADDR}" ;;
+  esac
+fi
+
+if [[ "${APP_ENV:-}" == "production" ]] || [[ "${NODE_ENV:-}" == "production" ]]; then
+  abort_conn "Entorno de producción detectado en APP_ENV/NODE_ENV; ejecución prohibida."
+fi
+
+URI_RAW="${TEST_PG_URI}"
+URI_LOWER=$(printf '%s' "${URI_RAW}" | tr '[:upper:]' '[:lower:]')
+PGDATABASE_LOWER=$(printf '%s' "${PGDATABASE:-}" | tr '[:upper:]' '[:lower:]')
+
+if [[ "${URI_RAW}" =~ [[:space:]] ]] || [[ "${URI_RAW}" == *"%"* ]]; then
+  abort_conn "TEST_PG_URI contiene espacios o codificación porcentual no permitida en validación estricta local."
+fi
+
+if [[ "${URI_LOWER}" =~ (supabase\.(co|in|com|net|org)|\.supabase\.) ]] || [[ "$(printf '%s' "${PGHOST:-}" | tr '[:upper:]' '[:lower:]')" =~ supabase ]]; then
+  abort_conn "Dominio de Supabase detectado; esta prueba solo puede ejecutarse en PostgreSQL local de pruebas."
+fi
+
+if [[ "${URI_LOWER}" =~ (^|[^[:alnum:]])prod(uction)?([^[:alnum:]]|$) ]] || [[ "${PGDATABASE_LOWER}" =~ (^|[^[:alnum:]])prod(uction)?([^[:alnum:]]|$) ]]; then
+  abort_conn "Se detectó un indicador de producción en TEST_PG_URI o PGDATABASE; ejecución prohibida."
+fi
+
+# Exigir formato URI explícito postgres:// o postgresql:// con autoridad local demostrable
+if [[ ! "${URI_LOWER}" =~ ^postgres(ql)?://(.+)$ ]]; then
+  abort_conn "TEST_PG_URI debe usar formato explícito postgresql://... o postgres://... con host local (localhost, 127.0.0.1 o [::1])."
+fi
+
+REST_AFTER_SCHEME="${BASH_REMATCH[2]}"
+AUTHORITY_PART="${REST_AFTER_SCHEME%%[/?#]*}"
+PATH_AND_QUERY="${REST_AFTER_SCHEME#"$AUTHORITY_PART"}"
+
+if [[ -z "${AUTHORITY_PART}" ]]; then
+  abort_conn "No se puede demostrar destino local: falta autoridad/host explícito en TEST_PG_URI."
+fi
+
+HOST_PORT_PART="${AUTHORITY_PART##*@}"
+if [[ -z "${HOST_PORT_PART}" ]] || [[ "${HOST_PORT_PART}" == *","* ]]; then
+  abort_conn "Host inválido o multi-host no permitido en TEST_PG_URI."
+fi
+
+URI_HOST=""
+if [[ "${HOST_PORT_PART}" =~ ^\[(::1)\](:[0-9]{1,5})?$ ]]; then
+  URI_HOST="${BASH_REMATCH[1]}"
+elif [[ "${HOST_PORT_PART}" =~ ^([a-zA-Z0-9.-]+)(:[0-9]{1,5})?$ ]]; then
+  URI_HOST="${BASH_REMATCH[1]}"
+else
+  abort_conn "No se pudo verificar host local en TEST_PG_URI: ${HOST_PORT_PART}"
+fi
+
+if ! is_allowed_local_host "${URI_HOST}"; then
+  abort_conn "Destino no local rechazado (${URI_HOST}); solo se permite localhost, 127.0.0.1 o ::1."
+fi
+
+# Validar parámetros query que puedan redirigir host/hostaddr/service
+if [[ "${PATH_AND_QUERY}" == *"?"* ]]; then
+  QUERY_STRING="${PATH_AND_QUERY#*\?}"
+  IFS='&' read -ra QUERY_PAIRS <<< "${QUERY_STRING}"
+  for kv in "${QUERY_PAIRS[@]}"; do
+    [[ -z "$kv" ]] && continue
+    q_key=$(printf '%s' "${kv%%=*}" | tr '[:upper:]' '[:lower:]')
+    q_val="${kv#*=}"
+    q_val_lower=$(printf '%s' "$q_val" | tr '[:upper:]' '[:lower:]')
+    case "$q_key" in
+      service|servicefile)
+        abort_conn "Parámetro libpq '${q_key}' no está permitido en TEST_PG_URI."
+        ;;
+      host)
+        if [[ "$q_val" == *","* ]] || ! is_allowed_local_host "$q_val_lower"; then
+          abort_conn "Parámetro query host= no local rechazado: ${q_val}"
+        fi
+        ;;
+      hostaddr)
+        case "$q_val_lower" in
+          127.0.0.1|::1) ;;
+          *) abort_conn "Parámetro query hostaddr= no local rechazado: ${q_val}" ;;
+        esac
+        ;;
+    esac
+  done
+fi
+
+# Aislar el entorno libpq antes de cualquier invocación a psql
+unset PGSERVICE PGSYSCONFDIR PGHOST PGHOSTADDR PGDATABASE PGPORT PGUSER PGOPTIONS
+export PGSERVICEFILE=/dev/null
 
 gen_uuid() {
   if [[ -r /proc/sys/kernel/random/uuid ]]; then
@@ -56,37 +163,127 @@ SUP_A="$(gen_uuid)"
 SUP_B="$(gen_uuid)"
 PROD_A="$(gen_uuid)"
 PROD_B="$(gen_uuid)"
+HIST_PO_ID="$(gen_uuid)"
 
-UNIQUE_COUNT=$(printf '%s\n' "${CO_A}" "${CO_B}" "${U_A}" "${U_B}" "${WH_A}" "${WH_B}" "${SUP_A}" "${SUP_B}" "${PROD_A}" "${PROD_B}" | sort -u | wc -l | tr -d ' ')
-if [[ "${UNIQUE_COUNT}" -ne 10 ]]; then
+UNIQUE_COUNT=$(printf '%s\n' "${CO_A}" "${CO_B}" "${U_A}" "${U_B}" "${WH_A}" "${WH_B}" "${SUP_A}" "${SUP_B}" "${PROD_A}" "${PROD_B}" "${HIST_PO_ID}" | sort -u | wc -l | tr -d ' ')
+if [[ "${UNIQUE_COUNT}" -ne 11 ]]; then
   echo "ERROR: Colisión interna al generar UUIDs exclusivos para la ejecución." >&2
   exit 1
 fi
 
 EMAIL_A="conc_a_${RUN_TAG}@test.local"
 EMAIL_B="conc_b_${RUN_TAG}@test.local"
+CO_A_NAME="Test Concurrencia A ${RUN_TAG}"
+CO_B_NAME="Test Concurrencia B ${RUN_TAG}"
 
 SETUP_COMMITTED=0
-TMP_OUT_1=""
-TMP_OUT_2=""
+SESSION_OUT_FILES=()
 
 cleanup() {
-  rm -f "${TMP_OUT_1:-}" "${TMP_OUT_2:-}" 2>/dev/null || true
+  local created_po_ids=("${HIST_PO_ID}")
+  local f line po_id_sql_list
+
+  for f in "${SESSION_OUT_FILES[@]:-}"; do
+    if [[ -n "$f" ]] && [[ -f "$f" ]]; then
+      while IFS= read -r line; do
+        line=$(printf '%s' "$line" | tr -d '[:space:]')
+        if [[ "$line" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
+          created_po_ids+=("$line")
+        fi
+      done < "$f"
+      rm -f "$f" 2>/dev/null || true
+    fi
+  done
+
   if [[ "${SETUP_COMMITTED}" -ne 1 ]]; then
     return 0
   fi
 
+  po_id_sql_list=$(printf "'%s'," "${created_po_ids[@]}")
+  po_id_sql_list="${po_id_sql_list%,}"
+
   psql "${TEST_PG_URI}" -v ON_ERROR_STOP=1 -q <<SQL || true
-DELETE FROM public.purchase_order_items WHERE company_id IN ('${CO_A}', '${CO_B}');
-DELETE FROM public.purchase_orders WHERE company_id IN ('${CO_A}', '${CO_B}');
-DELETE FROM public.purchase_order_counters WHERE company_id IN ('${CO_A}', '${CO_B}');
-DELETE FROM public.audit_log WHERE company_id IN ('${CO_A}', '${CO_B}');
-DELETE FROM public.products WHERE id IN ('${PROD_A}', '${PROD_B}') AND company_id IN ('${CO_A}', '${CO_B}');
-DELETE FROM public.suppliers WHERE id IN ('${SUP_A}', '${SUP_B}') AND company_id IN ('${CO_A}', '${CO_B}');
-DELETE FROM public.warehouses WHERE id IN ('${WH_A}', '${WH_B}') AND company_id IN ('${CO_A}', '${CO_B}');
-DELETE FROM public.profiles WHERE id IN ('${U_A}', '${U_B}') AND company_id IN ('${CO_A}', '${CO_B}');
-DELETE FROM auth.users WHERE id IN ('${U_A}', '${U_B}');
-DELETE FROM public.companies WHERE id IN ('${CO_A}', '${CO_B}');
+BEGIN;
+
+DELETE FROM public.purchase_order_items poi
+ WHERE poi.company_id IN ('${CO_A}', '${CO_B}')
+   AND poi.product_id IN ('${PROD_A}', '${PROD_B}')
+   AND poi.po_id IN (
+     SELECT po.id
+       FROM public.purchase_orders po
+       JOIN public.companies c ON c.id = po.company_id
+      WHERE po.company_id IN ('${CO_A}', '${CO_B}')
+        AND c.name IN ('${CO_A_NAME}', '${CO_B_NAME}')
+        AND po.supplier_id IN ('${SUP_A}', '${SUP_B}')
+        AND po.created_by IN ('${U_A}', '${U_B}')
+        AND (po.id IN (${po_id_sql_list}) OR po.notes LIKE '%${RUN_TAG}%')
+   );
+
+DELETE FROM public.purchase_orders po
+ USING public.companies c
+ WHERE c.id = po.company_id
+   AND c.name IN ('${CO_A_NAME}', '${CO_B_NAME}')
+   AND po.company_id IN ('${CO_A}', '${CO_B}')
+   AND po.supplier_id IN ('${SUP_A}', '${SUP_B}')
+   AND po.created_by IN ('${U_A}', '${U_B}')
+   AND (po.id IN (${po_id_sql_list}) OR po.notes LIKE '%${RUN_TAG}%');
+
+DELETE FROM public.purchase_order_counters poc
+ USING public.companies c
+ WHERE c.id = poc.company_id
+   AND c.name IN ('${CO_A_NAME}', '${CO_B_NAME}')
+   AND poc.company_id IN ('${CO_A}', '${CO_B}');
+
+DELETE FROM public.audit_log al
+ USING public.companies c
+ WHERE c.id = al.company_id
+   AND c.name IN ('${CO_A_NAME}', '${CO_B_NAME}')
+   AND al.company_id IN ('${CO_A}', '${CO_B}')
+   AND (
+     al.user_id IN ('${U_A}', '${U_B}')
+     OR al.record_id::text IN (${po_id_sql_list}, '${CO_A}', '${CO_B}', '${U_A}', '${U_B}', '${WH_A}', '${WH_B}', '${SUP_A}', '${SUP_B}', '${PROD_A}', '${PROD_B}')
+   );
+
+DELETE FROM public.products p
+ USING public.companies c
+ WHERE c.id = p.company_id
+   AND c.name IN ('${CO_A_NAME}', '${CO_B_NAME}')
+   AND p.id IN ('${PROD_A}', '${PROD_B}')
+   AND p.company_id IN ('${CO_A}', '${CO_B}')
+   AND p.sku IN ('SKU-CA-${RUN_TAG}', 'SKU-CB-${RUN_TAG}');
+
+DELETE FROM public.suppliers s
+ USING public.companies c
+ WHERE c.id = s.company_id
+   AND c.name IN ('${CO_A_NAME}', '${CO_B_NAME}')
+   AND s.id IN ('${SUP_A}', '${SUP_B}')
+   AND s.company_id IN ('${CO_A}', '${CO_B}');
+
+DELETE FROM public.warehouses w
+ USING public.companies c
+ WHERE c.id = w.company_id
+   AND c.name IN ('${CO_A_NAME}', '${CO_B_NAME}')
+   AND w.id IN ('${WH_A}', '${WH_B}')
+   AND w.company_id IN ('${CO_A}', '${CO_B}')
+   AND w.code IN ('CA-${RUN_TAG}', 'CB-${RUN_TAG}');
+
+DELETE FROM public.profiles pr
+ USING public.companies c
+ WHERE c.id = pr.company_id
+   AND c.name IN ('${CO_A_NAME}', '${CO_B_NAME}')
+   AND pr.id IN ('${U_A}', '${U_B}')
+   AND pr.company_id IN ('${CO_A}', '${CO_B}')
+   AND pr.email IN ('${EMAIL_A}', '${EMAIL_B}');
+
+DELETE FROM auth.users
+ WHERE id IN ('${U_A}', '${U_B}')
+   AND email IN ('${EMAIL_A}', '${EMAIL_B}');
+
+DELETE FROM public.companies
+ WHERE id IN ('${CO_A}', '${CO_B}')
+   AND name IN ('${CO_A_NAME}', '${CO_B_NAME}');
+
+COMMIT;
 SQL
 }
 trap cleanup EXIT
@@ -117,15 +314,29 @@ BEGIN
   SELECT count(*) INTO v_hits FROM public.products WHERE id IN ('${PROD_A}', '${PROD_B}') OR company_id IN ('${CO_A}', '${CO_B}');
   IF v_hits > 0 THEN RAISE EXCEPTION 'Abortado: producto de prueba ya existe en public.products'; END IF;
 
-  SELECT count(*) INTO v_hits FROM public.purchase_orders WHERE company_id IN ('${CO_A}', '${CO_B}');
+  SELECT count(*) INTO v_hits FROM public.purchase_orders WHERE id = '${HIST_PO_ID}' OR company_id IN ('${CO_A}', '${CO_B}');
   IF v_hits > 0 THEN RAISE EXCEPTION 'Abortado: órdenes preexistentes para UUID generado'; END IF;
+
+  SELECT count(*) INTO v_hits
+    FROM public.purchase_order_items
+   WHERE company_id IN ('${CO_A}', '${CO_B}')
+      OR po_id = '${HIST_PO_ID}'
+      OR product_id IN ('${PROD_A}', '${PROD_B}');
+  IF v_hits > 0 THEN RAISE EXCEPTION 'Abortado: ítems de orden preexistentes para UUID generado'; END IF;
 
   SELECT count(*) INTO v_hits FROM public.purchase_order_counters WHERE company_id IN ('${CO_A}', '${CO_B}');
   IF v_hits > 0 THEN RAISE EXCEPTION 'Abortado: contador preexistente para UUID generado'; END IF;
+
+  SELECT count(*) INTO v_hits
+    FROM public.audit_log
+   WHERE company_id IN ('${CO_A}', '${CO_B}')
+      OR user_id IN ('${U_A}', '${U_B}')
+      OR record_id::text IN ('${CO_A}', '${CO_B}', '${U_A}', '${U_B}', '${WH_A}', '${WH_B}', '${SUP_A}', '${SUP_B}', '${PROD_A}', '${PROD_B}', '${HIST_PO_ID}');
+  IF v_hits > 0 THEN RAISE EXCEPTION 'Abortado: registros de auditoría preexistentes para UUID generado'; END IF;
 END \$\$;
 
 INSERT INTO public.companies (id, name, active)
-VALUES ('${CO_A}', 'Test Concurrencia A ${RUN_TAG}', true), ('${CO_B}', 'Test Concurrencia B ${RUN_TAG}', true);
+VALUES ('${CO_A}', '${CO_A_NAME}', true), ('${CO_B}', '${CO_B_NAME}', true);
 
 INSERT INTO auth.users (id, instance_id, aud, role, email, encrypted_password, email_confirmed_at, created_at, updated_at, raw_app_meta_data, raw_user_meta_data)
 VALUES
@@ -148,8 +359,8 @@ VALUES ('${PROD_A}', '${CO_A}', 'Prod Conc A', 'SKU-CA-${RUN_TAG}', 100, 1000, 1
        ('${PROD_B}', '${CO_B}', 'Prod Conc B', 'SKU-CB-${RUN_TAG}', 100, 1000, 1500, true);
 
 -- Orden histórica previa OC-0005 (simula historial y salto previo sin reiniciar contador)
-INSERT INTO public.purchase_orders (company_id, po_number, supplier_id, supplier_name, status, payment_terms, subtotal, total, created_by)
-VALUES ('${CO_A}', 'OC-0005', '${SUP_A}', 'Prov Conc A', 'draft', 'credito', 1000, 1000, '${U_A}');
+INSERT INTO public.purchase_orders (id, company_id, po_number, supplier_id, supplier_name, status, payment_terms, subtotal, total, notes, created_by)
+VALUES ('${HIST_PO_ID}', '${CO_A}', 'OC-0005', '${SUP_A}', 'Prov Conc A', 'draft', 'credito', 1000, 1000, 'hist-${RUN_TAG}', '${U_A}');
 
 INSERT INTO public.purchase_order_counters (company_id, last_seq)
 VALUES ('${CO_A}', 5);
@@ -179,7 +390,7 @@ SELECT public.crear_orden_compra(
   'credito',
   30,
   current_date + 3,
-  '${label}',
+  '${label}-${RUN_TAG}',
   false
 );
 RESET ROLE;
@@ -191,6 +402,7 @@ SQL
 echo "[2/4] Prueba 1: Contención simultánea de 2 sesiones con transacción abierta en Empresa A..."
 TMP_OUT_1=$(mktemp)
 TMP_OUT_2=$(mktemp)
+SESSION_OUT_FILES+=("$TMP_OUT_1" "$TMP_OUT_2")
 
 run_create_po "${U_A}" "${SUP_A}" "${PROD_A}" "${WH_A}" "2" "contencion-s1" >"$TMP_OUT_1" &
 PID_1=$!
@@ -203,11 +415,15 @@ wait "$PID_1" "$PID_2"
 echo "[3/4] Prueba 2: Ráfaga concurrente (5 sesiones Empresa A + 3 sesiones Empresa B en paralelo)..."
 PIDS=()
 for i in 1 2 3 4 5; do
-  run_create_po "${U_A}" "${SUP_A}" "${PROD_A}" "${WH_A}" "0" "burst-a-${i}" >/dev/null &
+  OUT_FILE=$(mktemp)
+  SESSION_OUT_FILES+=("$OUT_FILE")
+  run_create_po "${U_A}" "${SUP_A}" "${PROD_A}" "${WH_A}" "0" "burst-a-${i}" >"$OUT_FILE" &
   PIDS+=($!)
 done
 for j in 1 2 3; do
-  run_create_po "${U_B}" "${SUP_B}" "${PROD_B}" "${WH_B}" "0" "burst-b-${j}" >/dev/null &
+  OUT_FILE=$(mktemp)
+  SESSION_OUT_FILES+=("$OUT_FILE")
+  run_create_po "${U_B}" "${SUP_B}" "${PROD_B}" "${WH_B}" "0" "burst-b-${j}" >"$OUT_FILE" &
   PIDS+=($!)
 done
 for pid in "${PIDS[@]}"; do

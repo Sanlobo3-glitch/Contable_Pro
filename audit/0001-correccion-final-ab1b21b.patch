@@ -1,0 +1,758 @@
+From 13b9c93709da65b464613b0fe614bf877e2c3e2c Mon Sep 17 00:00:00 2001
+From: Sanlobo3-glitch <Sanlobo3-glitch@users.noreply.github.com>
+Date: Wed, 18 Nov 2026 22:52:14 +0000
+Subject: [PATCH] fix(etapa1): atomicidad de traslados en demo y blindaje de
+ concurrencia e historial OC sobre ab1b21b
+
+---
+ src/lib/supabase.ts                           | 322 +++++++++++++++---
+ supabase/MIGRATIONS.md                        |   2 +-
+ ...261118000068_cierre_bloqueantes_etapa1.sql |  46 ++-
+ ...a1_permisos_y_seguridad_rollback_tests.sql |  46 +++
+ supabase/tests/etapa1_po_concurrency_test.sh  | 210 ++++++++++++
+ 5 files changed, 583 insertions(+), 43 deletions(-)
+ create mode 100644 supabase/tests/etapa1_po_concurrency_test.sh
+
+diff --git a/src/lib/supabase.ts b/src/lib/supabase.ts
+index def025a..4d2bfa5 100644
+--- a/src/lib/supabase.ts
++++ b/src/lib/supabase.ts
+@@ -6884,15 +6884,97 @@ function createMockSupabase(silent = false): SupabaseClient {
+         const auth = requireDemoActor(['admin', 'dueno', 'admin_empresa', 'gerente', 'almacen', 'comprador'])
+         if (!auth.ok) return { data: null, error: auth.error }
+         const { companyId, uid } = auth.actor
+-        const tId = String(args.p_transfer_id || '')
+-        const action = String(args.p_action || '')
++        const tId = String(args.p_transfer_id || '').trim()
++        const action = String(args.p_action || '').trim()
++        if (action !== 'dispatch') {
++          return demoErr('Utiliza la recepción detallada para confirmar ingreso en destino')
++        }
++        if (!tId) return demoErr('Traslado no encontrado')
++
+         const trf = getTable('inventory_transfers').find(t => t.id === tId && isSameCompany(t, companyId))
+         if (!trf) return demoErr('Traslado no encontrado')
+-        const items = getTable('inventory_transfer_items').filter(i => i.transfer_id === tId)
+-        if (items.length === 0) return demoErr('El traslado no contiene productos')
+-        if (action === 'dispatch') {
+-          if (trf.status !== 'draft') return demoErr('Solo se pueden despachar traslados en borrador')
+-          for (const it of items) {
++        if (trf.status !== 'draft') return demoErr('Solo se pueden despachar traslados en borrador')
++
++        const srcWh = getTable('warehouses').find(w => w.id === trf.source_warehouse_id)
++        if (!srcWh) return demoErr('La bodega origen del traslado no existe')
++        if (!isSameCompany(srcWh, companyId)) {
++          return demoErr('No autorizado: la bodega origen pertenece a otra empresa')
++        }
++        if (srcWh.active === false) return demoErr('La bodega origen del traslado está inactiva')
++
++        const dstWh = getTable('warehouses').find(w => w.id === trf.destination_warehouse_id)
++        if (!dstWh) return demoErr('La bodega destino del traslado no existe')
++        if (!isSameCompany(dstWh, companyId)) {
++          return demoErr('No autorizado: la bodega destino pertenece a otra empresa')
++        }
++        if (dstWh.active === false) return demoErr('La bodega destino del traslado está inactiva')
++        if (trf.source_warehouse_id === trf.destination_warehouse_id) {
++          return demoErr('La bodega origen y destino del traslado deben ser diferentes')
++        }
++
++        const alreadyDispatched = getTable('warehouse_movements').some(
++          m =>
++            isSameCompany(m, companyId) &&
++            m.reference_type === 'inventory_transfer' &&
++            m.reference_id === tId &&
++            m.movement_type === 'exit'
++        )
++        if (alreadyDispatched) {
++          return demoErr('El despacho de este traslado ya fue registrado anteriormente')
++        }
++
++        const allTransferItems = getTable('inventory_transfer_items').filter(i => i.transfer_id === tId)
++        if (allTransferItems.length === 0) return demoErr('El traslado no contiene productos')
++
++        const neededByProd = new Map<string, number>()
++        for (const it of allTransferItems) {
++          if (!isSameCompany(it, companyId)) {
++            return demoErr('No autorizado: un elemento del traslado pertenece a otra empresa')
++          }
++          const prodId = String(it.product_id || '').trim()
++          const prod = prods.find(p => p.id === prodId && isSameCompany(p, companyId))
++          if (!prod) {
++            return demoErr('No autorizado: el producto del traslado no existe o pertenece a otra empresa')
++          }
++          const qty = Number(it.quantity)
++          if (!Number.isFinite(qty) || qty <= 0) {
++            return demoErr('Cantidad inválida en el detalle del traslado')
++          }
++          neededByProd.set(prodId, (neededByProd.get(prodId) || 0) + qty)
++        }
++
++        const wsTable = getTable('warehouse_stock')
++        for (const [prodId, totalNeeded] of neededByProd.entries()) {
++          const ws = wsTable.find(
++            r => isSameCompany(r, companyId) && r.warehouse_id === trf.source_warehouse_id && r.product_id === prodId
++          )
++          const avail = (Number(ws?.quantity) || 0) - (Number(ws?.reserved_quantity) || 0)
++          if (!ws || avail < totalNeeded) {
++            return demoErr(`Stock disponible insuficiente en bodega origen (disponible: ${Math.max(0, avail)})`)
++          }
++        }
++
++        const cloneRow = (r: Row): Row =>
++          typeof structuredClone === 'function' ? structuredClone(r) : JSON.parse(JSON.stringify(r))
++        const txTables = [
++          'products',
++          'warehouse_stock',
++          'warehouse_movements',
++          'warehouse_stock_reservations',
++          'inventory_transfers',
++          'inventory_transfer_items',
++        ]
++        const snapshot: Record<string, Row[]> = {}
++        for (const tbl of txTables) snapshot[tbl] = getTable(tbl).map(cloneRow)
++        const rollbackTransferTx = () => {
++          for (const tbl of txTables) {
++            const arr = getTable(tbl)
++            arr.splice(0, arr.length, ...snapshot[tbl].map(cloneRow))
++          }
++        }
++
++        try {
++          for (const it of allTransferItems) {
+             const res = await handleRpc('register_warehouse_movement', {
+               p_warehouse_id: trf.source_warehouse_id,
+               p_product_id: it.product_id,
+@@ -6902,65 +6984,223 @@ function createMockSupabase(silent = false): SupabaseClient {
+               p_reference_id: tId,
+               p_notes: 'Despacho de traslado entre bodegas',
+             })
+-            if (res.error) return res
++            if (res.error) {
++              rollbackTransferTx()
++              return res
++            }
+           }
+           trf.status = 'in_transit'
+           trf.approved_by = uid
+           trf.approved_at = nowIso()
+           trf.updated_at = nowIso()
+           return { data: 'Traslado despachado correctamente', error: null }
++        } catch (err) {
++          rollbackTransferTx()
++          return demoErr(err instanceof Error ? err.message : 'Error atómico al despachar el traslado')
+         }
+-        return demoErr('Utiliza la recepción detallada para confirmar ingreso en destino')
+       }
+       case 'receive_inventory_transfer': {
+         const auth = requireDemoActor(['admin', 'dueno', 'admin_empresa', 'gerente', 'almacen', 'comprador'])
+         if (!auth.ok) return { data: null, error: auth.error }
+         const { companyId, uid } = auth.actor
+-        const tId = String(args.p_transfer_id || '')
++        const tId = String(args.p_transfer_id || '').trim()
++        if (!tId) return demoErr('Traslado no encontrado')
++
+         const trf = getTable('inventory_transfers').find(t => t.id === tId && isSameCompany(t, companyId))
+         if (!trf) return demoErr('Traslado no encontrado')
++        if (trf.status === 'received') return demoErr('Este traslado ya fue recibido anteriormente')
+         if (trf.status !== 'in_transit') return demoErr('El traslado no está en tránsito')
++
++        const srcWh = getTable('warehouses').find(w => w.id === trf.source_warehouse_id)
++        if (!srcWh || !isSameCompany(srcWh, companyId)) {
++          return demoErr('No autorizado: la bodega origen pertenece a otra empresa o no existe')
++        }
++        const dstWh = getTable('warehouses').find(w => w.id === trf.destination_warehouse_id)
++        if (!dstWh) return demoErr('La bodega destino del traslado no existe')
++        if (!isSameCompany(dstWh, companyId)) {
++          return demoErr('No autorizado: la bodega destino pertenece a otra empresa')
++        }
++        if (dstWh.active === false) return demoErr('La bodega destino del traslado está inactiva')
++        if (trf.source_warehouse_id === trf.destination_warehouse_id) {
++          return demoErr('La bodega origen y destino del traslado deben ser diferentes')
++        }
++
++        const alreadyReceived = getTable('warehouse_movements').some(
++          m =>
++            isSameCompany(m, companyId) &&
++            m.reference_type === 'inventory_transfer' &&
++            m.reference_id === tId &&
++            m.movement_type === 'entry'
++        )
++        if (alreadyReceived) {
++          return demoErr('La recepción de este traslado ya fue registrada anteriormente')
++        }
++
++        const existingAll = getTable('inventory_transfer_items').filter(i => i.transfer_id === tId)
++        if (existingAll.length === 0) return demoErr('El traslado no contiene productos')
++        for (const row of existingAll) {
++          if (!isSameCompany(row, companyId)) {
++            return demoErr('No autorizado: un elemento del traslado pertenece a otra empresa')
++          }
++          const prodRow = prods.find(p => p.id === row.product_id && isSameCompany(p, companyId))
++          if (!prodRow) {
++            return demoErr('No autorizado: un producto del traslado pertenece a otra empresa o no existe')
++          }
++        }
++
+         const incoming = Array.isArray(args.p_items) ? args.p_items : []
+-        const existing = getTable('inventory_transfer_items').filter(i => i.transfer_id === tId)
+-        if (incoming.length !== existing.length) {
++        if (incoming.length === 0) {
++          return demoErr('Debes enviar el detalle de recepción')
++        }
++        if (incoming.length !== existingAll.length) {
+           return demoErr('Debes informar todos los productos del traslado')
+         }
++
++        const seenProducts = new Set<string>()
++        const validatedLines: Array<{
++          row: Row
++          rec: number
++          dmg: number
++          mis: number
++          notes: string | null
++        }> = []
++
+         for (const inc of incoming) {
+-          const row = existing.find(e => e.product_id === inc.product_id)
++          if (!inc || typeof inc !== 'object') {
++            return demoErr('Elemento de recepción inválido')
++          }
++          if (inc.transfer_id !== undefined && inc.transfer_id !== null && String(inc.transfer_id).trim() !== tId) {
++            return demoErr('El elemento recibido pertenece a otro traslado')
++          }
++          if (inc.company_id !== undefined && inc.company_id !== null && String(inc.company_id).trim() !== companyId) {
++            return demoErr('No autorizado: el elemento recibido pertenece a otra empresa')
++          }
++          const incItemId = inc.item_id !== undefined && inc.item_id !== null
++            ? String(inc.item_id).trim()
++            : inc.id !== undefined && inc.id !== null
++              ? String(inc.id).trim()
++              : ''
++          const prodId = String(inc.product_id || '').trim()
++          if (!prodId) return demoErr('Falta product_id en el detalle de recepción')
++          if (seenProducts.has(prodId)) {
++            return demoErr('Hay productos repetidos en la recepción')
++          }
++          seenProducts.add(prodId)
++
++          const prod = prods.find(p => p.id === prodId && isSameCompany(p, companyId))
++          if (!prod) {
++            return demoErr('No autorizado: el producto no existe o pertenece a otra empresa')
++          }
++
++          if (incItemId) {
++            const explicitItem = getTable('inventory_transfer_items').find(i => i.id === incItemId)
++            if (
++              !explicitItem ||
++              !isSameCompany(explicitItem, companyId) ||
++              explicitItem.transfer_id !== tId ||
++              explicitItem.product_id !== prodId
++            ) {
++              return demoErr('El elemento indicado no pertenece a este traslado o empresa')
++            }
++          }
++
++          const row = existingAll.find(e => e.product_id === prodId && isSameCompany(e, companyId))
+           if (!row) return demoErr('Producto no pertenece al traslado')
+-          const rec = Number(inc.received_quantity) || 0
+-          const dmg = Number(inc.damaged_quantity) || 0
+-          const mis = Number(inc.missing_quantity) || 0
+-          if (rec < 0 || dmg < 0 || mis < 0 || Math.abs(rec + dmg + mis - Number(row.quantity)) > 0.001) {
++
++          const rec = inc.received_quantity === undefined || inc.received_quantity === null || inc.received_quantity === ''
++            ? NaN
++            : Number(inc.received_quantity)
++          const dmg = inc.damaged_quantity === undefined || inc.damaged_quantity === null || inc.damaged_quantity === ''
++            ? 0
++            : Number(inc.damaged_quantity)
++          const mis = inc.missing_quantity === undefined || inc.missing_quantity === null || inc.missing_quantity === ''
++            ? 0
++            : Number(inc.missing_quantity)
++          if (
++            !Number.isFinite(rec) ||
++            !Number.isFinite(dmg) ||
++            !Number.isFinite(mis) ||
++            rec < 0 ||
++            dmg < 0 ||
++            mis < 0 ||
++            Math.abs(rec + dmg + mis - Number(row.quantity)) > 0.001
++          ) {
+             return demoErr('La suma de recibido, dañado y faltante debe coincidir con lo despachado')
+           }
+-          row.received_quantity = rec
+-          row.damaged_quantity = dmg
+-          row.missing_quantity = mis
+-          row.receipt_notes = inc.notes || null
+-          if (rec > 0) {
+-            const movRes = await handleRpc('register_warehouse_movement', {
+-              p_warehouse_id: trf.destination_warehouse_id,
+-              p_product_id: row.product_id,
+-              p_movement_type: 'entry',
+-              p_quantity: rec,
+-              p_reference_type: 'inventory_transfer',
+-              p_reference_id: tId,
+-              p_notes: inc.notes || 'Recepción de traslado en destino',
+-            })
+-            if (movRes.error) return movRes
++
++          validatedLines.push({
++            row,
++            rec,
++            dmg,
++            mis,
++            notes: inc.notes ? String(inc.notes) : null,
++          })
++        }
++
++        if (seenProducts.size !== existingAll.length) {
++          return demoErr('Debes informar todos los productos del traslado sin duplicados')
++        }
++
++        const cloneRow = (r: Row): Row =>
++          typeof structuredClone === 'function' ? structuredClone(r) : JSON.parse(JSON.stringify(r))
++        const txTables = [
++          'products',
++          'warehouse_stock',
++          'warehouse_movements',
++          'warehouse_stock_reservations',
++          'inventory_transfers',
++          'inventory_transfer_items',
++        ]
++        const snapshot: Record<string, Row[]> = {}
++        for (const tbl of txTables) snapshot[tbl] = getTable(tbl).map(cloneRow)
++        const rollbackReceiveTx = () => {
++          for (const tbl of txTables) {
++            const arr = getTable(tbl)
++            arr.splice(0, arr.length, ...snapshot[tbl].map(cloneRow))
+           }
+-          // Si hubo merma/faltante en tránsito, ajustar el consolidado de productos
+-          if (dmg + mis > 0) {
+-            const prod = prods.find(p => p.id === row.product_id && isSameCompany(p, companyId))
+-            if (prod) prod.stock = Math.max(0, (Number(prod.stock) || 0) - (dmg + mis))
++        }
++
++        try {
++          for (const line of validatedLines) {
++            const { row, rec, dmg, mis, notes } = line
++            row.received_quantity = rec
++            row.damaged_quantity = dmg
++            row.missing_quantity = mis
++            row.receipt_notes = notes
++            if (rec > 0) {
++              const movRes = await handleRpc('register_warehouse_movement', {
++                p_warehouse_id: trf.destination_warehouse_id,
++                p_product_id: row.product_id,
++                p_movement_type: 'entry',
++                p_quantity: rec,
++                p_reference_type: 'inventory_transfer',
++                p_reference_id: tId,
++                p_notes: notes || 'Recepción de traslado en destino',
++              })
++              if (movRes.error) {
++                rollbackReceiveTx()
++                return movRes
++              }
++            }
++            // Si hubo merma/faltante en tránsito, ajustar el consolidado de productos
++            if (dmg + mis > 0) {
++              const prod = prods.find(p => p.id === row.product_id && isSameCompany(p, companyId))
++              if (!prod) {
++                rollbackReceiveTx()
++                return demoErr('Producto no encontrado al consolidar merma')
++              }
++              prod.stock = Math.max(0, Math.round(((Number(prod.stock) || 0) - (dmg + mis)) * 1000) / 1000)
++            }
+           }
++          trf.status = 'received'
++          trf.received_by = uid
++          trf.received_at = nowIso()
++          trf.updated_at = nowIso()
++          return { data: 'Recepción registrada correctamente', error: null }
++        } catch (err) {
++          rollbackReceiveTx()
++          return demoErr(err instanceof Error ? err.message : 'Error atómico al recibir el traslado')
+         }
+-        trf.status = 'received'
+-        trf.received_by = uid
+-        trf.received_at = nowIso()
+-        trf.updated_at = nowIso()
+-        return { data: 'Recepción registrada correctamente', error: null }
+       }
+       case 'reserve_warehouse_stock': {
+         const auth = requireDemoActor(['admin', 'dueno', 'admin_empresa', 'gerente', 'almacen', 'comprador', 'vendedor'])
+diff --git a/supabase/MIGRATIONS.md b/supabase/MIGRATIONS.md
+index cd66f7b..71c9087 100644
+--- a/supabase/MIGRATIONS.md
++++ b/supabase/MIGRATIONS.md
+@@ -142,7 +142,7 @@ Resultado de la verificación contra la base (2026-11-07): **todas las migracion
+ | 93 | `20261115000065_corregir_permisos_y_seguridad_fase_b.sql` | ⏳ Pendiente de aplicar en base viva | Etapa 1 Fase B (permisos, autorización y seguridad multiempresa): helper `_require_company_roles`, separación de funciones para `contador` (conciliación/asientos manuales/IVA/DIAN sin parámetros/PUC/contabilización en lote), separación Compras vs Almacén (`_registrar_compra_core`, recepción de OC validada para `almacen` sin modificar pago/crédito/costos ni abrir `registrar_compra*`), paridad `admin_empresa`/`dueno`, supervisión de `gerente` en CxP/devoluciones/compras sin anular ni pagar, eliminación de bypass global en `dian_*`, `dian_calcular_formulario_300/350`, `cxp_config` y `cxp_save_account`, y políticas RLS activas por empresa y rol. |
+ | 94 | `20261116000066_blindaje_etapa1_auditoria_77cd7d5.sql` | ⏳ Pendiente de aplicar en base viva | Corrección de auditoría de Etapa 1 (sobre commit `77cd7d5`): endurece `acc_post_entry(uuid)` para restringir a `contador` exclusivamente a borradores propios (`created_by = auth.uid()`) con `source_type IN ('manual', 'ajuste')`, y endurece `recibir_orden_compra(...)` validando empresa (`42501`), estado activo, sucursal y bloqueo de cambio de `target_warehouse_id` ya asignada para `almacen`. |
+ | 95 | `20261117000067_blindaje_recepcion_ordenes_compra.sql` | ⏳ Pendiente de aplicar en base viva | Corrección de recepción de órdenes de compra (sobre commit `150f9aa`): obliga al rol `almacen` a recibir contra una bodega destino específica y activa (`42501`), conserva inventario general (`NULL`) únicamente para roles corporativos/compras autorizados, corrige el filtro de sucursal rechazando bodegas con `branch_id IS NULL` o de otra sucursal cuando `purchase_orders.branch_id IS NOT NULL`, valida coherencia sucursal/bodega al crear la OC y agrega validación finita de cantidades y costos. |
+-| 96 | `20261118000068_cierre_bloqueantes_etapa1.sql` | ⏳ Pendiente de aplicar en base viva | Cierre integral y endurecimiento de bloqueantes de Etapa 1 (sobre commit `8ae6aa2`): (1) elimina `EXCEPTION WHEN OTHERS THEN NULL` en `acc_reopen_period` y `acc_close_period` para que cualquier fallo en `audit_log` haga rollback completo; (2) elimina silenciamiento en `registrar_pago_proveedor` y `cxp_save_account`, exige `start_date` cuando `acc_settings.active = true` (con respaldo `America/Bogota` en timezone nulo/vacío) y conserva omisión legítima solo si `active = false` o `fecha < start_date`; (3) separa creación (`comprador`) de aprobación (`admin`, `dueno`, `admin_empresa`) en `crear_orden_compra` y `cambiar_estado_orden_compra`, corrige `public.users -> public.profiles`, incorpora contador atómico por empresa `purchase_order_counters` y restricción `uq_purchase_orders_company_po_number` (`UNIQUE (company_id, po_number)`); (4) impone máquina estricta de estados OC bloqueando `draft->sent`, `partial->*`, `received->*` y `cancelled->*`; (5) revoca DML directo de `authenticated`/`anon` sobre las 7 tablas `acc_*` y `purchase_order_counters`, y reemplaza `platform_admin_company_all` (`ALL`) por `platform_admin_company_select` (`SELECT` solo en empresa y perfil activos). |
++| 96 | `20261118000068_cierre_bloqueantes_etapa1.sql` | ⏳ Pendiente de aplicar en base viva | Cierre integral y endurecimiento de bloqueantes de Etapa 1 (sobre commit `8ae6aa2`): (1) elimina `EXCEPTION WHEN OTHERS THEN NULL` en `acc_reopen_period` y `acc_close_period` para que cualquier fallo en `audit_log` haga rollback completo; (2) elimina silenciamiento en `registrar_pago_proveedor` y `cxp_save_account`, exige `start_date` cuando `acc_settings.active = true` (con respaldo `America/Bogota` en timezone nulo/vacío) y conserva omisión legítima solo si `active = false` o `fecha < start_date`; (3) separa creación (`comprador`) de aprobación (`admin`, `dueno`, `admin_empresa`) en `crear_orden_compra` y `cambiar_estado_orden_compra`, corrige `public.users -> public.profiles`, incorpora validación explícita de duplicados históricos antes de crear `uq_purchase_orders_company_po_number` (`UNIQUE (company_id, po_number)`), tabla `purchase_order_counters` inicializada idempotentemente sin reiniciar historial y bloqueo `pg_advisory_xact_lock` por empresa; (4) impone máquina estricta de estados OC bloqueando `draft->sent`, `partial->*`, `received->*` y `cancelled->*`; (5) revoca DML directo de `authenticated`/`anon` sobre las 7 tablas `acc_*` y `purchase_order_counters`, y reemplaza `platform_admin_company_all` (`ALL`) por `platform_admin_company_select` (`SELECT` solo en empresa y perfil activos). |
+ 
+ **Reemplazadas, NO ejecutar** (`supabase/migrations_superseded/`): `20261106000022_contable_pro_partida_doble_puc_niif.sql`, `20261106000046_sistema_contable_partida_doble.sql`, `20261106000047_reportes_financieros_contables.sql`.
+ Crean un libro contable paralelo (`accounts`, `journal_entries`, `journal_lines`, `fn_*`) que nunca se aplicó.
+diff --git a/supabase/migrations/20261118000068_cierre_bloqueantes_etapa1.sql b/supabase/migrations/20261118000068_cierre_bloqueantes_etapa1.sql
+index 2884ba6..d2db506 100644
+--- a/supabase/migrations/20261118000068_cierre_bloqueantes_etapa1.sql
++++ b/supabase/migrations/20261118000068_cierre_bloqueantes_etapa1.sql
+@@ -660,6 +660,32 @@ alter table public.purchase_order_counters enable row level security;
+ revoke all on table public.purchase_order_counters from public, anon, authenticated;
+ grant all on table public.purchase_order_counters to service_role;
+ 
++-- Comprobación explícita de duplicados históricos antes de crear UNIQUE (company_id, po_number):
++-- si existen duplicados, la migración se detiene sin borrar, renumerar ni sobrescribir órdenes históricas.
++do $$
++declare
++  v_dups text;
++begin
++  select string_agg(
++    format('%s:%s (x%s)', coalesce(company_id::text, '<NULL>'), coalesce(po_number, '<NULL>'), cnt),
++    ', '
++    order by company_id, po_number
++  )
++  into v_dups
++  from (
++    select company_id, po_number, count(*) as cnt
++    from public.purchase_orders
++    group by company_id, po_number
++    having count(*) > 1
++  ) d;
++
++  if v_dups is not null then
++    raise exception
++      'No se puede crear UNIQUE (company_id, po_number) en public.purchase_orders: existen duplicados históricos (%). Resuélvalos manualmente sin borrar ni renumerar órdenes históricas.',
++      v_dups;
++  end if;
++end $$;
++
+ do $$
+ begin
+   if not exists (
+@@ -694,6 +720,22 @@ begin
+   end if;
+ end $$;
+ 
++-- Inicialización idempotente de contadores por empresa sin reiniciar ni retroceder empresas con historial
++insert into public.purchase_order_counters (company_id, last_seq, updated_at)
++select
++  po.company_id,
++  greatest(
++    coalesce(max((regexp_match(po.po_number, '^OC-([0-9]{1,9})$'))[1]::integer), 0),
++    count(*)::integer
++  ) as last_seq,
++  now()
++from public.purchase_orders po
++where po.company_id is not null
++group by po.company_id
++on conflict (company_id) do update
++  set last_seq = greatest(public.purchase_order_counters.last_seq, excluded.last_seq),
++      updated_at = now();
++
+ create or replace function public.crear_orden_compra(
+   p_supplier_id uuid,
+   p_items jsonb,
+@@ -781,7 +823,9 @@ begin
+     end if;
+   end if;
+ 
+-  -- Numeración atómica por empresa (tolerante a concurrencia, órdenes históricas o anuladas)
++  -- Numeración atómica por empresa (bloqueo transaccional por empresa + contador atómico)
++  perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('po_counter:' || v_co::text, 0));
++
+   select greatest(
+     coalesce((
+       select max((regexp_match(po.po_number, '^OC-([0-9]{1,9})$'))[1]::integer)
+diff --git a/supabase/tests/etapa1_permisos_y_seguridad_rollback_tests.sql b/supabase/tests/etapa1_permisos_y_seguridad_rollback_tests.sql
+index e5ccab0..9c80552 100644
+--- a/supabase/tests/etapa1_permisos_y_seguridad_rollback_tests.sql
++++ b/supabase/tests/etapa1_permisos_y_seguridad_rollback_tests.sql
+@@ -163,8 +163,13 @@ DECLARE
+   v_po_6_cancel_id       uuid;
+   v_po_6_seq1_id         uuid;
+   v_po_6_seq2_id         uuid;
++  v_po_6_seq3_id         uuid;
++  v_po_6_b1_id           uuid;
+   v_po_6_num1            text;
+   v_po_6_num2            text;
++  v_po_6_num3            text;
++  v_po_6_b1_num          text;
++  v_cnt_b_seq            int;
+   v_pay_pre_6            uuid;
+   v_sup_debt_6           numeric;
+   v_tbl                  text;
+@@ -2417,6 +2422,7 @@ BEGIN
+ 
+   -- 6.16 Endurecimiento Bloqueante 3 (migración 000068):
+   --      Contador atómico purchase_order_counters cerrado a clientes + numeración monótona por empresa + UNIQUE (company_id, po_number)
++  --      NOTA: la concurrencia real multi-sesión debe probarse con sesiones independientes usando supabase/tests/etapa1_po_concurrency_test.sh
+   ASSERT NOT has_table_privilege('authenticated', 'public.purchase_order_counters', 'SELECT'),
+     'FALLO 6.16: authenticated NO debe tener SELECT sobre purchase_order_counters';
+   ASSERT NOT has_table_privilege('authenticated', 'public.purchase_order_counters', 'INSERT'),
+@@ -2455,6 +2461,46 @@ BEGIN
+      AND (regexp_match(v_po_6_num2, '^OC-([0-9]+)$'))[1]::int = (regexp_match(v_po_6_num1, '^OC-([0-9]+)$'))[1]::int + 1,
+     format('FALLO 6.16: la numeración de OC debe ser monótona por empresa sin reutilizar/colisionar (%s -> %s)', v_po_6_num1, v_po_6_num2);
+ 
++  -- Simular contador histórico adelantado (ej. órdenes históricas depuradas/anuladas):
++  -- crear_orden_compra NO debe reiniciar ni retroceder al count(*)
++  UPDATE public.purchase_order_counters
++     SET last_seq = last_seq + 10
++   WHERE company_id = v_co_a;
++
++  PERFORM set_config('request.jwt.claim.sub', v_u_compra_a::text, true);
++  PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', v_u_compra_a::text, 'role', 'authenticated')::text, true);
++  SET LOCAL ROLE authenticated;
++
++  v_po_6_seq3_id := public.crear_orden_compra(
++    v_sup_a,
++    jsonb_build_array(jsonb_build_object('product_id', v_prod_a, 'ordered_qty', 1, 'unit_cost', 1000)),
++    NULL, v_wh_a, 'credito', 30, current_date + 3, 'OC sin reinicio de contador histórico', false
++  );
++
++  RESET ROLE;
++
++  SELECT po_number INTO v_po_6_num3 FROM public.purchase_orders WHERE id = v_po_6_seq3_id AND company_id = v_co_a;
++  ASSERT (regexp_match(v_po_6_num3, '^OC-([0-9]+)$'))[1]::int = (regexp_match(v_po_6_num2, '^OC-([0-9]+)$'))[1]::int + 11,
++    format('FALLO 6.16: el contador no debe reiniciarse a count(*) (%s -> %s)', v_po_6_num2, v_po_6_num3);
++
++  -- Independencia de contador entre Empresa A y Empresa B
++  PERFORM set_config('request.jwt.claim.sub', v_u_dueno_b::text, true);
++  PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', v_u_dueno_b::text, 'role', 'authenticated')::text, true);
++  SET LOCAL ROLE authenticated;
++
++  v_po_6_b1_id := public.crear_orden_compra(
++    v_sup_b,
++    jsonb_build_array(jsonb_build_object('product_id', v_prod_b, 'ordered_qty', 1, 'unit_cost', 1000)),
++    NULL, v_wh_b, 'credito', 30, current_date + 3, 'OC independiente Empresa B', false
++  );
++
++  RESET ROLE;
++
++  SELECT po_number INTO v_po_6_b1_num FROM public.purchase_orders WHERE id = v_po_6_b1_id AND company_id = v_co_b;
++  SELECT last_seq INTO v_cnt_b_seq FROM public.purchase_order_counters WHERE company_id = v_co_b;
++  ASSERT v_po_6_b1_num = 'OC-0001' AND v_cnt_b_seq = 1,
++    format('FALLO 6.16: Empresa B debe iniciar su propio contador independiente en OC-0001 (obtenido %s, seq=%s)', v_po_6_b1_num, v_cnt_b_seq);
++
+   v_unexpected_ok := false; v_err_state := NULL; v_err_msg := NULL;
+   BEGIN
+     INSERT INTO public.purchase_orders (
+diff --git a/supabase/tests/etapa1_po_concurrency_test.sh b/supabase/tests/etapa1_po_concurrency_test.sh
+new file mode 100644
+index 0000000..736a040
+--- /dev/null
++++ b/supabase/tests/etapa1_po_concurrency_test.sh
+@@ -0,0 +1,210 @@
++#!/usr/bin/env bash
++# supabase/tests/etapa1_po_concurrency_test.sh
++# Procedimiento reproducible de prueba de concurrencia REAL (multi-sesión) para
++# numeración atómica de órdenes de compra (Bloqueante B / migración 000068).
++#
++# IMPORTANTE:
++# - Ejecutar EXCLUSIVAMENTE contra una base PostgreSQL 17 de PRUEBAS (nunca contra producción).
++# - Requiere haber aplicado previamente hasta la migración 20261118000068_cierre_bloqueantes_etapa1.sql.
++#
++# Uso:
++#   TEST_PG_URI="postgresql://postgres:postgres@localhost:5432/contable_test" bash supabase/tests/etapa1_po_concurrency_test.sh
++
++set -euo pipefail
++
++if [[ -z "${TEST_PG_URI:-}" ]]; then
++  echo "ERROR: Debes definir TEST_PG_URI apuntando a una instancia PostgreSQL de pruebas." >&2
++  exit 1
++fi
++
++if [[ "${TEST_PG_URI}" =~ supabase\.(co|in) ]]; then
++  echo "ABORTADO: TEST_PG_URI apunta a Supabase; esta prueba solo puede ejecutarse en PostgreSQL de pruebas local o aislado." >&2
++  exit 1
++fi
++
++CO_A="cccccccc-0000-4000-8000-000000000001"
++CO_B="cccccccc-0000-4000-8000-000000000002"
++U_A="cccccccc-1111-4000-8000-000000000001"
++U_B="cccccccc-1111-4000-8000-000000000002"
++WH_A="cccccccc-2222-4000-8000-000000000001"
++WH_B="cccccccc-2222-4000-8000-000000000002"
++SUP_A="cccccccc-3333-4000-8000-000000000001"
++SUP_B="cccccccc-3333-4000-8000-000000000002"
++PROD_A="cccccccc-4444-4000-8000-000000000001"
++PROD_B="cccccccc-4444-4000-8000-000000000002"
++
++cleanup() {
++  psql "${TEST_PG_URI}" -v ON_ERROR_STOP=1 -q <<SQL || true
++DELETE FROM public.purchase_order_items WHERE company_id IN ('${CO_A}', '${CO_B}');
++DELETE FROM public.purchase_orders WHERE company_id IN ('${CO_A}', '${CO_B}');
++DELETE FROM public.purchase_order_counters WHERE company_id IN ('${CO_A}', '${CO_B}');
++DELETE FROM public.products WHERE id IN ('${PROD_A}', '${PROD_B}');
++DELETE FROM public.suppliers WHERE id IN ('${SUP_A}', '${SUP_B}');
++DELETE FROM public.warehouses WHERE id IN ('${WH_A}', '${WH_B}');
++DELETE FROM public.profiles WHERE id IN ('${U_A}', '${U_B}');
++DELETE FROM auth.users WHERE id IN ('${U_A}', '${U_B}');
++DELETE FROM public.companies WHERE id IN ('${CO_A}', '${CO_B}');
++SQL
++}
++trap cleanup EXIT
++
++echo "[1/4] Preparando empresas aisladas e historial previo (OC-0005 en Empresa A)..."
++psql "${TEST_PG_URI}" -v ON_ERROR_STOP=1 -q <<SQL
++INSERT INTO public.companies (id, name, active)
++VALUES ('${CO_A}', 'Test Concurrencia A', true), ('${CO_B}', 'Test Concurrencia B', true)
++ON CONFLICT (id) DO NOTHING;
++
++INSERT INTO auth.users (id, instance_id, aud, role, email, encrypted_password, email_confirmed_at, created_at, updated_at, raw_app_meta_data, raw_user_meta_data)
++VALUES
++  ('${U_A}', '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'conc_a@test.local', '', now(), now(), now(), '{"provider":"email"}'::jsonb, '{}'::jsonb),
++  ('${U_B}', '00000000-0000-0000-0000-000000000000', 'authenticated', 'authenticated', 'conc_b@test.local', '', now(), now(), now(), '{"provider":"email"}'::jsonb, '{}'::jsonb)
++ON CONFLICT (id) DO NOTHING;
++
++INSERT INTO public.profiles (id, email, full_name, role, company_id, active)
++VALUES
++  ('${U_A}', 'conc_a@test.local', 'Comprador Conc A', 'comprador', '${CO_A}', true),
++  ('${U_B}', 'conc_b@test.local', 'Dueño Conc B', 'dueno', '${CO_B}', true)
++ON CONFLICT (id) DO UPDATE SET role = excluded.role, company_id = excluded.company_id, active = true;
++
++INSERT INTO public.warehouses (id, company_id, name, code, active)
++VALUES ('${WH_A}', '${CO_A}', 'Bodega Conc A', 'CA-1', true), ('${WH_B}', '${CO_B}', 'Bodega Conc B', 'CB-1', true)
++ON CONFLICT (id) DO NOTHING;
++
++INSERT INTO public.suppliers (id, company_id, name, active)
++VALUES ('${SUP_A}', '${CO_A}', 'Prov Conc A', true), ('${SUP_B}', '${CO_B}', 'Prov Conc B', true)
++ON CONFLICT (id) DO NOTHING;
++
++INSERT INTO public.products (id, company_id, name, sku, stock, cost, price, active)
++VALUES ('${PROD_A}', '${CO_A}', 'Prod Conc A', 'SKU-CA', 100, 1000, 1500, true),
++       ('${PROD_B}', '${CO_B}', 'Prod Conc B', 'SKU-CB', 100, 1000, 1500, true)
++ON CONFLICT (id) DO NOTHING;
++
++-- Orden histórica previa OC-0005 (simula historial y salto previo sin reiniciar contador)
++INSERT INTO public.purchase_orders (company_id, po_number, supplier_id, supplier_name, status, payment_terms, subtotal, total, created_by)
++VALUES ('${CO_A}', 'OC-0005', '${SUP_A}', 'Prov Conc A', 'draft', 'credito', 1000, 1000, '${U_A}');
++
++INSERT INTO public.purchase_order_counters (company_id, last_seq)
++VALUES ('${CO_A}', 5)
++ON CONFLICT (company_id) DO UPDATE SET last_seq = greatest(public.purchase_order_counters.last_seq, 5);
++SQL
++
++run_create_po() {
++  local user_id="$1"
++  local sup_id="$2"
++  local prod_id="$3"
++  local wh_id="$4"
++  local sleep_sec="${5:-0}"
++  local label="$6"
++
++  psql "${TEST_PG_URI}" -v ON_ERROR_STOP=1 -At <<SQL
++BEGIN;
++SELECT set_config('request.jwt.claim.sub', '${user_id}', true);
++SELECT set_config('request.jwt.claims', jsonb_build_object('sub', '${user_id}', 'role', 'authenticated')::text, true);
++SET LOCAL ROLE authenticated;
++SELECT public.crear_orden_compra(
++  '${sup_id}'::uuid,
++  jsonb_build_array(jsonb_build_object('product_id', '${prod_id}', 'ordered_qty', 1, 'unit_cost', 1000)),
++  NULL,
++  '${wh_id}'::uuid,
++  'credito',
++  30,
++  current_date + 3,
++  '${label}',
++  false
++);
++RESET ROLE;
++SELECT CASE WHEN ${sleep_sec} > 0 THEN pg_sleep(${sleep_sec}) ELSE NULL END;
++COMMIT;
++SQL
++}
++
++echo "[2/4] Prueba 1: Contención simultánea de 2 sesiones con transacción abierta en Empresa A..."
++TMP_OUT_1=$(mktemp)
++TMP_OUT_2=$(mktemp)
++trap 'rm -f "$TMP_OUT_1" "$TMP_OUT_2"; cleanup' EXIT
++
++run_create_po "${U_A}" "${SUP_A}" "${PROD_A}" "${WH_A}" "2" "contencion-s1" >"$TMP_OUT_1" &
++PID_1=$!
++sleep 0.3
++run_create_po "${U_A}" "${SUP_A}" "${PROD_A}" "${WH_A}" "0" "contencion-s2" >"$TMP_OUT_2" &
++PID_2=$!
++
++wait "$PID_1" "$PID_2"
++
++echo "[3/4] Prueba 2: Ráfaga concurrente (5 sesiones Empresa A + 3 sesiones Empresa B en paralelo)..."
++PIDS=()
++for i in 1 2 3 4 5; do
++  run_create_po "${U_A}" "${SUP_A}" "${PROD_A}" "${WH_A}" "0" "burst-a-${i}" >/dev/null &
++  PIDS+=($!)
++done
++for j in 1 2 3; do
++  run_create_po "${U_B}" "${SUP_B}" "${PROD_B}" "${WH_B}" "0" "burst-b-${j}" >/dev/null &
++  PIDS+=($!)
++done
++for pid in "${PIDS[@]}"; do
++  wait "$pid"
++done
++
++echo "[4/4] Verificando invariantes finales en PostgreSQL..."
++psql "${TEST_PG_URI}" -v ON_ERROR_STOP=1 <<SQL
++DO \$\$
++DECLARE
++  v_cnt_a int;
++  v_dist_a int;
++  v_seq_a int;
++  v_nums_a text;
++  v_cnt_b int;
++  v_dist_b int;
++  v_seq_b int;
++  v_nums_b text;
++  v_err_state text;
++  v_unexpected_ok boolean := false;
++BEGIN
++  SELECT count(*), count(DISTINCT po_number), string_agg(po_number, ',' ORDER BY po_number)
++    INTO v_cnt_a, v_dist_a, v_nums_a
++    FROM public.purchase_orders
++   WHERE company_id = '${CO_A}';
++
++  SELECT last_seq INTO v_seq_a
++    FROM public.purchase_order_counters
++   WHERE company_id = '${CO_A}';
++
++  -- 1 histórica (OC-0005) + 2 contención + 5 ráfaga = 8 órdenes (OC-0005..OC-0012)
++  ASSERT v_cnt_a = 8, format('Órdenes perdidas en Empresa A: esperadas 8, encontradas %s', v_cnt_a);
++  ASSERT v_dist_a = 8, format('Números duplicados en Empresa A: %s', v_nums_a);
++  ASSERT v_seq_a = 12, format('Contador incoherente en Empresa A: esperado 12, encontrado %s', v_seq_a);
++  ASSERT v_nums_a = 'OC-0005,OC-0006,OC-0007,OC-0008,OC-0009,OC-0010,OC-0011,OC-0012',
++    format('Secuencia inesperada en Empresa A: %s', v_nums_a);
++
++  SELECT count(*), count(DISTINCT po_number), string_agg(po_number, ',' ORDER BY po_number)
++    INTO v_cnt_b, v_dist_b, v_nums_b
++    FROM public.purchase_orders
++   WHERE company_id = '${CO_B}';
++
++  SELECT last_seq INTO v_seq_b
++    FROM public.purchase_order_counters
++   WHERE company_id = '${CO_B}';
++
++  ASSERT v_cnt_b = 3, format('Órdenes perdidas en Empresa B: esperadas 3, encontradas %s', v_cnt_b);
++  ASSERT v_dist_b = 3, format('Números duplicados en Empresa B: %s', v_nums_b);
++  ASSERT v_seq_b = 3, format('Contador incoherente en Empresa B: esperado 3, encontrado %s', v_seq_b);
++  ASSERT v_nums_b = 'OC-0001,OC-0002,OC-0003',
++    format('Secuencia inesperada en Empresa B: %s', v_nums_b);
++
++  -- Restricción UNIQUE impide duplicado directo incluso saltando la RPC
++  BEGIN
++    INSERT INTO public.purchase_orders (company_id, po_number, status, payment_terms, subtotal, total)
++    VALUES ('${CO_A}', 'OC-0006', 'draft', 'credito', 0, 0);
++    v_unexpected_ok := true;
++  EXCEPTION WHEN OTHERS THEN
++    GET STACKED DIAGNOSTICS v_err_state = RETURNED_SQLSTATE;
++  END;
++  ASSERT NOT v_unexpected_ok AND v_err_state = '23505',
++    format('UNIQUE (company_id, po_number) no bloqueó inserción directa duplicada (SQLSTATE=%s)', v_err_state);
++
++  RAISE NOTICE 'CONCURRENCIA OC OK: Empresa A=[%] (seq=%), Empresa B=[%] (seq=%), UNIQUE 23505 verificado.',
++    v_nums_a, v_seq_a, v_nums_b, v_seq_b;
++END \$\$;
++SQL
++
++echo "PRUEBA DE CONCURRENCIA MULTI-SESIÓN COMPLETADA CON ÉXITO."
+-- 
+2.34.1
+

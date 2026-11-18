@@ -161,6 +161,12 @@ DECLARE
   v_po_6_id              uuid;
   v_po_6_item            uuid;
   v_po_6_cancel_id       uuid;
+  v_po_6_seq1_id         uuid;
+  v_po_6_seq2_id         uuid;
+  v_po_6_num1            text;
+  v_po_6_num2            text;
+  v_pay_pre_6            uuid;
+  v_sup_debt_6           numeric;
   v_tbl                  text;
 
   -- Variables de control estricto de excepciones (fuera de los bloques BEGIN...EXCEPTION)
@@ -1750,6 +1756,8 @@ BEGIN
   --   6.2–6.4 Bloqueante 2: Atomicidad de registrar_pago_proveedor, acc_post_supplier_payment y cxp_save_account
   --   6.5–6.11 Bloqueantes 3–4: Separación creación/aprobación OC, máquina de estados y recepciones parciales
   --   6.12–6.14 Bloqueante 5: DML acc_* cerrado a authenticated/anon y platform_admin_company_select (solo lectura propia)
+  --   6.15 Endurecimiento 000068 (Bloqueante 1): active = true con start_date IS NULL falla y hace rollback (no omite)
+  --   6.16 Endurecimiento 000068 (Bloqueante 3): purchase_order_counters cerrado y UNIQUE (company_id, po_number)
   -- ===========================================================================
 
   -- 6.1 Bloqueante 1: Si falla audit_log, acc_reopen_period revierte por completo
@@ -2274,7 +2282,196 @@ BEGIN
 
   RESET ROLE;
 
-  RAISE NOTICE 'ETAPA 1 TEST SUITE OK: todas las aserciones de permisos, separación de funciones, auditoría atómica, CxP, máquina de estados OC, recepciones parciales, atomicidad, acc_*, perfil activo, aislamiento multiempresa y privilegios aprobaron.';
+  -- 6.15 Endurecimiento Bloqueante 1 (migración 000068):
+  --      Si acc_settings.active = true y start_date IS NULL, NINGUNA ruta puede omitir contabilidad silenciosamente:
+  --      registrar_pago_proveedor, acc_post_supplier_payment, cxp_save_account y acc_post_pending deben fallar y revertir.
+  --      Se preservan las omisiones legítimas cuando active = false o fecha_pago < start_date.
+  v_sup_debt_6 := public._supplier_owed(v_co_a, v_sup_a);
+  ASSERT v_sup_debt_6 >= 1000, 'PRECONDICIÓN 6.15: el proveedor debe tener saldo pendiente >= 1000';
+
+  UPDATE public.acc_settings
+     SET active = true,
+         start_date = NULL
+   WHERE company_id = v_co_a;
+
+  SELECT count(*) INTO v_snap_sp_cnt   FROM public.supplier_payments    WHERE company_id = v_co_a;
+  SELECT count(*) INTO v_snap_sa_cnt   FROM public.supplier_allocations WHERE company_id = v_co_a;
+  SELECT count(*) INTO v_snap_cash_cnt FROM public.cash_entries         WHERE company_id = v_co_a;
+  SELECT count(*) INTO v_snap_acc_cnt  FROM public.acc_entries          WHERE company_id = v_co_a;
+  v_snap_owed_6 := public._supplier_owed(v_co_a, v_sup_a);
+
+  -- 6.15a registrar_pago_proveedor falla y hace rollback completo si active = true y start_date IS NULL
+  PERFORM set_config('request.jwt.claim.sub', v_u_dueno_a::text, true);
+  PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', v_u_dueno_a::text, 'role', 'authenticated')::text, true);
+  SET LOCAL ROLE authenticated;
+
+  v_unexpected_ok := false; v_err_state := NULL; v_err_msg := NULL;
+  BEGIN
+    PERFORM public.registrar_pago_proveedor(v_sup_a, 200, 'efectivo', 'Activa sin start_date debe fallar', gen_random_uuid());
+    v_unexpected_ok := true;
+  EXCEPTION WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS v_err_state = RETURNED_SQLSTATE, v_err_msg = MESSAGE_TEXT;
+  END;
+  IF v_unexpected_ok THEN RAISE EXCEPTION 'FALLO 6.15a: registrar_pago_proveedor NO debe completar con contabilidad activa y start_date IS NULL'; END IF;
+  IF v_err_state <> 'P0001' OR coalesce(v_err_msg, '') NOT ILIKE '%start_date%' THEN
+    RAISE EXCEPTION 'FALLO 6.15a (active sin start_date): error inesperado [%] %', v_err_state, v_err_msg;
+  END IF;
+
+  RESET ROLE;
+
+  SELECT count(*) INTO v_after_sp_cnt   FROM public.supplier_payments    WHERE company_id = v_co_a;
+  SELECT count(*) INTO v_after_sa_cnt   FROM public.supplier_allocations WHERE company_id = v_co_a;
+  SELECT count(*) INTO v_after_cash_cnt FROM public.cash_entries         WHERE company_id = v_co_a;
+  SELECT count(*) INTO v_after_acc_cnt  FROM public.acc_entries          WHERE company_id = v_co_a;
+  ASSERT v_after_sp_cnt = v_snap_sp_cnt AND v_after_sa_cnt = v_snap_sa_cnt
+     AND v_after_cash_cnt = v_snap_cash_cnt AND v_after_acc_cnt = v_snap_acc_cnt
+     AND public._supplier_owed(v_co_a, v_sup_a) = v_snap_owed_6,
+    'FALLO ATOMICIDAD 6.15a: fallo por start_date IS NULL dejó rastro en supplier_payments/allocations/caja/CxP';
+
+  -- 6.15b acc_post_supplier_payment directo también lanza excepción si active = true y start_date IS NULL
+  v_unexpected_ok := false; v_err_state := NULL; v_err_msg := NULL;
+  BEGIN
+    PERFORM public.acc_post_supplier_payment(v_pay_id_6);
+    v_unexpected_ok := true;
+  EXCEPTION WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS v_err_state = RETURNED_SQLSTATE, v_err_msg = MESSAGE_TEXT;
+  END;
+  IF v_unexpected_ok THEN RAISE EXCEPTION 'FALLO 6.15b: acc_post_supplier_payment NO debe devolver NULL si active = true y start_date IS NULL'; END IF;
+  IF v_err_state <> 'P0001' OR coalesce(v_err_msg, '') NOT ILIKE '%start_date%' THEN
+    RAISE EXCEPTION 'FALLO 6.15b (acc_post_supplier_payment sin start_date): error inesperado [%] %', v_err_state, v_err_msg;
+  END IF;
+
+  -- 6.15c cxp_save_account y acc_post_pending fallan y revierten cuando active = true y start_date IS NULL
+  DELETE FROM public.cxp_settings WHERE company_id = v_co_a;
+
+  PERFORM set_config('request.jwt.claim.sub', v_u_dueno_a::text, true);
+  PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', v_u_dueno_a::text, 'role', 'authenticated')::text, true);
+  SET LOCAL ROLE authenticated;
+
+  v_unexpected_ok := false; v_err_state := NULL; v_err_msg := NULL;
+  BEGIN
+    PERFORM public.cxp_save_account(v_acc_cxp_a);
+    v_unexpected_ok := true;
+  EXCEPTION WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS v_err_state = RETURNED_SQLSTATE, v_err_msg = MESSAGE_TEXT;
+  END;
+  IF v_unexpected_ok THEN RAISE EXCEPTION 'FALLO 6.15c: cxp_save_account NO debe completar si active = true y start_date IS NULL'; END IF;
+  IF v_err_state <> 'P0001' OR coalesce(v_err_msg, '') NOT ILIKE '%fecha de inicio%' THEN
+    RAISE EXCEPTION 'FALLO 6.15c (cxp_save_account sin start_date): error inesperado [%] %', v_err_state, v_err_msg;
+  END IF;
+
+  v_unexpected_ok := false; v_err_state := NULL; v_err_msg := NULL;
+  BEGIN
+    PERFORM public.acc_post_pending();
+    v_unexpected_ok := true;
+  EXCEPTION WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS v_err_state = RETURNED_SQLSTATE, v_err_msg = MESSAGE_TEXT;
+  END;
+  IF v_unexpected_ok THEN RAISE EXCEPTION 'FALLO 6.15c: acc_post_pending NO debe completar si active = true y start_date IS NULL'; END IF;
+  IF v_err_state <> 'P0001' OR coalesce(v_err_msg, '') NOT ILIKE '%fecha de inicio%' THEN
+    RAISE EXCEPTION 'FALLO 6.15c (acc_post_pending sin start_date): error inesperado [%] %', v_err_state, v_err_msg;
+  END IF;
+
+  RESET ROLE;
+
+  SELECT account_id INTO v_snap_cxp_acc FROM public.cxp_settings WHERE company_id = v_co_a;
+  ASSERT v_snap_cxp_acc IS NULL,
+    'FALLO ATOMICIDAD 6.15c: cxp_save_account alteró cxp_settings tras fallo por start_date IS NULL';
+
+  -- 6.15d Omisiones legítimas conservadas: active = false (aun con start_date NULL) y payment_date < start_date
+  UPDATE public.acc_settings SET active = false, start_date = NULL WHERE company_id = v_co_a;
+
+  PERFORM set_config('request.jwt.claim.sub', v_u_dueno_a::text, true);
+  PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', v_u_dueno_a::text, 'role', 'authenticated')::text, true);
+  SET LOCAL ROLE authenticated;
+
+  v_pay_pre_6 := public.registrar_pago_proveedor(v_sup_a, 100, 'efectivo', 'Omisión legítima active=false sin start_date', gen_random_uuid());
+  ASSERT v_pay_pre_6 IS NOT NULL, 'FALLO 6.15d: pago con contabilidad inactiva debe permitirse';
+
+  RESET ROLE;
+
+  SELECT count(*) INTO v_after_acc_cnt FROM public.acc_entries
+   WHERE company_id = v_co_a AND source_type = 'pago_proveedor' AND source_id = v_pay_pre_6;
+  ASSERT v_after_acc_cnt = 0, 'FALLO 6.15d: con active = false no debe generar asiento contable';
+
+  INSERT INTO public.cxp_settings (company_id, account_id)
+  VALUES (v_co_a, v_acc_cxp_a)
+  ON CONFLICT (company_id) DO UPDATE SET account_id = EXCLUDED.account_id;
+
+  UPDATE public.acc_settings SET active = true, start_date = (current_date + 7) WHERE company_id = v_co_a;
+
+  PERFORM set_config('request.jwt.claim.sub', v_u_dueno_a::text, true);
+  PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', v_u_dueno_a::text, 'role', 'authenticated')::text, true);
+  SET LOCAL ROLE authenticated;
+
+  v_pay_pre_6 := public.registrar_pago_proveedor(v_sup_a, 100, 'efectivo', 'Omisión legítima fecha < start_date', gen_random_uuid());
+  ASSERT v_pay_pre_6 IS NOT NULL, 'FALLO 6.15d: pago con fecha < start_date debe permitirse';
+
+  RESET ROLE;
+
+  SELECT count(*) INTO v_after_acc_cnt FROM public.acc_entries
+   WHERE company_id = v_co_a AND source_type = 'pago_proveedor' AND source_id = v_pay_pre_6;
+  ASSERT v_after_acc_cnt = 0, 'FALLO 6.15d: con fecha < start_date no debe generar asiento contable';
+
+  UPDATE public.acc_settings SET active = true, start_date = (current_date - 30) WHERE company_id = v_co_a;
+
+  -- 6.16 Endurecimiento Bloqueante 3 (migración 000068):
+  --      Contador atómico purchase_order_counters cerrado a clientes + numeración monótona por empresa + UNIQUE (company_id, po_number)
+  ASSERT NOT has_table_privilege('authenticated', 'public.purchase_order_counters', 'SELECT'),
+    'FALLO 6.16: authenticated NO debe tener SELECT sobre purchase_order_counters';
+  ASSERT NOT has_table_privilege('authenticated', 'public.purchase_order_counters', 'INSERT'),
+    'FALLO 6.16: authenticated NO debe tener INSERT sobre purchase_order_counters';
+  ASSERT NOT has_table_privilege('authenticated', 'public.purchase_order_counters', 'UPDATE'),
+    'FALLO 6.16: authenticated NO debe tener UPDATE sobre purchase_order_counters';
+  ASSERT NOT has_table_privilege('authenticated', 'public.purchase_order_counters', 'DELETE'),
+    'FALLO 6.16: authenticated NO debe tener DELETE sobre purchase_order_counters';
+  ASSERT NOT has_table_privilege('anon', 'public.purchase_order_counters', 'SELECT'),
+    'FALLO 6.16: anon NO debe tener SELECT sobre purchase_order_counters';
+  ASSERT NOT has_table_privilege('anon', 'public.purchase_order_counters', 'INSERT'),
+    'FALLO 6.16: anon NO debe tener INSERT sobre purchase_order_counters';
+
+  PERFORM set_config('request.jwt.claim.sub', v_u_compra_a::text, true);
+  PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', v_u_compra_a::text, 'role', 'authenticated')::text, true);
+  SET LOCAL ROLE authenticated;
+
+  v_po_6_seq1_id := public.crear_orden_compra(
+    v_sup_a,
+    jsonb_build_array(jsonb_build_object('product_id', v_prod_a, 'ordered_qty', 1, 'unit_cost', 1000)),
+    NULL, v_wh_a, 'credito', 30, current_date + 3, 'OC secuencia 1', false
+  );
+  PERFORM public.cambiar_estado_orden_compra(v_po_6_seq1_id, 'cancelled');
+
+  v_po_6_seq2_id := public.crear_orden_compra(
+    v_sup_a,
+    jsonb_build_array(jsonb_build_object('product_id', v_prod_a, 'ordered_qty', 1, 'unit_cost', 1000)),
+    NULL, v_wh_a, 'credito', 30, current_date + 3, 'OC secuencia 2 tras cancelación', false
+  );
+
+  RESET ROLE;
+
+  SELECT po_number INTO v_po_6_num1 FROM public.purchase_orders WHERE id = v_po_6_seq1_id AND company_id = v_co_a;
+  SELECT po_number INTO v_po_6_num2 FROM public.purchase_orders WHERE id = v_po_6_seq2_id AND company_id = v_co_a;
+  ASSERT v_po_6_num1 IS NOT NULL AND v_po_6_num2 IS NOT NULL AND v_po_6_num1 <> v_po_6_num2
+     AND (regexp_match(v_po_6_num2, '^OC-([0-9]+)$'))[1]::int = (regexp_match(v_po_6_num1, '^OC-([0-9]+)$'))[1]::int + 1,
+    format('FALLO 6.16: la numeración de OC debe ser monótona por empresa sin reutilizar/colisionar (%s -> %s)', v_po_6_num1, v_po_6_num2);
+
+  v_unexpected_ok := false; v_err_state := NULL; v_err_msg := NULL;
+  BEGIN
+    INSERT INTO public.purchase_orders (
+      company_id, po_number, status, payment_terms, subtotal, total
+    ) VALUES (
+      v_co_a, v_po_6_num2, 'draft', 'credito', 0, 0
+    );
+    v_unexpected_ok := true;
+  EXCEPTION WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS v_err_state = RETURNED_SQLSTATE, v_err_msg = MESSAGE_TEXT;
+  END;
+  IF v_unexpected_ok THEN RAISE EXCEPTION 'FALLO 6.16: UNIQUE (company_id, po_number) debe impedir duplicados'; END IF;
+  IF v_err_state <> '23505' THEN
+    RAISE EXCEPTION 'FALLO 6.16 (duplicado po_number por empresa): SQLSTATE inesperado [%] %', v_err_state, v_err_msg;
+  END IF;
+
+  RAISE NOTICE 'ETAPA 1 TEST SUITE OK: todas las aserciones de permisos, separación de funciones, auditoría atómica, CxP, máquina de estados OC, recepciones parciales, numeración atómica OC, atomicidad, acc_*, perfil activo, aislamiento multiempresa y privilegios aprobaron.';
 END $$;
 
 ROLLBACK;

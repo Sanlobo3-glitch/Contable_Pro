@@ -6,12 +6,14 @@
 --   2. Bloqueante 2 (Atomicidad CxP): elimina silenciamiento de fallos en
 --      registrar_pago_proveedor y cxp_save_account; acc_post_supplier_payment conserva
 --      omisión legítima solo si la contabilidad está inactiva o la fecha < start_date, y
---      falla con excepción clara si está activa y falta cuenta o falla el asiento.
---   3. Bloqueante 3 (Separación Creación vs Aprobación OC): impide que el rol 'comprador'
---      autoapruebe en crear_orden_compra (p_auto_approve = true -> 42501) o apruebe en
---      cambiar_estado_orden_compra (p_status = 'approved' -> 42501); solo roles autorizados
---      por la matriz ('admin', 'dueno', 'admin_empresa') pueden aprobar. Corrige public.users
---      -> public.profiles y usa _require_company_roles.
+--      falla con excepción clara si está activa con start_date NULL, falta cuenta o falla
+--      el asiento (igual en cxp_save_account y acc_post_pending).
+--   3. Bloqueante 3 (Separación Creación vs Aprobación OC + Numeración Concurrente):
+--      impide que el rol 'comprador' autoapruebe en crear_orden_compra (p_auto_approve = true -> 42501)
+--      o apruebe en cambiar_estado_orden_compra (p_status = 'approved' -> 42501); solo roles
+--      autorizados por la matriz ('admin', 'dueno', 'admin_empresa') pueden aprobar. Corrige
+--      public.users -> public.profiles, usa _require_company_roles y reemplaza count(*)+1 por
+--      contador atómico por empresa (purchase_order_counters) + UNIQUE (company_id, po_number).
 --   4. Bloqueante 4 (Máquina de estados OC): bloquea transiciones ilegales en
 --      cambiar_estado_orden_compra ('draft'->'sent', 'partial'->'cancelled'/'approved'/'sent',
 --      'received'/'cancelled'->*).
@@ -240,6 +242,7 @@ as $function$
 declare
   p public.supplier_payments;
   s public.acc_settings;
+  v_tz text;
   v_date date;
   v_cxp uuid;
   v_pay uuid;
@@ -255,11 +258,20 @@ begin
   end if;
 
   select * into s from public.acc_settings where company_id = p.company_id;
-  if not found or not coalesce(s.active, false) or s.start_date is null then
+  if not found or not coalesce(s.active, false) then
     return null;
   end if;
 
-  v_date := (p.created_at at time zone coalesce(nullif(btrim(s.timezone), ''), 'America/Bogota'))::date;
+  if s.start_date is null then
+    raise exception 'Configuración contable incompleta: la contabilidad está activa pero falta definir la fecha de inicio (start_date)';
+  end if;
+
+  if p.created_at is null then
+    raise exception 'No se puede contabilizar el pago a proveedor % porque carece de fecha de creación', p.id;
+  end if;
+
+  v_tz := coalesce(nullif(btrim(s.timezone), ''), 'America/Bogota');
+  v_date := (p.created_at at time zone v_tz)::date;
   if v_date < s.start_date then
     return null;
   end if;
@@ -283,8 +295,8 @@ begin
 
   -- Lo aplicado a compras anteriores al inicio contable no tiene pasivo contabilizado
   select
-    coalesce(sum(a.amount) filter (where (pu.created_at at time zone coalesce(nullif(btrim(s.timezone), ''), 'America/Bogota'))::date >= s.start_date), 0),
-    coalesce(sum(a.amount) filter (where (pu.created_at at time zone coalesce(nullif(btrim(s.timezone), ''), 'America/Bogota'))::date <  s.start_date), 0)
+    coalesce(sum(a.amount) filter (where (pu.created_at at time zone v_tz)::date >= s.start_date), 0),
+    coalesce(sum(a.amount) filter (where (pu.created_at at time zone v_tz)::date <  s.start_date), 0)
   into v_in, v_out
   from public.supplier_allocations a
   join public.purchases pu on pu.id = a.purchase_id
@@ -348,6 +360,7 @@ as $function$
 declare
   v_c uuid := public._require_company_roles(array['admin', 'dueno', 'admin_empresa', 'gerente']);
   s public.acc_settings;
+  v_tz text;
   r public.sales;
   q public.purchases;
   d public.devolutions;
@@ -365,10 +378,12 @@ begin
     raise exception 'Activa y configura la fecha de inicio de la contabilidad automática antes de contabilizar pendientes';
   end if;
 
+  v_tz := coalesce(nullif(btrim(s.timezone), ''), 'America/Bogota');
+
   for r in
     select * from public.sales x
     where x.company_id = v_c and x.status = 'completada' and jsonb_array_length(x.items) > 0
-      and (x.created_at at time zone s.timezone)::date >= s.start_date
+      and (x.created_at at time zone v_tz)::date >= s.start_date
       and not exists (select 1 from public.acc_entries e where e.company_id = v_c and e.source_type = 'venta'
         and e.source_id = x.id and e.source_event = 'registro')
     order by x.created_at
@@ -379,7 +394,7 @@ begin
   for q in
     select * from public.purchases x
     where x.company_id = v_c and x.status = 'recibida' and jsonb_array_length(x.items) > 0
-      and (x.created_at at time zone s.timezone)::date >= s.start_date
+      and (x.created_at at time zone v_tz)::date >= s.start_date
       and not exists (select 1 from public.acc_entries e where e.company_id = v_c and e.source_type = 'compra'
         and e.source_id = x.id and e.source_event = 'registro')
     order by x.created_at
@@ -389,7 +404,7 @@ begin
 
   for d in
     select * from public.devolutions x
-    where x.company_id = v_c and (x.created_at at time zone s.timezone)::date >= s.start_date
+    where x.company_id = v_c and (x.created_at at time zone v_tz)::date >= s.start_date
       and not exists (select 1 from public.acc_entries e where e.company_id = v_c and e.source_type = 'devolucion'
         and e.source_id = x.id and e.source_event = 'registro')
     order by x.created_at
@@ -400,7 +415,7 @@ begin
   for c in
     select * from public.cash_entries x
     where x.company_id = v_c and (x.reference_type is null or x.reference_type = 'arqueo')
-      and (x.created_at at time zone s.timezone)::date >= s.start_date
+      and (x.created_at at time zone v_tz)::date >= s.start_date
       and not exists (select 1 from public.acc_entries e where e.company_id = v_c
         and e.source_type in ('caja', 'arqueo') and e.source_id = x.id and e.source_event = 'registro')
     order by x.created_at
@@ -411,7 +426,7 @@ begin
   for k in
     select * from public.kardex x
     where x.company_id = v_c and x.reference_type = 'ajuste'
-      and (x.created_at at time zone s.timezone)::date >= s.start_date
+      and (x.created_at at time zone v_tz)::date >= s.start_date
       and not exists (select 1 from public.acc_entries e where e.company_id = v_c and e.source_type = 'ajuste_stock'
         and e.source_id = x.id and e.source_event = 'registro')
     order by x.created_at
@@ -422,7 +437,7 @@ begin
   for pp in
     select * from public.credit_payments x
     where x.company_id = v_c and x.status = 'activo'
-      and (x.created_at at time zone s.timezone)::date >= s.start_date
+      and (x.created_at at time zone v_tz)::date >= s.start_date
       and not exists (select 1 from public.acc_entries e where e.company_id = v_c and e.source_type = 'abono'
         and e.source_id = x.id and e.source_event = 'registro')
     order by x.created_at
@@ -434,7 +449,7 @@ begin
     for sp in
       select * from public.supplier_payments x
       where x.company_id = v_c and x.status = 'activo'
-        and (x.created_at at time zone s.timezone)::date >= s.start_date
+        and (x.created_at at time zone v_tz)::date >= s.start_date
         and not exists (select 1 from public.acc_entries e where e.company_id = v_c and e.source_type = 'pago_proveedor'
           and e.source_id = x.id and e.source_event = 'registro')
       order by x.created_at
@@ -446,7 +461,7 @@ begin
   for ex in
     select * from public.expenses x
     where x.company_id = v_c and x.status = 'activo'
-      and (x.created_at at time zone s.timezone)::date >= s.start_date
+      and (x.created_at at time zone v_tz)::date >= s.start_date
       and not exists (select 1 from public.acc_entries e where e.company_id = v_c and e.source_type = 'gasto'
         and e.source_id = x.id and e.source_event = 'registro')
     order by x.created_at
@@ -457,7 +472,7 @@ begin
   for pd in
     select * from public.purchase_devolutions x
     where x.company_id = v_c and x.status = 'activa'
-      and (x.created_at at time zone s.timezone)::date >= s.start_date
+      and (x.created_at at time zone v_tz)::date >= s.start_date
       and not exists (select 1 from public.acc_entries e where e.company_id = v_c and e.source_type = 'devolucion_compra'
         and e.source_id = x.id and e.source_event = 'registro')
     order by x.created_at
@@ -612,15 +627,15 @@ begin
     account_id = excluded.account_id,
     updated_at = now();
 
-  -- Sin EXCEPTION WHEN OTHERS: si acc_post_pending falla al contabilizar movimientos
-  -- pendientes con contabilidad activa, el error se propaga y revierte cxp_settings.
+  -- Sin EXCEPTION WHEN OTHERS: si la contabilidad está activa (incluso si falta start_date)
+  -- o si acc_post_pending falla al contabilizar movimientos pendientes, el error se propaga
+  -- y revierte cxp_settings atómicamente.
   if p_account is not null
      and exists (
        select 1
        from public.acc_settings
        where company_id = v_co
          and active = true
-         and start_date is not null
      ) then
     v_res := public.acc_post_pending();
   end if;
@@ -630,8 +645,54 @@ end
 $function$;
 
 -- =============================================================================
--- 3. BLOQUEANTES 3 Y 4: ÓRDENES DE COMPRA (SEPARACIÓN CREACIÓN/APROBACIÓN Y MÁQUINA DE ESTADOS)
+-- 3. BLOQUEANTES 3 Y 4: ÓRDENES DE COMPRA (SEPARACIÓN CREACIÓN/APROBACIÓN,
+--    NUMERACIÓN ATÓMICA CONCURRENTE Y MÁQUINA DE ESTADOS)
 -- =============================================================================
+
+create table if not exists public.purchase_order_counters (
+  company_id uuid primary key references public.companies(id) on delete cascade,
+  last_seq integer not null default 0 check (last_seq >= 0),
+  updated_at timestamptz not null default now()
+);
+
+alter table public.purchase_order_counters enable row level security;
+
+revoke all on table public.purchase_order_counters from public, anon, authenticated;
+grant all on table public.purchase_order_counters to service_role;
+
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_constraint c
+    join pg_class t on t.oid = c.conrelid
+    join pg_namespace n on n.oid = t.relnamespace
+    where n.nspname = 'public'
+      and t.relname = 'purchase_orders'
+      and c.contype = 'u'
+      and (
+        select array_agg(a.attname::text order by k.ord)
+        from unnest(c.conkey) with ordinality as k(attnum, ord)
+        join pg_attribute a on a.attrelid = t.oid and a.attnum = k.attnum
+      ) = array['company_id', 'po_number']
+  ) and not exists (
+    select 1
+    from pg_index idx
+    join pg_class tc on tc.oid = idx.indrelid
+    join pg_namespace n on n.oid = tc.relnamespace
+    where n.nspname = 'public'
+      and tc.relname = 'purchase_orders'
+      and idx.indisunique
+      and (
+        select array_agg(a.attname::text order by k.ord)
+        from unnest(idx.indkey) with ordinality as k(attnum, ord)
+        join pg_attribute a on a.attrelid = tc.oid and a.attnum = k.attnum
+      ) = array['company_id', 'po_number']
+  ) then
+    alter table public.purchase_orders
+      add constraint uq_purchase_orders_company_po_number unique (company_id, po_number);
+  end if;
+end $$;
 
 create or replace function public.crear_orden_compra(
   p_supplier_id uuid,
@@ -655,6 +716,7 @@ declare
   v_actor_name text;
   v_target_wh record;
   v_po_id uuid;
+  v_base_seq integer;
   v_seq integer;
   v_po_number text;
   v_sup_name text := 'Proveedor general';
@@ -719,8 +781,29 @@ begin
     end if;
   end if;
 
-  select count(*) + 1 into v_seq from public.purchase_orders where company_id = v_co;
-  v_po_number := 'OC-' || lpad(v_seq::text, 4, '0');
+  -- Numeración atómica por empresa (tolerante a concurrencia, órdenes históricas o anuladas)
+  select greatest(
+    coalesce((
+      select max((regexp_match(po.po_number, '^OC-([0-9]{1,9})$'))[1]::integer)
+      from public.purchase_orders po
+      where po.company_id = v_co
+        and po.po_number ~ '^OC-[0-9]{1,9}$'
+    ), 0),
+    (select count(*)::integer from public.purchase_orders po where po.company_id = v_co)
+  )
+  into v_base_seq;
+
+  insert into public.purchase_order_counters (company_id, last_seq, updated_at)
+  values (v_co, v_base_seq + 1, now())
+  on conflict (company_id) do update
+    set last_seq = greatest(public.purchase_order_counters.last_seq, v_base_seq) + 1,
+        updated_at = now()
+  returning last_seq into v_seq;
+
+  v_po_number := 'OC-' || case
+    when v_seq < 10000 then lpad(v_seq::text, 4, '0')
+    else v_seq::text
+  end;
 
   for v_item in select * from jsonb_array_elements(p_items) loop
     v_qty := coalesce((v_item->>'ordered_qty')::numeric, (v_item->>'quantity')::numeric, 0);

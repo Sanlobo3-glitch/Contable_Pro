@@ -1,0 +1,1983 @@
+From c657235875506bef96c3fdc699453a6cb71cc031 Mon Sep 17 00:00:00 2001
+From: Sanlobo3-glitch <Sanlobo3-glitch@users.noreply.github.com>
+Date: Wed, 18 Nov 2026 00:20:36 +0000
+Subject: [PATCH] =?UTF-8?q?fix(etapa1):=20cierre=20integral=20de=20bloquea?=
+ =?UTF-8?q?ntes=201-5=20y=20migraci=C3=B3n=20000068?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ src/lib/auth.tsx                              |    4 +
+ src/lib/supabase.ts                           |   71 +-
+ src/pages/PurchaseOrders.tsx                  |   18 +-
+ supabase/MIGRATIONS.md                        |    1 +
+ ...261118000068_cierre_bloqueantes_etapa1.sql | 1025 +++++++++++++++++
+ ...a1_permisos_y_seguridad_rollback_tests.sql |  642 ++++++++++-
+ 6 files changed, 1733 insertions(+), 28 deletions(-)
+ create mode 100644 supabase/migrations/20261118000068_cierre_bloqueantes_etapa1.sql
+
+diff --git a/src/lib/auth.tsx b/src/lib/auth.tsx
+index 8af9aa7..f14b542 100644
+--- a/src/lib/auth.tsx
++++ b/src/lib/auth.tsx
+@@ -387,6 +387,10 @@ export function canManagePurchaseOrders(role: Role | undefined): boolean {
+   )
+ }
+ 
++export function canApprovePurchaseOrders(role: Role | undefined): boolean {
++  return isCompanyAdminOrOwner(role)
++}
++
+ export function canReceivePurchaseOrders(role: Role | undefined): boolean {
+   return (
+     isCompanyAdminOrOwner(role) ||
+diff --git a/src/lib/supabase.ts b/src/lib/supabase.ts
+index 5e25ed7..11218f8 100644
+--- a/src/lib/supabase.ts
++++ b/src/lib/supabase.ts
+@@ -6448,6 +6448,30 @@ function createMockSupabase(silent = false): SupabaseClient {
+         return { data: { ok: true, product_id: prod.id, image_url: cleanUrl }, error: null }
+       }
+       case 'crear_orden_compra': {
++        const uid = typeof currentSession?.user?.id === 'string' ? currentSession.user.id.trim() : ''
++        if (!uid) {
++          return { data: null, error: { message: 'No autorizado: sesión sin identidad válida' } }
++        }
++        const actorProfile = getTable('profiles').find(x => typeof x.id === 'string' && x.id.trim() === uid)
++        if (!actorProfile || actorProfile.active !== true) {
++          return { data: null, error: { message: 'No autorizado' } }
++        }
++        const actorRole = typeof actorProfile.role === 'string' ? actorProfile.role.trim().toLowerCase() : ''
++        if (!['admin', 'dueno', 'admin_empresa', 'comprador'].includes(actorRole)) {
++          return { data: null, error: { message: 'No autorizado' } }
++        }
++        const autoApprove = Boolean(args.p_auto_approve)
++        if (autoApprove && !['admin', 'dueno', 'admin_empresa'].includes(actorRole)) {
++          return { data: null, error: { message: `No autorizado: el rol ${actorRole} no puede autoaprobar órdenes de compra` } }
++        }
++        const terms = String(args.p_payment_terms || 'credito').trim() || 'credito'
++        if (!['credito', 'transferencia', 'efectivo', 'tarjeta'].includes(terms)) {
++          return { data: null, error: { message: `Condición de pago inválida en orden de compra: ${terms}` } }
++        }
++        const creditDays = args.p_credit_days === undefined || args.p_credit_days === null ? 30 : Number(args.p_credit_days)
++        if (!Number.isFinite(creditDays) || creditDays < 0 || creditDays > 365) {
++          return { data: null, error: { message: 'Los días de crédito deben estar entre 0 y 365' } }
++        }
+         const items = Array.isArray(args.p_items) ? args.p_items : []
+         if (items.length === 0) return { data: null, error: { message: 'Agrega al menos un producto a la orden de compra' } }
+         const supId = args.p_supplier_id ? String(args.p_supplier_id) : null
+@@ -6462,19 +6486,18 @@ function createMockSupabase(silent = false): SupabaseClient {
+           const c = Number(it.unit_cost ?? it.cost) || 0
+           total += Math.round(q * c * 100) / 100
+         }
+-        const actorName = currentSession?.user?.user_metadata?.full_name || currentSession?.user?.email || 'Usuario Demo'
+-        const autoApprove = Boolean(args.p_auto_approve)
++        const actorName = actorProfile.full_name || currentSession?.user?.user_metadata?.full_name || currentSession?.user?.email || 'Usuario Demo'
+         pos.unshift({
+           id: poId,
+-          company_id: DEMO_COMPANY_ID,
++          company_id: actorProfile.company_id || DEMO_COMPANY_ID,
+           po_number: `OC-${String(nextNum).padStart(4, '0')}`,
+           supplier_id: supId,
+           supplier_name: sup?.name || 'Proveedor general',
+           branch_id: args.p_branch_id ? String(args.p_branch_id) : null,
+           target_warehouse_id: args.p_target_warehouse_id ? String(args.p_target_warehouse_id) : null,
+           status: autoApprove ? 'approved' : 'draft',
+-          payment_terms: String(args.p_payment_terms || 'credito'),
+-          credit_days: Number(args.p_credit_days) || 30,
++          payment_terms: terms,
++          credit_days: Math.trunc(creditDays),
+           expected_date: args.p_expected_date ? String(args.p_expected_date) : null,
+           subtotal: Math.round(total * 100) / 100,
+           total: Math.round(total * 100) / 100,
+@@ -6491,7 +6514,7 @@ function createMockSupabase(silent = false): SupabaseClient {
+           const prod = prods.find(p => p.id === it.product_id)
+           poItems.push({
+             id: genId(),
+-            company_id: DEMO_COMPANY_ID,
++            company_id: actorProfile.company_id || DEMO_COMPANY_ID,
+             po_id: poId,
+             product_id: it.product_id,
+             product_name: prod?.name || it.product_name || 'Producto',
+@@ -6505,16 +6528,46 @@ function createMockSupabase(silent = false): SupabaseClient {
+         return { data: poId, error: null }
+       }
+       case 'cambiar_estado_orden_compra': {
++        const uid = typeof currentSession?.user?.id === 'string' ? currentSession.user.id.trim() : ''
++        if (!uid) {
++          return { data: null, error: { message: 'No autorizado: sesión sin identidad válida' } }
++        }
++        const actorProfile = getTable('profiles').find(x => typeof x.id === 'string' && x.id.trim() === uid)
++        if (!actorProfile || actorProfile.active !== true) {
++          return { data: null, error: { message: 'No autorizado' } }
++        }
++        const actorRole = typeof actorProfile.role === 'string' ? actorProfile.role.trim().toLowerCase() : ''
++        if (!['admin', 'dueno', 'admin_empresa', 'comprador'].includes(actorRole)) {
++          return { data: null, error: { message: 'No autorizado' } }
++        }
+         const poId = String(args.p_po_id || '')
+         const status = String(args.p_status || '')
+-        const po = getTable('purchase_orders').find(p => p.id === poId)
++        if (status === 'approved' && !['admin', 'dueno', 'admin_empresa'].includes(actorRole)) {
++          return { data: null, error: { message: `No autorizado: el rol ${actorRole} no puede aprobar órdenes de compra` } }
++        }
++        if (!['approved', 'sent', 'cancelled'].includes(status)) {
++          return { data: null, error: { message: 'Estado de transición inválido' } }
++        }
++        const po = getTable('purchase_orders').find(p => p.id === poId && p.company_id === (actorProfile.company_id || DEMO_COMPANY_ID))
+         if (!po) return { data: null, error: { message: 'Orden de compra no encontrada' } }
+         if (po.status === 'received' || po.status === 'cancelled') {
+-          return { data: null, error: { message: 'No se puede modificar una orden cerrada o cancelada' } }
++          return { data: null, error: { message: 'No se puede modificar una orden ya cerrada o cancelada' } }
++        }
++        if (po.status === 'partial') {
++          return { data: null, error: { message: 'No se puede cambiar el estado ni cancelar una orden de compra con recepción parcial' } }
++        }
++        if (po.status === 'draft' && !['approved', 'cancelled'].includes(status)) {
++          return { data: null, error: { message: 'Una orden en borrador debe aprobarse antes de marcarse como enviada' } }
++        }
++        if (po.status === 'approved' && !['sent', 'cancelled'].includes(status)) {
++          return { data: null, error: { message: `Transición inválida desde orden aprobada hacia "${status}"` } }
++        }
++        if (po.status === 'sent' && status !== 'cancelled') {
++          return { data: null, error: { message: 'Una orden enviada solo admite recepción en bodega o cancelación previa a recibir' } }
+         }
+         po.status = status
+         if (status === 'approved') {
+-          po.approved_by_name = currentSession?.user?.user_metadata?.full_name || 'Dirección'
++          po.approved_by_name = actorProfile.full_name || currentSession?.user?.user_metadata?.full_name || 'Dirección'
+           po.approved_at = nowIso()
+         }
+         po.updated_at = nowIso()
+diff --git a/src/pages/PurchaseOrders.tsx b/src/pages/PurchaseOrders.tsx
+index 277a87c..9e1029e 100644
+--- a/src/pages/PurchaseOrders.tsx
++++ b/src/pages/PurchaseOrders.tsx
+@@ -5,6 +5,7 @@ import {
+   isReadOnly,
+   isCompanyManager,
+   canManagePurchaseOrders,
++  canApprovePurchaseOrders,
+   canReceivePurchaseOrders,
+   canViewAccounting,
+ } from '../lib/auth'
+@@ -164,7 +165,7 @@ export default function PurchaseOrders({ onNavigate }: { onNavigate?: (page: str
+     canReceivePurchaseOrders(user?.role) ||
+     canViewAccounting(user?.role)
+   const canEdit = !readOnly && canManagePurchaseOrders(user?.role)
+-  const canApprove = !readOnly && canManagePurchaseOrders(user?.role)
++  const canApprove = !readOnly && canApprovePurchaseOrders(user?.role)
+   const canReceive = !readOnly && canReceivePurchaseOrders(user?.role)
+ 
+   const companyKey = user?.company_id || user?.id || 'default'
+@@ -583,6 +584,19 @@ export default function PurchaseOrders({ onNavigate }: { onNavigate?: (page: str
+     if (nextStatus === 'approved' && !canApprove) return
+     if (nextStatus !== 'approved' && !canEdit) return
+ 
++    if (po.status === 'received' || po.status === 'cancelled') {
++      setFeedback({ ok: false, text: 'No se puede modificar una orden ya cerrada o cancelada.' })
++      return
++    }
++    if (po.status === 'partial') {
++      setFeedback({ ok: false, text: 'No se puede cambiar el estado ni cancelar una orden con recepción parcial.' })
++      return
++    }
++    if (po.status === 'draft' && nextStatus === 'sent') {
++      setFeedback({ ok: false, text: 'Una orden en borrador debe aprobarse antes de marcarse como enviada.' })
++      return
++    }
++
+     setBusyOrderId(po.id)
+     setConfirmCancelId(null)
+ 
+@@ -1284,7 +1298,7 @@ export default function PurchaseOrders({ onNavigate }: { onNavigate?: (page: str
+                             Detalle
+                           </button>
+ 
+-                          {po.status !== 'received' && po.status !== 'cancelled' && canEdit && (
++                          {(po.status === 'draft' || po.status === 'approved' || po.status === 'sent') && canEdit && (
+                             confirmCancelId === po.id ? (
+                               <span className="inline-flex items-center gap-1">
+                                 <button
+diff --git a/supabase/MIGRATIONS.md b/supabase/MIGRATIONS.md
+index fd46875..bd0f8ba 100644
+--- a/supabase/MIGRATIONS.md
++++ b/supabase/MIGRATIONS.md
+@@ -142,6 +142,7 @@ Resultado de la verificación contra la base (2026-11-07): **todas las migracion
+ | 93 | `20261115000065_corregir_permisos_y_seguridad_fase_b.sql` | ⏳ Pendiente de aplicar en base viva | Etapa 1 Fase B (permisos, autorización y seguridad multiempresa): helper `_require_company_roles`, separación de funciones para `contador` (conciliación/asientos manuales/IVA/DIAN sin parámetros/PUC/contabilización en lote), separación Compras vs Almacén (`_registrar_compra_core`, recepción de OC validada para `almacen` sin modificar pago/crédito/costos ni abrir `registrar_compra*`), paridad `admin_empresa`/`dueno`, supervisión de `gerente` en CxP/devoluciones/compras sin anular ni pagar, eliminación de bypass global en `dian_*`, `dian_calcular_formulario_300/350`, `cxp_config` y `cxp_save_account`, y políticas RLS activas por empresa y rol. |
+ | 94 | `20261116000066_blindaje_etapa1_auditoria_77cd7d5.sql` | ⏳ Pendiente de aplicar en base viva | Corrección de auditoría de Etapa 1 (sobre commit `77cd7d5`): endurece `acc_post_entry(uuid)` para restringir a `contador` exclusivamente a borradores propios (`created_by = auth.uid()`) con `source_type IN ('manual', 'ajuste')`, y endurece `recibir_orden_compra(...)` validando empresa (`42501`), estado activo, sucursal y bloqueo de cambio de `target_warehouse_id` ya asignada para `almacen`. |
+ | 95 | `20261117000067_blindaje_recepcion_ordenes_compra.sql` | ⏳ Pendiente de aplicar en base viva | Corrección de recepción de órdenes de compra (sobre commit `150f9aa`): obliga al rol `almacen` a recibir contra una bodega destino específica y activa (`42501`), conserva inventario general (`NULL`) únicamente para roles corporativos/compras autorizados, corrige el filtro de sucursal rechazando bodegas con `branch_id IS NULL` o de otra sucursal cuando `purchase_orders.branch_id IS NOT NULL`, valida coherencia sucursal/bodega al crear la OC y agrega validación finita de cantidades y costos. |
++| 96 | `20261118000068_cierre_bloqueantes_etapa1.sql` | ⏳ Pendiente de aplicar en base viva | Cierre integral de los 5 bloqueantes de auditoría de Etapa 1 (sobre commit `8ae6aa2`): (1) elimina `EXCEPTION WHEN OTHERS THEN NULL` en `acc_reopen_period` y `acc_close_period` para que cualquier fallo en `audit_log` haga rollback completo; (2) elimina silenciamiento en `registrar_pago_proveedor` y `cxp_save_account`, manteniendo omisión legítima en `acc_post_supplier_payment` solo cuando la contabilidad está inactiva o `fecha < start_date`; (3) separa creación (`comprador`) de aprobación (`admin`, `dueno`, `admin_empresa`) en `crear_orden_compra` y `cambiar_estado_orden_compra` y corrige `public.users -> public.profiles`; (4) impone máquina estricta de estados OC bloqueando `draft->sent`, `partial->*`, `received->*` y `cancelled->*`; (5) revoca DML directo de `authenticated`/`anon` sobre las 7 tablas `acc_*` y reemplaza `platform_admin_company_all` (`ALL`) por `platform_admin_company_select` (`SELECT` solo en empresa y perfil activos). |
+ 
+ **Reemplazadas, NO ejecutar** (`supabase/migrations_superseded/`): `20261106000022_contable_pro_partida_doble_puc_niif.sql`, `20261106000046_sistema_contable_partida_doble.sql`, `20261106000047_reportes_financieros_contables.sql`.
+ Crean un libro contable paralelo (`accounts`, `journal_entries`, `journal_lines`, `fn_*`) que nunca se aplicó.
+diff --git a/supabase/migrations/20261118000068_cierre_bloqueantes_etapa1.sql b/supabase/migrations/20261118000068_cierre_bloqueantes_etapa1.sql
+new file mode 100644
+index 0000000..b280d79
+--- /dev/null
++++ b/supabase/migrations/20261118000068_cierre_bloqueantes_etapa1.sql
+@@ -0,0 +1,1025 @@
++-- supabase/migrations/20261118000068_cierre_bloqueantes_etapa1.sql
++-- Corrección integral de bloqueantes de Etapa 1 (auditoría técnica sobre commit 8ae6aa2)
++-- Idempotente, sin BEGIN/COMMIT. No altera migraciones históricas ya publicadas.
++--   1. Bloqueante 1 (Auditoría contable): elimina EXCEPTION WHEN OTHERS THEN NULL en
++--      acc_reopen_period y acc_close_period; si falla audit_log, toda la operación hace rollback.
++--   2. Bloqueante 2 (Atomicidad CxP): elimina silenciamiento de fallos en
++--      registrar_pago_proveedor y cxp_save_account; acc_post_supplier_payment conserva
++--      omisión legítima solo si la contabilidad está inactiva o la fecha < start_date, y
++--      falla con excepción clara si está activa y falta cuenta o falla el asiento.
++--   3. Bloqueante 3 (Separación Creación vs Aprobación OC): impide que el rol 'comprador'
++--      autoapruebe en crear_orden_compra (p_auto_approve = true -> 42501) o apruebe en
++--      cambiar_estado_orden_compra (p_status = 'approved' -> 42501); solo roles autorizados
++--      por la matriz ('admin', 'dueno', 'admin_empresa') pueden aprobar. Corrige public.users
++--      -> public.profiles y usa _require_company_roles.
++--   4. Bloqueante 4 (Máquina de estados OC): bloquea transiciones ilegales en
++--      cambiar_estado_orden_compra ('draft'->'sent', 'partial'->'cancelled'/'approved'/'sent',
++--      'received'/'cancelled'->*).
++--   5. Bloqueante 5 (RLS y privilegios directos en acc_*): revoca DML directo de
++--      authenticated/anon/public en acc_accounts, acc_entries, acc_lines, acc_periods,
++--      acc_closings, acc_settings y acc_counters; reemplaza platform_admin_company_all (ALL)
++--      por platform_admin_company_select (SELECT únicamente en su empresa activa y perfil activo).
++
++-- =============================================================================
++-- 0. HELPER BASE (COMPATIBILIDAD CON BASE VIVA Y MIGRACIÓN 000065)
++-- =============================================================================
++
++create or replace function public._require_company_roles(p_roles text[])
++returns uuid
++language plpgsql
++stable
++security definer
++set search_path to 'pg_catalog', 'public', 'pg_temp'
++as $function$
++declare
++  v_co uuid := public.current_company_id();
++  v_ok boolean := false;
++begin
++  if auth.uid() is null or v_co is null then
++    raise exception 'No autorizado' using errcode = '42501';
++  end if;
++
++  select exists (
++    select 1
++    from public.profiles pr
++    where pr.id = auth.uid()
++      and pr.active = true
++      and pr.company_id = v_co
++      and (p_roles is null or pr.role = any(p_roles))
++  ) into v_ok;
++
++  if not v_ok then
++    raise exception 'No autorizado' using errcode = '42501';
++  end if;
++
++  return v_co;
++end
++$function$;
++
++-- =============================================================================
++-- 1. BLOQUEANTE 1: AUDITORÍA OBLIGATORIA Y ATÓMICA EN CIERRE Y REAPERTURA
++-- =============================================================================
++
++create or replace function public.acc_close_period(
++  p_year integer,
++  p_month integer,
++  p_notes text default null::text,
++  p_ack boolean default false
++)
++returns uuid
++language plpgsql
++security definer
++set search_path to 'pg_catalog', 'public', 'pg_temp'
++as $function$
++declare
++  v_c uuid := public._require_company_roles(array['admin', 'dueno', 'admin_empresa', 'gerente']);
++  v_start date;
++  v_end date;
++  v_err int;
++  v_warn int;
++  v_checks jsonb;
++  v_tb jsonb;
++  v_d numeric;
++  v_cr numeric;
++  v_id uuid;
++  v_name text;
++begin
++  if p_year is null or p_year < 2000 or p_year > 2100 or p_month is null or p_month < 1 or p_month > 12 then
++    raise exception 'Periodo contable inválido (año: %, mes: %)', p_year, p_month;
++  end if;
++
++  select
++    count(*) filter (where k.status = 'error'),
++    count(*) filter (where k.status = 'aviso'),
++    coalesce(jsonb_agg(to_jsonb(k)), '[]'::jsonb)
++  into v_err, v_warn, v_checks
++  from public.acc_close_check(p_year, p_month) k;
++
++  if v_err > 0 then
++    raise exception 'No se puede cerrar: hay % verificación(es) con error. Revisa la lista previa al cierre', v_err;
++  end if;
++  if v_warn > 0 and not coalesce(p_ack, false) then
++    raise exception 'Hay % aviso(s) sin confirmar: revísalos y confirma el cierre', v_warn;
++  end if;
++
++  v_start := make_date(p_year, p_month, 1);
++  v_end := (v_start + interval '1 month - 1 day')::date;
++
++  select
++    coalesce(jsonb_agg(to_jsonb(t)), '[]'::jsonb),
++    coalesce(sum(t.period_debit), 0),
++    coalesce(sum(t.period_credit), 0)
++  into v_tb, v_d, v_cr
++  from public.acc_trial_balance(v_start, v_end) t;
++
++  select coalesce(nullif(btrim(full_name), ''), email, 'Usuario')
++  into v_name
++  from public.profiles
++  where id = auth.uid();
++
++  insert into public.acc_periods (company_id, year, month, status, closed_at, closed_by)
++  values (v_c, p_year, p_month, 'cerrado', now(), auth.uid())
++  on conflict (company_id, year, month) do update
++    set status = 'cerrado',
++        closed_at = now(),
++        closed_by = auth.uid();
++
++  insert into public.acc_closings (
++    company_id, year, month, notes, checks, trial_balance, totals, closed_by, closed_by_name
++  ) values (
++    v_c, p_year, p_month, nullif(btrim(p_notes), ''), v_checks, v_tb,
++    jsonb_build_object('debitos', v_d, 'creditos', v_cr), auth.uid(), v_name
++  )
++  returning id into v_id;
++
++  insert into public.audit_log (
++    company_id, user_id, user_name, action, table_name, record_id, detail
++  ) values (
++    v_c,
++    auth.uid(),
++    v_name,
++    'cierre_contable',
++    'acc_closings',
++    v_id,
++    jsonb_build_object('year', p_year, 'month', p_month)
++  );
++
++  return v_id;
++end
++$function$;
++
++create or replace function public.acc_reopen_period(
++  p_year integer,
++  p_month integer,
++  p_reason text
++)
++returns void
++language plpgsql
++security definer
++set search_path to 'pg_catalog', 'public', 'pg_temp'
++as $function$
++declare
++  v_c uuid := public._require_company_roles(array['admin', 'dueno', 'admin_empresa']);
++  v_name text;
++  v_id uuid;
++begin
++  if p_year is null or p_year < 2000 or p_year > 2100 or p_month is null or p_month < 1 or p_month > 12 then
++    raise exception 'Periodo contable inválido (año: %, mes: %)', p_year, p_month;
++  end if;
++
++  if coalesce(btrim(p_reason), '') = '' then
++    raise exception 'Indica el motivo de la reapertura';
++  end if;
++
++  select coalesce(nullif(btrim(full_name), ''), email, 'Usuario')
++  into v_name
++  from public.profiles
++  where id = auth.uid();
++
++  select id into v_id
++  from public.acc_closings
++  where company_id = v_c
++    and year = p_year
++    and month = p_month
++    and status = 'cerrado'
++  for update;
++
++  if not found then
++    raise exception 'Ese periodo no está cerrado';
++  end if;
++
++  if exists (
++    select 1 from public.acc_periods p
++    where p.company_id = v_c
++      and p.status = 'cerrado'
++      and (p.year, p.month) > (p_year, p_month)
++  ) then
++    raise exception 'Reabre primero los periodos posteriores, del más reciente al más antiguo';
++  end if;
++
++  update public.acc_periods
++     set status = 'abierto',
++         closed_at = null,
++         closed_by = null
++   where company_id = v_c
++     and year = p_year
++     and month = p_month;
++
++  update public.acc_closings
++     set status = 'reabierto',
++         reopened_by = auth.uid(),
++         reopened_by_name = v_name,
++         reopened_at = now(),
++         reopen_reason = btrim(p_reason)
++   where id = v_id;
++
++  insert into public.audit_log (
++    company_id, user_id, user_name, action, table_name, record_id, detail
++  ) values (
++    v_c,
++    auth.uid(),
++    v_name,
++    'reapertura_contable',
++    'acc_closings',
++    v_id,
++    jsonb_build_object('year', p_year, 'month', p_month, 'motivo', btrim(p_reason))
++  );
++end
++$function$;
++
++-- =============================================================================
++-- 2. BLOQUEANTE 2: ATOMICIDAD DE CXP Y CONTABILIZACIÓN DE PAGOS A PROVEEDOR
++-- =============================================================================
++
++create or replace function public.acc_post_supplier_payment(p_payment_id uuid)
++returns uuid
++language plpgsql
++security definer
++set search_path to 'pg_catalog', 'public', 'pg_temp'
++as $function$
++declare
++  p public.supplier_payments;
++  s public.acc_settings;
++  v_date date;
++  v_cxp uuid;
++  v_pay uuid;
++  v_exp uuid;
++  v_in numeric := 0;
++  v_out numeric := 0;
++  v_lines jsonb := '[]'::jsonb;
++  v_pay_key text;
++begin
++  select * into p from public.supplier_payments where id = p_payment_id;
++  if not found or p.status <> 'activo' then
++    return null;
++  end if;
++
++  select * into s from public.acc_settings where company_id = p.company_id;
++  if not found or not coalesce(s.active, false) or s.start_date is null then
++    return null;
++  end if;
++
++  v_date := (p.created_at at time zone coalesce(nullif(btrim(s.timezone), ''), 'America/Bogota'))::date;
++  if v_date < s.start_date then
++    return null;
++  end if;
++
++  if to_regclass('public.cxp_settings') is not null then
++    select account_id into v_cxp from public.cxp_settings where company_id = p.company_id;
++  end if;
++
++  v_pay_key := case when p.method = 'efectivo' then 'caja' else 'bancos' end;
++  begin
++    v_pay := nullif(btrim(coalesce(s.map->>v_pay_key, '')), '')::uuid;
++  exception when invalid_text_representation then
++    raise exception 'La cuenta configurada para "%" en Config. contable no es válida', v_pay_key;
++  end;
++
++  begin
++    v_exp := nullif(btrim(coalesce(s.map->>'gastos', '')), '')::uuid;
++  exception when invalid_text_representation then
++    raise exception 'La cuenta configurada para "gastos" en Config. contable no es válida';
++  end;
++
++  -- Lo aplicado a compras anteriores al inicio contable no tiene pasivo contabilizado
++  select
++    coalesce(sum(a.amount) filter (where (pu.created_at at time zone coalesce(nullif(btrim(s.timezone), ''), 'America/Bogota'))::date >= s.start_date), 0),
++    coalesce(sum(a.amount) filter (where (pu.created_at at time zone coalesce(nullif(btrim(s.timezone), ''), 'America/Bogota'))::date <  s.start_date), 0)
++  into v_in, v_out
++  from public.supplier_allocations a
++  join public.purchases pu on pu.id = a.purchase_id
++  where a.payment_id = p.id
++    and a.company_id = p.company_id
++    and pu.company_id = p.company_id;
++
++  if v_in > 0 and v_cxp is null then
++    raise exception 'Falta configurar la cuenta por pagar a proveedores para contabilizar el pago';
++  end if;
++
++  if v_pay is null then
++    raise exception 'Falta configurar la cuenta de "%" en Config. contable para contabilizar el pago a proveedor', v_pay_key;
++  end if;
++
++  if v_out > 0 and v_exp is null then
++    raise exception 'Falta configurar la cuenta de "gastos" para contabilizar pagos a compras anteriores al inicio contable';
++  end if;
++
++  if v_in > 0 then
++    v_lines := v_lines || jsonb_build_array(jsonb_build_object('account_id', v_cxp, 'debit', v_in));
++  end if;
++
++  if v_out > 0 then
++    v_lines := v_lines || jsonb_build_array(jsonb_build_object(
++      'account_id', v_exp,
++      'debit', v_out,
++      'memo', 'Pago de compras anteriores al inicio contable'
++    ));
++  end if;
++
++  v_lines := v_lines || jsonb_build_array(jsonb_build_object(
++    'account_id', v_pay,
++    'credit', p.amount,
++    'memo', 'Pago a proveedor (' || p.method || ')'
++  ));
++
++  if jsonb_array_length(v_lines) < 2 or abs(round(v_in + v_out, 2) - round(p.amount, 2)) > 0.01 then
++    raise exception 'No se pudo construir un asiento contable cuadrado para el pago a proveedor %', p.id;
++  end if;
++
++  return public.acc_system_entry(
++    p.company_id,
++    v_date,
++    'Pago a proveedor' || coalesce(': ' || (select name from public.suppliers where id = p.supplier_id and company_id = p.company_id), ''),
++    'pago_proveedor',
++    p.id,
++    'registro',
++    'PP-' || substr(p.id::text, 1, 8),
++    v_lines
++  );
++end
++$function$;
++
++create or replace function public.acc_post_pending()
++returns jsonb
++language plpgsql
++security definer
++set search_path to 'pg_catalog', 'public', 'pg_temp'
++as $function$
++declare
++  v_c uuid := public._require_company_roles(array['admin', 'dueno', 'admin_empresa', 'gerente']);
++  s public.acc_settings;
++  r public.sales;
++  q public.purchases;
++  d public.devolutions;
++  c public.cash_entries;
++  k public.kardex;
++  pp public.credit_payments;
++  sp public.supplier_payments;
++  ex public.expenses;
++  pd public.purchase_devolutions;
++  v_s int := 0; v_p int := 0; v_d int := 0; v_k int := 0; v_a int := 0;
++  v_ab int := 0; v_pp int := 0; v_g int := 0; v_dc int := 0;
++begin
++  select * into s from public.acc_settings where company_id = v_c;
++  if not found or not coalesce(s.active, false) or s.start_date is null then
++    raise exception 'Activa y configura la fecha de inicio de la contabilidad automática antes de contabilizar pendientes';
++  end if;
++
++  for r in
++    select * from public.sales x
++    where x.company_id = v_c and x.status = 'completada' and jsonb_array_length(x.items) > 0
++      and (x.created_at at time zone s.timezone)::date >= s.start_date
++      and not exists (select 1 from public.acc_entries e where e.company_id = v_c and e.source_type = 'venta'
++        and e.source_id = x.id and e.source_event = 'registro')
++    order by x.created_at
++  loop
++    if public.acc_post_sale(r, true) is not null then v_s := v_s + 1; end if;
++  end loop;
++
++  for q in
++    select * from public.purchases x
++    where x.company_id = v_c and x.status = 'recibida' and jsonb_array_length(x.items) > 0
++      and (x.created_at at time zone s.timezone)::date >= s.start_date
++      and not exists (select 1 from public.acc_entries e where e.company_id = v_c and e.source_type = 'compra'
++        and e.source_id = x.id and e.source_event = 'registro')
++    order by x.created_at
++  loop
++    if public.acc_post_purchase(q, true) is not null then v_p := v_p + 1; end if;
++  end loop;
++
++  for d in
++    select * from public.devolutions x
++    where x.company_id = v_c and (x.created_at at time zone s.timezone)::date >= s.start_date
++      and not exists (select 1 from public.acc_entries e where e.company_id = v_c and e.source_type = 'devolucion'
++        and e.source_id = x.id and e.source_event = 'registro')
++    order by x.created_at
++  loop
++    if public.acc_post_devolution(d, true) is not null then v_d := v_d + 1; end if;
++  end loop;
++
++  for c in
++    select * from public.cash_entries x
++    where x.company_id = v_c and (x.reference_type is null or x.reference_type = 'arqueo')
++      and (x.created_at at time zone s.timezone)::date >= s.start_date
++      and not exists (select 1 from public.acc_entries e where e.company_id = v_c
++        and e.source_type in ('caja', 'arqueo') and e.source_id = x.id and e.source_event = 'registro')
++    order by x.created_at
++  loop
++    if public.acc_post_cash(c, true) is not null then v_k := v_k + 1; end if;
++  end loop;
++
++  for k in
++    select * from public.kardex x
++    where x.company_id = v_c and x.reference_type = 'ajuste'
++      and (x.created_at at time zone s.timezone)::date >= s.start_date
++      and not exists (select 1 from public.acc_entries e where e.company_id = v_c and e.source_type = 'ajuste_stock'
++        and e.source_id = x.id and e.source_event = 'registro')
++    order by x.created_at
++  loop
++    if public.acc_post_adjustment(k, true) is not null then v_a := v_a + 1; end if;
++  end loop;
++
++  for pp in
++    select * from public.credit_payments x
++    where x.company_id = v_c and x.status = 'activo'
++      and (x.created_at at time zone s.timezone)::date >= s.start_date
++      and not exists (select 1 from public.acc_entries e where e.company_id = v_c and e.source_type = 'abono'
++        and e.source_id = x.id and e.source_event = 'registro')
++    order by x.created_at
++  loop
++    if public.acc_post_payment(pp.id) is not null then v_ab := v_ab + 1; end if;
++  end loop;
++
++  if to_regclass('public.supplier_payments') is not null then
++    for sp in
++      select * from public.supplier_payments x
++      where x.company_id = v_c and x.status = 'activo'
++        and (x.created_at at time zone s.timezone)::date >= s.start_date
++        and not exists (select 1 from public.acc_entries e where e.company_id = v_c and e.source_type = 'pago_proveedor'
++          and e.source_id = x.id and e.source_event = 'registro')
++      order by x.created_at
++    loop
++      if public.acc_post_supplier_payment(sp.id) is not null then v_pp := v_pp + 1; end if;
++    end loop;
++  end if;
++
++  for ex in
++    select * from public.expenses x
++    where x.company_id = v_c and x.status = 'activo'
++      and (x.created_at at time zone s.timezone)::date >= s.start_date
++      and not exists (select 1 from public.acc_entries e where e.company_id = v_c and e.source_type = 'gasto'
++        and e.source_id = x.id and e.source_event = 'registro')
++    order by x.created_at
++  loop
++    if public.acc_post_expense(ex.id) is not null then v_g := v_g + 1; end if;
++  end loop;
++
++  for pd in
++    select * from public.purchase_devolutions x
++    where x.company_id = v_c and x.status = 'activa'
++      and (x.created_at at time zone s.timezone)::date >= s.start_date
++      and not exists (select 1 from public.acc_entries e where e.company_id = v_c and e.source_type = 'devolucion_compra'
++        and e.source_id = x.id and e.source_event = 'registro')
++    order by x.created_at
++  loop
++    if public.acc_post_purchase_devolution(pd.id) is not null then v_dc := v_dc + 1; end if;
++  end loop;
++
++  return jsonb_build_object(
++    'ventas', v_s, 'compras', v_p, 'devoluciones', v_d,
++    'caja', v_k, 'ajustes', v_a, 'abonos', v_ab,
++    'pagos_proveedor', v_pp, 'gastos', v_g, 'devoluciones_compra', v_dc
++  );
++end
++$function$;
++
++create or replace function public.registrar_pago_proveedor(
++  p_supplier_id uuid,
++  p_amount numeric,
++  p_method text default 'efectivo'::text,
++  p_note text default null::text,
++  p_client_id uuid default null::uuid
++)
++returns uuid
++language plpgsql
++security definer
++set search_path to 'pg_catalog', 'public', 'pg_temp'
++as $function$
++declare
++  v_co uuid := public._require_company_roles(array['admin', 'dueno', 'admin_empresa']);
++  v_amount numeric;
++  v_sup text;
++  v_owed numeric;
++  v_id uuid;
++  v_left numeric;
++  v_alloc numeric;
++  v_name text;
++  r record;
++begin
++  if p_client_id is not null then
++    select id into v_id
++    from public.supplier_payments
++    where company_id = v_co and client_uuid = p_client_id;
++    if found then
++      return v_id;
++    end if;
++  end if;
++
++  if not public._es_finito(p_amount) or p_amount <= 0 then
++    raise exception 'El pago debe ser mayor que cero';
++  end if;
++  v_amount := round(p_amount, 2);
++  if v_amount < 0.01 then
++    raise exception 'El pago debe ser mayor que cero';
++  end if;
++  if coalesce(p_method, '') not in ('efectivo', 'tarjeta', 'transferencia') then
++    raise exception 'Método de pago inválido';
++  end if;
++
++  select name into v_sup
++  from public.suppliers
++  where id = p_supplier_id and company_id = v_co
++  for update;
++  if not found then
++    raise exception 'Proveedor no existe';
++  end if;
++
++  v_owed := public._supplier_owed(v_co, p_supplier_id);
++  if v_owed <= 0 then
++    raise exception 'No tienes deuda pendiente con este proveedor';
++  end if;
++  if v_amount > v_owed + 0.005 then
++    raise exception 'El pago (%) es mayor que lo que debes al proveedor (%)', v_amount, round(v_owed, 2);
++  end if;
++
++  select coalesce(nullif(btrim(full_name), ''), email, 'Usuario')
++  into v_name
++  from public.profiles
++  where id = auth.uid();
++
++  insert into public.supplier_payments (
++    company_id, supplier_id, amount, method, note, client_uuid, created_by, created_by_name
++  ) values (
++    v_co, p_supplier_id, v_amount, p_method,
++    nullif(left(btrim(coalesce(p_note, '')), 300), ''),
++    p_client_id, auth.uid(), v_name
++  )
++  returning id into v_id;
++
++  v_left := v_amount;
++  for r in
++    select p.id, public._purchase_balance(p.id) as bal
++    from public.purchases p
++    where p.company_id = v_co
++      and p.supplier_id = p_supplier_id
++      and p.payment_method = 'credito'
++      and p.status = 'recibida'
++    order by p.created_at, p.id
++    for update of p
++  loop
++    exit when v_left <= 0.004;
++    if r.bal > 0.004 then
++      v_alloc := least(v_left, r.bal);
++      insert into public.supplier_allocations (company_id, payment_id, purchase_id, amount)
++      values (v_co, v_id, r.id, v_alloc);
++      v_left := v_left - v_alloc;
++    end if;
++  end loop;
++
++  if v_left > 0.01 then
++    raise exception 'No se pudo aplicar el pago completo';
++  end if;
++
++  if p_method = 'efectivo' then
++    insert into public.cash_entries (company_id, type, amount, description, reference_type, reference_id)
++    values (v_co, 'egreso', v_amount, 'Pago a proveedor - ' || coalesce(v_sup, 'Proveedor'), 'pago_proveedor', v_id);
++  end if;
++
++  -- Sin EXCEPTION WHEN OTHERS: si la contabilidad está activa y en fecha >= start_date,
++  -- cualquier error de contabilización revierte íntegramente el pago, sus asignaciones y caja.
++  perform public.acc_post_supplier_payment(v_id);
++
++  return v_id;
++end
++$function$;
++
++create or replace function public.cxp_save_account(p_account uuid)
++returns jsonb
++language plpgsql
++security definer
++set search_path to 'pg_catalog', 'public', 'pg_temp'
++as $function$
++declare
++  v_co uuid := public._require_company_roles(array['admin', 'dueno', 'admin_empresa']);
++  v_res jsonb := null;
++begin
++  if p_account is not null
++     and not exists (
++       select 1
++       from public.acc_accounts
++       where id = p_account
++         and company_id = v_co
++         and is_postable = true
++         and active = true
++     ) then
++    raise exception 'La cuenta elegida no existe, está inactiva o no admite movimientos';
++  end if;
++
++  insert into public.cxp_settings (company_id, account_id)
++  values (v_co, p_account)
++  on conflict (company_id)
++  do update set
++    account_id = excluded.account_id,
++    updated_at = now();
++
++  -- Sin EXCEPTION WHEN OTHERS: si acc_post_pending falla al contabilizar movimientos
++  -- pendientes con contabilidad activa, el error se propaga y revierte cxp_settings.
++  if p_account is not null
++     and exists (
++       select 1
++       from public.acc_settings
++       where company_id = v_co
++         and active = true
++         and start_date is not null
++     ) then
++    v_res := public.acc_post_pending();
++  end if;
++
++  return coalesce(v_res, '{}'::jsonb);
++end
++$function$;
++
++-- =============================================================================
++-- 3. BLOQUEANTES 3 Y 4: ÓRDENES DE COMPRA (SEPARACIÓN CREACIÓN/APROBACIÓN Y MÁQUINA DE ESTADOS)
++-- =============================================================================
++
++create or replace function public.crear_orden_compra(
++  p_supplier_id uuid,
++  p_items jsonb,
++  p_branch_id uuid default null::uuid,
++  p_target_warehouse_id uuid default null::uuid,
++  p_payment_terms text default 'credito'::text,
++  p_credit_days integer default 30,
++  p_expected_date date default null::date,
++  p_notes text default null::text,
++  p_auto_approve boolean default false
++)
++returns uuid
++language plpgsql
++security definer
++set search_path to 'pg_catalog', 'public', 'pg_temp'
++as $function$
++declare
++  v_co uuid := public._require_company_roles(array['admin', 'dueno', 'admin_empresa', 'comprador']);
++  v_actor_role text;
++  v_actor_name text;
++  v_target_wh record;
++  v_po_id uuid;
++  v_seq integer;
++  v_po_number text;
++  v_sup_name text := 'Proveedor general';
++  v_total numeric(14,2) := 0;
++  v_item jsonb;
++  v_prod record;
++  v_qty numeric;
++  v_cost numeric;
++  v_terms text := coalesce(nullif(btrim(coalesce(p_payment_terms, '')), ''), 'credito');
++  v_days integer := coalesce(p_credit_days, 30);
++begin
++  select pr.role, coalesce(nullif(btrim(pr.full_name), ''), pr.email, 'Usuario')
++  into v_actor_role, v_actor_name
++  from public.profiles pr
++  where pr.id = auth.uid()
++    and pr.active = true
++    and pr.company_id = v_co;
++
++  -- Bloqueante 3: un rol creador no aprobador (ej. comprador) no puede autoaprobar una OC
++  if coalesce(p_auto_approve, false) and v_actor_role not in ('admin', 'dueno', 'admin_empresa') then
++    raise exception 'No autorizado: el rol % no puede autoaprobar órdenes de compra', v_actor_role
++      using errcode = '42501';
++  end if;
++
++  if v_terms not in ('credito', 'transferencia', 'efectivo', 'tarjeta') then
++    raise exception 'Condición de pago inválida en orden de compra: %', v_terms;
++  end if;
++
++  if v_days < 0 or v_days > 365 then
++    raise exception 'Los días de crédito deben estar entre 0 y 365';
++  end if;
++
++  if p_items is null or jsonb_typeof(p_items) <> 'array' or jsonb_array_length(p_items) = 0 then
++    raise exception 'Agrega al menos un producto a la orden de compra';
++  end if;
++
++  if p_supplier_id is not null then
++    select name into v_sup_name from public.suppliers where id = p_supplier_id and company_id = v_co;
++    if not found then
++      raise exception 'Proveedor no válido para esta empresa';
++    end if;
++  end if;
++
++  if p_branch_id is not null and not exists (
++    select 1 from public.branches where id = p_branch_id and company_id = v_co
++  ) then
++    raise exception 'Sucursal no válida para esta empresa';
++  end if;
++
++  if p_target_warehouse_id is not null then
++    select w.id, w.company_id, w.branch_id, w.active
++      into v_target_wh
++      from public.warehouses w
++     where w.id = p_target_warehouse_id;
++
++    if not found or v_target_wh.company_id is distinct from v_co or not coalesce(v_target_wh.active, false) then
++      raise exception 'Bodega destino inválida, inactiva o de otra empresa';
++    end if;
++
++    if p_branch_id is not null and v_target_wh.branch_id is distinct from p_branch_id then
++      raise exception 'La bodega destino no pertenece a la sucursal de la orden de compra';
++    end if;
++  end if;
++
++  select count(*) + 1 into v_seq from public.purchase_orders where company_id = v_co;
++  v_po_number := 'OC-' || lpad(v_seq::text, 4, '0');
++
++  for v_item in select * from jsonb_array_elements(p_items) loop
++    v_qty := coalesce((v_item->>'ordered_qty')::numeric, (v_item->>'quantity')::numeric, 0);
++    v_cost := coalesce((v_item->>'unit_cost')::numeric, (v_item->>'cost')::numeric, 0);
++    if not public._es_finito(v_qty) or not public._es_finito(v_cost) or v_qty <= 0 or v_cost < 0 then
++      raise exception 'Cantidad y costo deben ser válidos en cada renglón';
++    end if;
++    v_total := v_total + round(v_qty * v_cost, 2);
++  end loop;
++
++  insert into public.purchase_orders (
++    company_id, po_number, supplier_id, supplier_name, branch_id, target_warehouse_id,
++    status, payment_terms, credit_days, expected_date, subtotal, total, notes,
++    created_by, created_by_name,
++    approved_by_name, approved_at
++  ) values (
++    v_co, v_po_number, p_supplier_id, v_sup_name, p_branch_id, p_target_warehouse_id,
++    case when coalesce(p_auto_approve, false) then 'approved' else 'draft' end,
++    v_terms,
++    v_days,
++    p_expected_date, v_total, v_total,
++    nullif(btrim(coalesce(p_notes, '')), ''),
++    auth.uid(), v_actor_name,
++    case when coalesce(p_auto_approve, false) then v_actor_name else null end,
++    case when coalesce(p_auto_approve, false) then now() else null end
++  )
++  returning id into v_po_id;
++
++  for v_item in select * from jsonb_array_elements(p_items) loop
++    select id, name, sku into v_prod
++    from public.products
++    where id = (v_item->>'product_id')::uuid and company_id = v_co;
++    if not found then
++      raise exception 'Producto no encontrado en el catálogo de la empresa';
++    end if;
++
++    v_qty := coalesce((v_item->>'ordered_qty')::numeric, (v_item->>'quantity')::numeric, 0);
++    v_cost := coalesce((v_item->>'unit_cost')::numeric, (v_item->>'cost')::numeric, 0);
++
++    insert into public.purchase_order_items (
++      company_id, po_id, product_id, product_name, sku, ordered_qty, unit_cost
++    ) values (
++      v_co, v_po_id, v_prod.id, v_prod.name, v_prod.sku, v_qty, v_cost
++    );
++  end loop;
++
++  return v_po_id;
++end;
++$function$;
++
++create or replace function public.cambiar_estado_orden_compra(
++  p_po_id uuid,
++  p_status text
++)
++returns void
++language plpgsql
++security definer
++set search_path to 'pg_catalog', 'public', 'pg_temp'
++as $function$
++declare
++  v_co uuid := public._require_company_roles(array['admin', 'dueno', 'admin_empresa', 'comprador']);
++  v_actor_role text;
++  v_actor text;
++  v_cur text;
++begin
++  select pr.role, coalesce(nullif(btrim(pr.full_name), ''), pr.email, 'Usuario')
++  into v_actor_role, v_actor
++  from public.profiles pr
++  where pr.id = auth.uid()
++    and pr.active = true
++    and pr.company_id = v_co;
++
++  -- Bloqueante 3: solo roles autorizados por la matriz pueden aprobar una orden de compra
++  if p_status = 'approved' and v_actor_role not in ('admin', 'dueno', 'admin_empresa') then
++    raise exception 'No autorizado: el rol % no puede aprobar órdenes de compra', v_actor_role
++      using errcode = '42501';
++  end if;
++
++  if p_status is null or p_status not in ('approved', 'sent', 'cancelled') then
++    raise exception 'Estado de transición inválido';
++  end if;
++
++  select status into v_cur
++  from public.purchase_orders
++  where id = p_po_id and company_id = v_co
++  for update;
++
++  if not found then
++    raise exception 'Orden de compra no encontrada';
++  end if;
++
++  -- Bloqueante 4: máquina estricta de estados para órdenes de compra
++  if v_cur in ('received', 'cancelled') then
++    raise exception 'No se puede modificar una orden ya cerrada o cancelada';
++  end if;
++
++  if v_cur = 'partial' then
++    raise exception 'No se puede cambiar el estado ni cancelar una orden de compra con recepción parcial';
++  end if;
++
++  if v_cur = 'draft' and p_status not in ('approved', 'cancelled') then
++    raise exception 'Una orden en borrador debe aprobarse antes de marcarse como enviada';
++  end if;
++
++  if v_cur = 'approved' and p_status not in ('sent', 'cancelled') then
++    raise exception 'Transición inválida desde orden aprobada hacia "%"', p_status;
++  end if;
++
++  if v_cur = 'sent' and p_status <> 'cancelled' then
++    raise exception 'Una orden enviada solo admite recepción en bodega o cancelación previa a recibir';
++  end if;
++
++  update public.purchase_orders
++     set status = p_status,
++         approved_by_name = case when p_status = 'approved' then v_actor else approved_by_name end,
++         approved_at = case when p_status = 'approved' then now() else approved_at end,
++         updated_at = now()
++   where id = p_po_id and company_id = v_co;
++end;
++$function$;
++
++-- =============================================================================
++-- 4. BLOQUEANTE 5: CIERRE DE ESCRITURA DIRECTA Y PLATFORM_ADMIN EN TABLAS acc_*
++-- =============================================================================
++
++drop policy if exists platform_admin_company_all on public.acc_accounts;
++drop policy if exists platform_admin_company_select on public.acc_accounts;
++create policy platform_admin_company_select on public.acc_accounts
++  for select to authenticated
++  using (
++    public.is_platform_admin()
++    and company_id = (select public.current_company_id())
++    and exists (
++      select 1
++      from public.profiles pr
++      where pr.id = (select auth.uid())
++        and pr.active = true
++        and pr.company_id = acc_accounts.company_id
++    )
++  );
++
++drop policy if exists platform_admin_company_all on public.acc_entries;
++drop policy if exists platform_admin_company_select on public.acc_entries;
++create policy platform_admin_company_select on public.acc_entries
++  for select to authenticated
++  using (
++    public.is_platform_admin()
++    and company_id = (select public.current_company_id())
++    and exists (
++      select 1
++      from public.profiles pr
++      where pr.id = (select auth.uid())
++        and pr.active = true
++        and pr.company_id = acc_entries.company_id
++    )
++  );
++
++drop policy if exists platform_admin_company_all on public.acc_lines;
++drop policy if exists platform_admin_company_select on public.acc_lines;
++create policy platform_admin_company_select on public.acc_lines
++  for select to authenticated
++  using (
++    public.is_platform_admin()
++    and company_id = (select public.current_company_id())
++    and exists (
++      select 1
++      from public.profiles pr
++      where pr.id = (select auth.uid())
++        and pr.active = true
++        and pr.company_id = acc_lines.company_id
++    )
++  );
++
++drop policy if exists platform_admin_company_all on public.acc_periods;
++drop policy if exists platform_admin_company_select on public.acc_periods;
++create policy platform_admin_company_select on public.acc_periods
++  for select to authenticated
++  using (
++    public.is_platform_admin()
++    and company_id = (select public.current_company_id())
++    and exists (
++      select 1
++      from public.profiles pr
++      where pr.id = (select auth.uid())
++        and pr.active = true
++        and pr.company_id = acc_periods.company_id
++    )
++  );
++
++drop policy if exists platform_admin_company_all on public.acc_closings;
++drop policy if exists platform_admin_company_select on public.acc_closings;
++create policy platform_admin_company_select on public.acc_closings
++  for select to authenticated
++  using (
++    public.is_platform_admin()
++    and company_id = (select public.current_company_id())
++    and exists (
++      select 1
++      from public.profiles pr
++      where pr.id = (select auth.uid())
++        and pr.active = true
++        and pr.company_id = acc_closings.company_id
++    )
++  );
++
++drop policy if exists platform_admin_company_all on public.acc_settings;
++drop policy if exists platform_admin_company_select on public.acc_settings;
++create policy platform_admin_company_select on public.acc_settings
++  for select to authenticated
++  using (
++    public.is_platform_admin()
++    and company_id = (select public.current_company_id())
++    and exists (
++      select 1
++      from public.profiles pr
++      where pr.id = (select auth.uid())
++        and pr.active = true
++        and pr.company_id = acc_settings.company_id
++    )
++  );
++
++revoke all on table
++  public.acc_accounts,
++  public.acc_entries,
++  public.acc_lines,
++  public.acc_periods,
++  public.acc_closings,
++  public.acc_settings,
++  public.acc_counters
++from public, anon;
++
++revoke insert, update, delete, truncate on table
++  public.acc_accounts,
++  public.acc_entries,
++  public.acc_lines,
++  public.acc_periods,
++  public.acc_closings,
++  public.acc_settings,
++  public.acc_counters
++from authenticated;
++
++revoke select on table public.acc_counters from authenticated;
++
++grant select on table
++  public.acc_accounts,
++  public.acc_entries,
++  public.acc_lines,
++  public.acc_periods,
++  public.acc_closings,
++  public.acc_settings
++to authenticated;
++
++grant all on table
++  public.acc_accounts,
++  public.acc_entries,
++  public.acc_lines,
++  public.acc_periods,
++  public.acc_closings,
++  public.acc_settings,
++  public.acc_counters
++to service_role;
++
++-- =============================================================================
++-- 5. PRIVILEGIOS EXPLÍCITOS EN FUNCIONES MODIFICADAS
++-- =============================================================================
++
++revoke all on function public._require_company_roles(text[]) from public, anon, authenticated;
++grant execute on function public._require_company_roles(text[]) to postgres, service_role;
++
++revoke all on function public.acc_post_supplier_payment(uuid) from public, anon, authenticated;
++grant execute on function public.acc_post_supplier_payment(uuid) to postgres, service_role;
++
++revoke all on function public.acc_close_period(integer, integer, text, boolean) from public, anon;
++grant execute on function public.acc_close_period(integer, integer, text, boolean) to authenticated, service_role;
++
++revoke all on function public.acc_reopen_period(integer, integer, text) from public, anon;
++grant execute on function public.acc_reopen_period(integer, integer, text) to authenticated, service_role;
++
++revoke all on function public.acc_post_pending() from public, anon;
++grant execute on function public.acc_post_pending() to authenticated, service_role;
++
++revoke all on function public.registrar_pago_proveedor(uuid, numeric, text, text, uuid) from public, anon;
++grant execute on function public.registrar_pago_proveedor(uuid, numeric, text, text, uuid) to authenticated, service_role;
++
++revoke all on function public.cxp_save_account(uuid) from public, anon;
++grant execute on function public.cxp_save_account(uuid) to authenticated, service_role;
++
++revoke all on function public.crear_orden_compra(uuid, jsonb, uuid, uuid, text, integer, date, text, boolean) from public, anon;
++grant execute on function public.crear_orden_compra(uuid, jsonb, uuid, uuid, text, integer, date, text, boolean) to authenticated, service_role;
++
++revoke all on function public.cambiar_estado_orden_compra(uuid, text) from public, anon;
++grant execute on function public.cambiar_estado_orden_compra(uuid, text) to authenticated, service_role;
++
++-- =============================================================================
++-- 6. PIE DE REGISTRO OBLIGATORIO EN BITÁCORA
++-- =============================================================================
++
++select public.sql_registrar_migracion(
++  '20261118000068_cierre_bloqueantes_etapa1',
++  'Etapa 1 Bloqueantes: auditoría atómica reapertura/cierre, atomicidad CxP, separación creación/aprobación OC, máquina de estados OC y cierre DML acc_*',
++  '20261118000068_cierre_bloqueantes_etapa1.sql'
++);
+diff --git a/supabase/tests/etapa1_permisos_y_seguridad_rollback_tests.sql b/supabase/tests/etapa1_permisos_y_seguridad_rollback_tests.sql
+index fcb5e3f..a614bc2 100644
+--- a/supabase/tests/etapa1_permisos_y_seguridad_rollback_tests.sql
++++ b/supabase/tests/etapa1_permisos_y_seguridad_rollback_tests.sql
+@@ -1,16 +1,18 @@
+ -- supabase/tests/etapa1_permisos_y_seguridad_rollback_tests.sql
+ -- Suite transaccional no destructiva (BEGIN ... ROLLBACK) para verificar la Etapa 1
+--- y los hallazgos de auditoría (commit 77cd7d5 + migración 000066):
++-- y el cierre de bloqueantes (migraciones 000065, 000066, 000067 y 000068):
+ --   1. Separación de funciones por rol (1A Contador incl. acc_post_entry limitado a borradores propios manual/ajuste,
+---      2A Comprador/Almacén incl. bloqueo estricto de bodega asignada y estado de OC, 3B Gerente/admin_empresa, 4A Vendedor)
+---   2. Aislamiento multiempresa estricto (incluyendo cuentas admin globales sin bypass en DIAN/F300/F350/acc_post_entry)
+---   3. Bloqueo de perfiles inactivos (active = false)
+---   4. Endurecimiento de privilegios de tablas y funciones internas
+---   5. Sin falsos positivos: ninguna prueba usa WHEN OTHERS THEN NULL; toda operación prohibida verifica
++--      2A Comprador/Almacén incl. separación creación vs aprobación OC, bloqueo de bodega asignada y máquina de estados OC,
++--      3B Gerente/admin_empresa, 4A Vendedor)
++--   2. Aislamiento multiempresa estricto (incluyendo cuentas admin globales sin bypass en DIAN/F300/F350/acc_post_entry/acc_*)
++--   3. Auditoría obligatoria atómica (acc_close_period / acc_reopen_period sin silenciamiento en audit_log)
++--   4. Atomicidad CxP (registrar_pago_proveedor / cxp_save_account / acc_post_supplier_payment con omisión solo si inactiva o fecha < start_date)
++--   5. Bloqueo de perfiles inactivos (active = false) y endurecimiento DML en acc_* + funciones internas
++--   6. Sin falsos positivos: ninguna prueba usa WHEN OTHERS THEN NULL; toda operación prohibida verifica
+ --      éxito inesperado FUERA del bloque EXCEPTION y exige el SQLSTATE/mensaje exacto esperado.
+ --
+ -- USO: Ejecutar en SQL Editor o psql contra una instancia donde ya se hayan aplicado
+---      las migraciones 20261115000065, 20261116000066 y 20261117000067.
++--      las migraciones 20261115000065, 20261116000066, 20261117000067 y 20261118000068.
+ --      Al terminar con ROLLBACK, no deja datos ni alteraciones persistentes.
+ 
+ BEGIN;
+@@ -132,6 +134,35 @@ DECLARE
+   v_pay_chk             text;
+   v_days_chk            int;
+ 
++  -- Variables para PRUEBA 6 (cierre bloqueantes 1-5 / migración 000068)
++  v_prev_date            date;
++  v_prev_year            int;
++  v_prev_month           int;
++  v_prev_start           date;
++  v_cur_year             int;
++  v_cur_month            int;
++  v_closing_6_id         uuid;
++  v_snap_period_status   text;
++  v_snap_closing_status  text;
++  v_after_period_status  text;
++  v_after_closing_status text;
++  v_audit_cnt            int;
++  v_snap_cxp_acc         uuid;
++  v_snap_owed_6          numeric;
++  v_snap_sp_cnt          int;
++  v_snap_sa_cnt          int;
++  v_snap_cash_cnt        int;
++  v_snap_acc_cnt         int;
++  v_after_sp_cnt         int;
++  v_after_sa_cnt         int;
++  v_after_cash_cnt       int;
++  v_after_acc_cnt        int;
++  v_pay_id_6             uuid;
++  v_po_6_id              uuid;
++  v_po_6_item            uuid;
++  v_po_6_cancel_id       uuid;
++  v_tbl                  text;
++
+   -- Variables de control estricto de excepciones (fuera de los bloques BEGIN...EXCEPTION)
+   v_unexpected_ok boolean;
+   v_err_state     text;
+@@ -472,10 +503,36 @@ BEGIN
+     NULL, v_wh_a, 'credito', 45, current_date + 5, 'OC borrador test', false
+   );
+ 
++  -- Bloqueante 3: comprador NO puede autoaprobar ni aprobar OC (42501)
++  v_unexpected_ok := false; v_err_state := NULL; v_err_msg := NULL;
++  BEGIN
++    PERFORM public.crear_orden_compra(
++      v_sup_a,
++      jsonb_build_array(jsonb_build_object('product_id', v_prod_a, 'ordered_qty', 5, 'unit_cost', 1200)),
++      NULL, v_wh_a, 'credito', 45, current_date + 5, 'OC intento autoaprobar comprador', true
++    );
++    v_unexpected_ok := true;
++  EXCEPTION WHEN OTHERS THEN
++    GET STACKED DIAGNOSTICS v_err_state = RETURNED_SQLSTATE, v_err_msg = MESSAGE_TEXT;
++  END;
++  IF v_unexpected_ok THEN RAISE EXCEPTION 'FALLO BLOQUEANTE 3: comprador NO debe autoaprobar órdenes de compra'; END IF;
++  IF v_err_state <> '42501' THEN RAISE EXCEPTION 'FALLO BLOQUEANTE 3 (autoaprobar comprador): SQLSTATE inesperado [%] %', v_err_state, v_err_msg; END IF;
++
++  v_unexpected_ok := false; v_err_state := NULL; v_err_msg := NULL;
++  BEGIN
++    PERFORM public.cambiar_estado_orden_compra(v_po_draft_a, 'approved');
++    v_unexpected_ok := true;
++  EXCEPTION WHEN OTHERS THEN
++    GET STACKED DIAGNOSTICS v_err_state = RETURNED_SQLSTATE, v_err_msg = MESSAGE_TEXT;
++  END;
++  IF v_unexpected_ok THEN RAISE EXCEPTION 'FALLO BLOQUEANTE 3: comprador NO debe aprobar órdenes de compra'; END IF;
++  IF v_err_state <> '42501' THEN RAISE EXCEPTION 'FALLO BLOQUEANTE 3 (aprobar comprador): SQLSTATE inesperado [%] %', v_err_state, v_err_msg; END IF;
++
++  -- Crea la OC en borrador y luego la aprueba Dueño A (separación creación vs aprobación)
+   v_po_app_a := public.crear_orden_compra(
+     v_sup_a,
+     jsonb_build_array(jsonb_build_object('product_id', v_prod_a, 'ordered_qty', 5, 'unit_cost', 1200)),
+-    NULL, v_wh_a, 'credito', 45, current_date + 5, 'OC aprobada test', true
++    NULL, v_wh_a, 'credito', 45, current_date + 5, 'OC aprobada test', false
+   );
+ 
+   -- Comprador NO puede anular compra, ni devolver a proveedor, ni pagar CxP, ni clasificar IVA
+@@ -524,6 +581,13 @@ BEGIN
+   SELECT id INTO v_po_draft_item_a FROM public.purchase_order_items WHERE po_id = v_po_draft_a LIMIT 1;
+   SELECT id INTO v_po_item_a       FROM public.purchase_order_items WHERE po_id = v_po_app_a LIMIT 1;
+ 
++  -- Dueño A aprueba v_po_app_a antes de probar recepción de Almacén
++  PERFORM set_config('request.jwt.claim.sub', v_u_dueno_a::text, true);
++  PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', v_u_dueno_a::text, 'role', 'authenticated')::text, true);
++  SET LOCAL ROLE authenticated;
++  PERFORM public.cambiar_estado_orden_compra(v_po_app_a, 'approved');
++  RESET ROLE;
++
+   -- 2.2 Contador sí puede clasificar el IVA pendiente creado por Comprador
+   PERFORM set_config('request.jwt.claim.sub', v_u_conta_a::text, true);
+   PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', v_u_conta_a::text, 'role', 'authenticated')::text, true);
+@@ -908,7 +972,7 @@ BEGIN
+     PERFORM public.crear_orden_compra(
+       v_sup_a,
+       jsonb_build_array(jsonb_build_object('product_id', v_prod_a, 'ordered_qty', 2, 'unit_cost', 1500)),
+-      v_br_a1, v_wh_a, 'credito', 30, current_date + 3, 'OC incoherente wh sin sucursal', true
++      v_br_a1, v_wh_a, 'credito', 30, current_date + 3, 'OC incoherente wh sin sucursal', false
+     );
+     v_unexpected_ok := true;
+   EXCEPTION WHEN OTHERS THEN
+@@ -919,37 +983,46 @@ BEGIN
+     RAISE EXCEPTION 'FALLO OC (crear_orden_compra branch NULL): error inesperado [%] %', v_err_state, v_err_msg;
+   END IF;
+ 
+-  -- Crear órdenes de prueba
++  -- Crear órdenes de prueba en borrador como Comprador A
+   v_po_no_wh_a := public.crear_orden_compra(
+     v_sup_a,
+     jsonb_build_array(jsonb_build_object('product_id', v_prod_a, 'ordered_qty', 4, 'unit_cost', 1500)),
+-    NULL, NULL, 'credito', 30, current_date + 5, 'OC corporativa sin bodega', true
++    NULL, NULL, 'credito', 30, current_date + 5, 'OC corporativa sin bodega', false
+   );
+   v_po_br1_a := public.crear_orden_compra(
+     v_sup_a,
+     jsonb_build_array(jsonb_build_object('product_id', v_prod_a, 'ordered_qty', 3, 'unit_cost', 1500)),
+-    v_br_a1, NULL, 'credito', 30, current_date + 5, 'OC Sucursal 1 por asignar bodega', true
++    v_br_a1, NULL, 'credito', 30, current_date + 5, 'OC Sucursal 1 por asignar bodega', false
+   );
+   v_po_br1_wh_a := public.crear_orden_compra(
+     v_sup_a,
+     jsonb_build_array(jsonb_build_object('product_id', v_prod_a, 'ordered_qty', 5, 'unit_cost', 1500)),
+-    v_br_a1, v_wh_br1, 'credito', 45, current_date + 5, 'OC Sucursal 1 con bodega asignada', true
++    v_br_a1, v_wh_br1, 'credito', 45, current_date + 5, 'OC Sucursal 1 con bodega asignada', false
+   );
+   v_po_cancel_a := public.crear_orden_compra(
+     v_sup_a,
+     jsonb_build_array(jsonb_build_object('product_id', v_prod_a, 'ordered_qty', 2, 'unit_cost', 1500)),
+-    NULL, v_wh_a, 'credito', 30, current_date + 5, 'OC para cancelar', true
++    NULL, v_wh_a, 'credito', 30, current_date + 5, 'OC para cancelar', false
+   );
+   PERFORM public.cambiar_estado_orden_compra(v_po_cancel_a, 'cancelled');
+ 
+   RESET ROLE;
+ 
++  -- Dueño A aprueba las 3 órdenes activas creadas por Comprador A
++  PERFORM set_config('request.jwt.claim.sub', v_u_dueno_a::text, true);
++  PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', v_u_dueno_a::text, 'role', 'authenticated')::text, true);
++  SET LOCAL ROLE authenticated;
++  PERFORM public.cambiar_estado_orden_compra(v_po_no_wh_a, 'approved');
++  PERFORM public.cambiar_estado_orden_compra(v_po_br1_a, 'approved');
++  PERFORM public.cambiar_estado_orden_compra(v_po_br1_wh_a, 'approved');
++  RESET ROLE;
++
+   SELECT id INTO v_po_no_wh_item_a  FROM public.purchase_order_items WHERE po_id = v_po_no_wh_a  LIMIT 1;
+   SELECT id INTO v_po_br1_item_a    FROM public.purchase_order_items WHERE po_id = v_po_br1_a    LIMIT 1;
+   SELECT id INTO v_po_br1_wh_item_a FROM public.purchase_order_items WHERE po_id = v_po_br1_wh_a LIMIT 1;
+   SELECT id INTO v_po_cancel_item_a FROM public.purchase_order_items WHERE po_id = v_po_cancel_a LIMIT 1;
+ 
+-  -- Orden apuntando a bodega que luego queda inactiva antes de la recepción
++  -- Orden apuntando a bodega que luego queda inactiva antes de la recepción (crea Comprador, aprueba Dueño)
+   UPDATE public.warehouses SET active = true WHERE id = v_wh_inact_a;
+   PERFORM set_config('request.jwt.claim.sub', v_u_compra_a::text, true);
+   PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', v_u_compra_a::text, 'role', 'authenticated')::text, true);
+@@ -957,9 +1030,14 @@ BEGIN
+   v_po_inact_target_a := public.crear_orden_compra(
+     v_sup_a,
+     jsonb_build_array(jsonb_build_object('product_id', v_prod_a, 'ordered_qty', 2, 'unit_cost', 1500)),
+-    v_br_a1, v_wh_inact_a, 'credito', 30, current_date + 5, 'OC con bodega luego desactivada', true
++    v_br_a1, v_wh_inact_a, 'credito', 30, current_date + 5, 'OC con bodega luego desactivada', false
+   );
+   RESET ROLE;
++  PERFORM set_config('request.jwt.claim.sub', v_u_dueno_a::text, true);
++  PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', v_u_dueno_a::text, 'role', 'authenticated')::text, true);
++  SET LOCAL ROLE authenticated;
++  PERFORM public.cambiar_estado_orden_compra(v_po_inact_target_a, 'approved');
++  RESET ROLE;
+   UPDATE public.warehouses SET active = false WHERE id = v_wh_inact_a;
+   SELECT id INTO v_po_inact_item_a FROM public.purchase_order_items WHERE po_id = v_po_inact_target_a LIMIT 1;
+ 
+@@ -1666,7 +1744,537 @@ BEGIN
+   ASSERT public._supplier_owed(v_co_a, v_sup_a) = v_snap_cxp_owed + 6000 + 7500 + 4500,
+     'FALLO OC: CxP del proveedor debe reflejar exactamente las compras a crédito recibidas (+18000)';
+ 
+-  RAISE NOTICE 'ETAPA 1 TEST SUITE OK: todas las aserciones de permisos, separación de funciones, bodega/sucursal OC, atomicidad, acc_post_entry, perfil activo, aislamiento multiempresa y privilegios aprobaron.';
++  -- ===========================================================================
++  -- PRUEBA 6 (Cierre Bloqueantes 1–5 / Migración 000068):
++  --   6.1 Bloqueante 1: Auditoría obligatoria atómica en acc_close_period y acc_reopen_period
++  --   6.2–6.4 Bloqueante 2: Atomicidad de registrar_pago_proveedor, acc_post_supplier_payment y cxp_save_account
++  --   6.5–6.11 Bloqueantes 3–4: Separación creación/aprobación OC, máquina de estados y recepciones parciales
++  --   6.12–6.14 Bloqueante 5: DML acc_* cerrado a authenticated/anon y platform_admin_company_select (solo lectura propia)
++  -- ===========================================================================
++
++  -- 6.1 Bloqueante 1: Si falla audit_log, acc_reopen_period revierte por completo
++  v_prev_date  := (date_trunc('month', current_date) - interval '1 month')::date;
++  v_prev_year  := extract(year from v_prev_date)::int;
++  v_prev_month := extract(month from v_prev_date)::int;
++  v_prev_start := date_trunc('month', v_prev_date)::date;
++  v_cur_year   := extract(year from current_date)::int;
++  v_cur_month  := extract(month from current_date)::int;
++
++  UPDATE public.acc_settings
++     SET start_date = greatest(start_date, v_prev_start)
++   WHERE company_id = v_co_a;
++
++  PERFORM set_config('request.jwt.claim.sub', v_u_dueno_a::text, true);
++  PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', v_u_dueno_a::text, 'role', 'authenticated')::text, true);
++  SET LOCAL ROLE authenticated;
++
++  v_closing_6_id := public.acc_close_period(v_prev_year, v_prev_month, 'Cierre prueba bloqueante 1', true);
++  ASSERT v_closing_6_id IS NOT NULL, 'FALLO BLOQUEANTE 1: cierre del periodo anterior debe emitir registro acc_closings';
++
++  RESET ROLE;
++
++  -- Forzar fallo controlado en audit_log al reabrir sin tocar migraciones históricas
++  EXECUTE 'ALTER TABLE public.audit_log ADD CONSTRAINT chk_test_block_reopen_audit CHECK (action <> ''reapertura_contable'')';
++
++  PERFORM set_config('request.jwt.claim.sub', v_u_dueno_a::text, true);
++  PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', v_u_dueno_a::text, 'role', 'authenticated')::text, true);
++  SET LOCAL ROLE authenticated;
++
++  v_unexpected_ok := false; v_err_state := NULL; v_err_msg := NULL;
++  BEGIN
++    PERFORM public.acc_reopen_period(v_prev_year, v_prev_month, 'Intento reapertura con fallo audit_log');
++    v_unexpected_ok := true;
++  EXCEPTION WHEN OTHERS THEN
++    GET STACKED DIAGNOSTICS v_err_state = RETURNED_SQLSTATE, v_err_msg = MESSAGE_TEXT;
++  END;
++  IF v_unexpected_ok THEN RAISE EXCEPTION 'FALLO BLOQUEANTE 1: acc_reopen_period NO debe completar si falla audit_log'; END IF;
++  IF v_err_state <> '23514' THEN RAISE EXCEPTION 'FALLO BLOQUEANTE 1 (reopen fallo audit_log): SQLSTATE inesperado [%] %', v_err_state, v_err_msg; END IF;
++
++  RESET ROLE;
++
++  SELECT status INTO v_after_period_status FROM public.acc_periods WHERE company_id = v_co_a AND year = v_prev_year AND month = v_prev_month;
++  SELECT status INTO v_after_closing_status FROM public.acc_closings WHERE id = v_closing_6_id;
++  ASSERT v_after_period_status = 'cerrado' AND v_after_closing_status = 'cerrado',
++    'FALLO ATOMICIDAD BLOQUEANTE 1: fallo en audit_log dejó acc_periods o acc_closings alterados';
++
++  EXECUTE 'ALTER TABLE public.audit_log DROP CONSTRAINT chk_test_block_reopen_audit';
++
++  -- También probar fallo de audit_log en acc_close_period después de reabrir legítimamente
++  PERFORM set_config('request.jwt.claim.sub', v_u_dueno_a::text, true);
++  PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', v_u_dueno_a::text, 'role', 'authenticated')::text, true);
++  SET LOCAL ROLE authenticated;
++
++  PERFORM public.acc_reopen_period(v_prev_year, v_prev_month, 'Reapertura válida tras restaurar audit_log');
++
++  RESET ROLE;
++
++  SELECT status INTO v_after_period_status FROM public.acc_periods WHERE company_id = v_co_a AND year = v_prev_year AND month = v_prev_month;
++  SELECT status INTO v_after_closing_status FROM public.acc_closings WHERE id = v_closing_6_id;
++  SELECT count(*) INTO v_audit_cnt FROM public.audit_log
++   WHERE company_id = v_co_a AND table_name = 'acc_closings' AND record_id = v_closing_6_id AND action = 'reapertura_contable';
++  ASSERT v_after_period_status = 'abierto' AND v_after_closing_status = 'reabierto' AND v_audit_cnt = 1,
++    'FALLO BLOQUEANTE 1: reapertura válida debió actualizar acc_periods/acc_closings y escribir en audit_log';
++
++  EXECUTE 'ALTER TABLE public.audit_log ADD CONSTRAINT chk_test_block_close_audit CHECK (action <> ''cierre_contable'')';
++
++  PERFORM set_config('request.jwt.claim.sub', v_u_dueno_a::text, true);
++  PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', v_u_dueno_a::text, 'role', 'authenticated')::text, true);
++  SET LOCAL ROLE authenticated;
++
++  v_unexpected_ok := false; v_err_state := NULL; v_err_msg := NULL;
++  BEGIN
++    PERFORM public.acc_close_period(v_prev_year, v_prev_month, 'Intento cierre con fallo audit_log', true);
++    v_unexpected_ok := true;
++  EXCEPTION WHEN OTHERS THEN
++    GET STACKED DIAGNOSTICS v_err_state = RETURNED_SQLSTATE, v_err_msg = MESSAGE_TEXT;
++  END;
++  IF v_unexpected_ok THEN RAISE EXCEPTION 'FALLO BLOQUEANTE 1: acc_close_period NO debe completar si falla audit_log'; END IF;
++  IF v_err_state <> '23514' THEN RAISE EXCEPTION 'FALLO BLOQUEANTE 1 (close fallo audit_log): SQLSTATE inesperado [%] %', v_err_state, v_err_msg; END IF;
++
++  RESET ROLE;
++
++  SELECT status INTO v_after_period_status FROM public.acc_periods WHERE company_id = v_co_a AND year = v_prev_year AND month = v_prev_month;
++  SELECT count(*) INTO v_cnt FROM public.acc_closings
++   WHERE company_id = v_co_a AND year = v_prev_year AND month = v_prev_month AND status = 'cerrado';
++  ASSERT v_after_period_status = 'abierto' AND v_cnt = 0,
++    'FALLO ATOMICIDAD BLOQUEANTE 1: fallo en audit_log durante cierre dejó acc_periods o acc_closings alterados';
++
++  EXECUTE 'ALTER TABLE public.audit_log DROP CONSTRAINT chk_test_block_close_audit';
++
++  -- Restaurar start_date original de prueba
++  UPDATE public.acc_settings SET start_date = (current_date - 30) WHERE company_id = v_co_a;
++
++  -- 6.2 Bloqueante 2: Con contabilidad activa en fecha >= start_date, si falta CxP o periodo actual está cerrado,
++  -- registrar_pago_proveedor falla y hace rollback íntegro (supplier_payments, supplier_allocations, cash_entries, acc_entries)
++  DELETE FROM public.cxp_settings WHERE company_id = v_co_a;
++
++  SELECT count(*) INTO v_snap_sp_cnt   FROM public.supplier_payments    WHERE company_id = v_co_a;
++  SELECT count(*) INTO v_snap_sa_cnt   FROM public.supplier_allocations WHERE company_id = v_co_a;
++  SELECT count(*) INTO v_snap_cash_cnt FROM public.cash_entries         WHERE company_id = v_co_a;
++  SELECT count(*) INTO v_snap_acc_cnt  FROM public.acc_entries          WHERE company_id = v_co_a;
++  v_snap_owed_6 := public._supplier_owed(v_co_a, v_sup_a);
++
++  PERFORM set_config('request.jwt.claim.sub', v_u_dueno_a::text, true);
++  PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', v_u_dueno_a::text, 'role', 'authenticated')::text, true);
++  SET LOCAL ROLE authenticated;
++
++  v_unexpected_ok := false; v_err_state := NULL; v_err_msg := NULL;
++  BEGIN
++    PERFORM public.registrar_pago_proveedor(v_sup_a, 500, 'efectivo', 'Falta cuenta CxP', gen_random_uuid());
++    v_unexpected_ok := true;
++  EXCEPTION WHEN OTHERS THEN
++    GET STACKED DIAGNOSTICS v_err_state = RETURNED_SQLSTATE, v_err_msg = MESSAGE_TEXT;
++  END;
++  IF v_unexpected_ok THEN RAISE EXCEPTION 'FALLO BLOQUEANTE 2: registrar_pago_proveedor NO debe completar si falta cxp_settings con contabilidad activa'; END IF;
++  IF v_err_state <> 'P0001' OR coalesce(v_err_msg, '') NOT ILIKE '%Falta configurar la cuenta por pagar%' THEN
++    RAISE EXCEPTION 'FALLO BLOQUEANTE 2 (falta CxP): error inesperado [%] %', v_err_state, v_err_msg;
++  END IF;
++
++  RESET ROLE;
++
++  SELECT count(*) INTO v_after_sp_cnt   FROM public.supplier_payments    WHERE company_id = v_co_a;
++  SELECT count(*) INTO v_after_sa_cnt   FROM public.supplier_allocations WHERE company_id = v_co_a;
++  SELECT count(*) INTO v_after_cash_cnt FROM public.cash_entries         WHERE company_id = v_co_a;
++  SELECT count(*) INTO v_after_acc_cnt  FROM public.acc_entries          WHERE company_id = v_co_a;
++  ASSERT v_after_sp_cnt = v_snap_sp_cnt AND v_after_sa_cnt = v_snap_sa_cnt
++     AND v_after_cash_cnt = v_snap_cash_cnt AND v_after_acc_cnt = v_snap_acc_cnt
++     AND public._supplier_owed(v_co_a, v_sup_a) = v_snap_owed_6,
++    'FALLO ATOMICIDAD BLOQUEANTE 2 (falta CxP): pago fallido dejó rastro en supplier_payments/allocations/caja/CxP';
++
++  -- 6.2b Restaurar CxP pero cerrar el periodo actual -> registrar_pago_proveedor también revierte todo
++  INSERT INTO public.cxp_settings (company_id, account_id)
++  VALUES (v_co_a, v_acc_cxp_a)
++  ON CONFLICT (company_id) DO UPDATE SET account_id = EXCLUDED.account_id;
++
++  INSERT INTO public.acc_periods (company_id, year, month, status, closed_at, closed_by)
++  VALUES (v_co_a, v_cur_year, v_cur_month, 'cerrado', now(), v_u_dueno_a)
++  ON CONFLICT (company_id, year, month) DO UPDATE SET status = 'cerrado', closed_at = now(), closed_by = v_u_dueno_a;
++
++  PERFORM set_config('request.jwt.claim.sub', v_u_dueno_a::text, true);
++  PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', v_u_dueno_a::text, 'role', 'authenticated')::text, true);
++  SET LOCAL ROLE authenticated;
++
++  v_unexpected_ok := false; v_err_state := NULL; v_err_msg := NULL;
++  BEGIN
++    PERFORM public.registrar_pago_proveedor(v_sup_a, 500, 'efectivo', 'Periodo actual cerrado', gen_random_uuid());
++    v_unexpected_ok := true;
++  EXCEPTION WHEN OTHERS THEN
++    GET STACKED DIAGNOSTICS v_err_state = RETURNED_SQLSTATE, v_err_msg = MESSAGE_TEXT;
++  END;
++  IF v_unexpected_ok THEN RAISE EXCEPTION 'FALLO BLOQUEANTE 2: registrar_pago_proveedor NO debe completar con periodo contable actual cerrado'; END IF;
++  IF v_err_state <> 'P0001' OR coalesce(v_err_msg, '') NOT ILIKE '%cerrado%' THEN
++    RAISE EXCEPTION 'FALLO BLOQUEANTE 2 (periodo cerrado): error inesperado [%] %', v_err_state, v_err_msg;
++  END IF;
++
++  RESET ROLE;
++
++  SELECT count(*) INTO v_after_sp_cnt   FROM public.supplier_payments    WHERE company_id = v_co_a;
++  SELECT count(*) INTO v_after_sa_cnt   FROM public.supplier_allocations WHERE company_id = v_co_a;
++  SELECT count(*) INTO v_after_cash_cnt FROM public.cash_entries         WHERE company_id = v_co_a;
++  SELECT count(*) INTO v_after_acc_cnt  FROM public.acc_entries          WHERE company_id = v_co_a;
++  ASSERT v_after_sp_cnt = v_snap_sp_cnt AND v_after_sa_cnt = v_snap_sa_cnt
++     AND v_after_cash_cnt = v_snap_cash_cnt AND v_after_acc_cnt = v_snap_acc_cnt
++     AND public._supplier_owed(v_co_a, v_sup_a) = v_snap_owed_6,
++    'FALLO ATOMICIDAD BLOQUEANTE 2 (periodo cerrado): pago fallido dejó rastro en supplier_payments/allocations/caja/CxP';
++
++  DELETE FROM public.acc_periods WHERE company_id = v_co_a AND year = v_cur_year AND month = v_cur_month;
++
++  -- 6.3 Bloqueante 2 (omisión legítima): si acc_settings.active = false O payment_date < start_date, el pago SÍ completa sin asiento contable
++  UPDATE public.acc_settings SET active = false WHERE company_id = v_co_a;
++  DELETE FROM public.cxp_settings WHERE company_id = v_co_a;
++
++  PERFORM set_config('request.jwt.claim.sub', v_u_dueno_a::text, true);
++  PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', v_u_dueno_a::text, 'role', 'authenticated')::text, true);
++  SET LOCAL ROLE authenticated;
++
++  v_pay_id_6 := public.registrar_pago_proveedor(v_sup_a, 500, 'efectivo', 'Omisión legítima contabilidad inactiva', gen_random_uuid());
++  ASSERT v_pay_id_6 IS NOT NULL, 'FALLO BLOQUEANTE 2: pago con contabilidad inactiva debe permitirse';
++
++  RESET ROLE;
++
++  SELECT count(*) INTO v_after_acc_cnt FROM public.acc_entries
++   WHERE company_id = v_co_a AND source_type = 'pago_proveedor' AND source_id = v_pay_id_6;
++  ASSERT v_after_acc_cnt = 0 AND public._supplier_owed(v_co_a, v_sup_a) = v_snap_owed_6 - 500,
++    'FALLO BLOQUEANTE 2: con contabilidad inactiva no debe crear asiento y sí disminuir CxP en 500';
++
++  UPDATE public.acc_settings SET active = true, start_date = (current_date + 7) WHERE company_id = v_co_a;
++
++  PERFORM set_config('request.jwt.claim.sub', v_u_dueno_a::text, true);
++  PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', v_u_dueno_a::text, 'role', 'authenticated')::text, true);
++  SET LOCAL ROLE authenticated;
++
++  v_pay_id_6 := public.registrar_pago_proveedor(v_sup_a, 500, 'efectivo', 'Omisión legítima fecha < start_date', gen_random_uuid());
++  ASSERT v_pay_id_6 IS NOT NULL, 'FALLO BLOQUEANTE 2: pago anterior a start_date debe permitirse';
++
++  RESET ROLE;
++
++  SELECT count(*) INTO v_after_acc_cnt FROM public.acc_entries
++   WHERE company_id = v_co_a AND source_type = 'pago_proveedor' AND source_id = v_pay_id_6;
++  ASSERT v_after_acc_cnt = 0 AND public._supplier_owed(v_co_a, v_sup_a) = v_snap_owed_6 - 1000,
++    'FALLO BLOQUEANTE 2: con fecha < start_date no debe crear asiento y sí disminuir CxP en 500 adicionales';
++
++  -- 6.4 Bloqueante 2 (cxp_save_account): si acc_post_pending falla con contabilidad activa, propaga error y revierte cxp_settings
++  UPDATE public.acc_settings SET active = true, start_date = (current_date - 30) WHERE company_id = v_co_a;
++  INSERT INTO public.acc_periods (company_id, year, month, status, closed_at, closed_by)
++  VALUES (v_co_a, v_cur_year, v_cur_month, 'cerrado', now(), v_u_dueno_a)
++  ON CONFLICT (company_id, year, month) DO UPDATE SET status = 'cerrado', closed_at = now(), closed_by = v_u_dueno_a;
++
++  SELECT account_id INTO v_snap_cxp_acc FROM public.cxp_settings WHERE company_id = v_co_a;
++
++  PERFORM set_config('request.jwt.claim.sub', v_u_dueno_a::text, true);
++  PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', v_u_dueno_a::text, 'role', 'authenticated')::text, true);
++  SET LOCAL ROLE authenticated;
++
++  v_unexpected_ok := false; v_err_state := NULL; v_err_msg := NULL;
++  BEGIN
++    PERFORM public.cxp_save_account(v_acc_cxp_a);
++    v_unexpected_ok := true;
++  EXCEPTION WHEN OTHERS THEN
++    GET STACKED DIAGNOSTICS v_err_state = RETURNED_SQLSTATE, v_err_msg = MESSAGE_TEXT;
++  END;
++  IF v_unexpected_ok THEN RAISE EXCEPTION 'FALLO BLOQUEANTE 2: cxp_save_account NO debe silenciar fallos de acc_post_pending'; END IF;
++  IF v_err_state <> 'P0001' OR coalesce(v_err_msg, '') NOT ILIKE '%cerrado%' THEN
++    RAISE EXCEPTION 'FALLO BLOQUEANTE 2 (cxp_save_account fallo acc_post_pending): error inesperado [%] %', v_err_state, v_err_msg;
++  END IF;
++
++  RESET ROLE;
++
++  SELECT account_id INTO v_snap_cxp_acc FROM public.cxp_settings WHERE company_id = v_co_a;
++  ASSERT v_snap_cxp_acc IS NULL,
++    'FALLO ATOMICIDAD BLOQUEANTE 2: cxp_save_account dejó alterada cxp_settings tras fallo de acc_post_pending';
++
++  DELETE FROM public.acc_periods WHERE company_id = v_co_a AND year = v_cur_year AND month = v_cur_month;
++  PERFORM set_config('request.jwt.claim.sub', v_u_dueno_a::text, true);
++  PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', v_u_dueno_a::text, 'role', 'authenticated')::text, true);
++  SET LOCAL ROLE authenticated;
++  ASSERT public.cxp_save_account(v_acc_cxp_a) IS NOT NULL,
++    'FALLO BLOQUEANTE 2: cxp_save_account debe completar correctamente con periodo abierto';
++  RESET ROLE;
++
++  -- 6.5–6.11 Bloqueantes 3 y 4: Separación creación/aprobación OC, máquina de estados estricta y recepciones parciales
++  PERFORM set_config('request.jwt.claim.sub', v_u_compra_a::text, true);
++  PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', v_u_compra_a::text, 'role', 'authenticated')::text, true);
++  SET LOCAL ROLE authenticated;
++
++  v_po_6_id := public.crear_orden_compra(
++    v_sup_a,
++    jsonb_build_array(jsonb_build_object('product_id', v_prod_a, 'ordered_qty', 10, 'unit_cost', 2000)),
++    v_br_a1, v_wh_br1, 'credito', 30, current_date + 5, 'OC ciclo completo bloqueantes 3-4', false
++  );
++  v_po_6_cancel_id := public.crear_orden_compra(
++    v_sup_a,
++    jsonb_build_array(jsonb_build_object('product_id', v_prod_a, 'ordered_qty', 2, 'unit_cost', 2000)),
++    NULL, v_wh_a, 'credito', 30, current_date + 5, 'OC cancelable en borrador', false
++  );
++
++  -- 6.7 Transición ilegal: draft -> sent bloqueada
++  v_unexpected_ok := false; v_err_state := NULL; v_err_msg := NULL;
++  BEGIN
++    PERFORM public.cambiar_estado_orden_compra(v_po_6_id, 'sent');
++    v_unexpected_ok := true;
++  EXCEPTION WHEN OTHERS THEN
++    GET STACKED DIAGNOSTICS v_err_state = RETURNED_SQLSTATE, v_err_msg = MESSAGE_TEXT;
++  END;
++  IF v_unexpected_ok THEN RAISE EXCEPTION 'FALLO BLOQUEANTE 4: no debe pasar de draft a sent sin aprobación previa'; END IF;
++  IF v_err_state <> 'P0001' OR coalesce(v_err_msg, '') NOT ILIKE '%aprobarse%' THEN
++    RAISE EXCEPTION 'FALLO BLOQUEANTE 4 (draft->sent): error inesperado [%] %', v_err_state, v_err_msg;
++  END IF;
++
++  -- Cancelación legítima desde draft
++  PERFORM public.cambiar_estado_orden_compra(v_po_6_cancel_id, 'cancelled');
++
++  -- Transición ilegal desde cancelled -> approved/sent/cancelled
++  v_unexpected_ok := false; v_err_state := NULL; v_err_msg := NULL;
++  BEGIN
++    PERFORM public.cambiar_estado_orden_compra(v_po_6_cancel_id, 'sent');
++    v_unexpected_ok := true;
++  EXCEPTION WHEN OTHERS THEN
++    GET STACKED DIAGNOSTICS v_err_state = RETURNED_SQLSTATE, v_err_msg = MESSAGE_TEXT;
++  END;
++  IF v_unexpected_ok THEN RAISE EXCEPTION 'FALLO BLOQUEANTE 4: orden cancelada NO debe transicionar'; END IF;
++  IF v_err_state <> 'P0001' OR coalesce(v_err_msg, '') NOT ILIKE '%cerrada o cancelada%' THEN
++    RAISE EXCEPTION 'FALLO BLOQUEANTE 4 (cancelled->sent): error inesperado [%] %', v_err_state, v_err_msg;
++  END IF;
++
++  RESET ROLE;
++
++  -- 6.6 Gerente NO puede aprobar OC (consulta únicamente según matriz) -> 42501
++  PERFORM set_config('request.jwt.claim.sub', v_u_gerente_a::text, true);
++  PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', v_u_gerente_a::text, 'role', 'authenticated')::text, true);
++  SET LOCAL ROLE authenticated;
++
++  v_unexpected_ok := false; v_err_state := NULL; v_err_msg := NULL;
++  BEGIN
++    PERFORM public.cambiar_estado_orden_compra(v_po_6_id, 'approved');
++    v_unexpected_ok := true;
++  EXCEPTION WHEN OTHERS THEN
++    GET STACKED DIAGNOSTICS v_err_state = RETURNED_SQLSTATE, v_err_msg = MESSAGE_TEXT;
++  END;
++  IF v_unexpected_ok THEN RAISE EXCEPTION 'FALLO BLOQUEANTE 3: gerente NO debe aprobar órdenes de compra'; END IF;
++  IF v_err_state <> '42501' THEN RAISE EXCEPTION 'FALLO BLOQUEANTE 3 (gerente aprobar OC): SQLSTATE inesperado [%] %', v_err_state, v_err_msg; END IF;
++
++  RESET ROLE;
++
++  -- 6.8 Admin_empresa SÍ aprueba draft -> approved y bloquea approved -> approved
++  PERFORM set_config('request.jwt.claim.sub', v_u_adm_emp_a::text, true);
++  PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', v_u_adm_emp_a::text, 'role', 'authenticated')::text, true);
++  SET LOCAL ROLE authenticated;
++
++  PERFORM public.cambiar_estado_orden_compra(v_po_6_id, 'approved');
++
++  v_unexpected_ok := false; v_err_state := NULL; v_err_msg := NULL;
++  BEGIN
++    PERFORM public.cambiar_estado_orden_compra(v_po_6_id, 'approved');
++    v_unexpected_ok := true;
++  EXCEPTION WHEN OTHERS THEN
++    GET STACKED DIAGNOSTICS v_err_state = RETURNED_SQLSTATE, v_err_msg = MESSAGE_TEXT;
++  END;
++  IF v_unexpected_ok THEN RAISE EXCEPTION 'FALLO BLOQUEANTE 4: no debe re-aprobar orden ya aprobada'; END IF;
++  IF v_err_state <> 'P0001' OR coalesce(v_err_msg, '') NOT ILIKE '%Transición inválida%' THEN
++    RAISE EXCEPTION 'FALLO BLOQUEANTE 4 (approved->approved): error inesperado [%] %', v_err_state, v_err_msg;
++  END IF;
++
++  RESET ROLE;
++
++  -- 6.9 Comprador marca approved -> sent y no puede retroceder sent -> approved
++  PERFORM set_config('request.jwt.claim.sub', v_u_compra_a::text, true);
++  PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', v_u_compra_a::text, 'role', 'authenticated')::text, true);
++  SET LOCAL ROLE authenticated;
++
++  PERFORM public.cambiar_estado_orden_compra(v_po_6_id, 'sent');
++
++  RESET ROLE;
++
++  PERFORM set_config('request.jwt.claim.sub', v_u_dueno_a::text, true);
++  PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', v_u_dueno_a::text, 'role', 'authenticated')::text, true);
++  SET LOCAL ROLE authenticated;
++
++  v_unexpected_ok := false; v_err_state := NULL; v_err_msg := NULL;
++  BEGIN
++    PERFORM public.cambiar_estado_orden_compra(v_po_6_id, 'approved');
++    v_unexpected_ok := true;
++  EXCEPTION WHEN OTHERS THEN
++    GET STACKED DIAGNOSTICS v_err_state = RETURNED_SQLSTATE, v_err_msg = MESSAGE_TEXT;
++  END;
++  IF v_unexpected_ok THEN RAISE EXCEPTION 'FALLO BLOQUEANTE 4: orden sent NO puede retroceder a approved'; END IF;
++  IF v_err_state <> 'P0001' OR coalesce(v_err_msg, '') NOT ILIKE '%Una orden enviada%' THEN
++    RAISE EXCEPTION 'FALLO BLOQUEANTE 4 (sent->approved): error inesperado [%] %', v_err_state, v_err_msg;
++  END IF;
++
++  RESET ROLE;
++
++  -- 6.10 Dos recepciones parciales sucesivas (4 + 6 = 10) -> partial -> received + bloqueo de cancelación en partial
++  SELECT id INTO v_po_6_item FROM public.purchase_order_items WHERE po_id = v_po_6_id LIMIT 1;
++  SELECT stock INTO v_snap_prod_stock FROM public.products WHERE id = v_prod_a AND company_id = v_co_a;
++  SELECT coalesce(quantity, 0) INTO v_stock_wh_br1
++    FROM public.warehouse_stock WHERE company_id = v_co_a AND warehouse_id = v_wh_br1 AND product_id = v_prod_a;
++  v_snap_owed_6 := public._supplier_owed(v_co_a, v_sup_a);
++
++  PERFORM set_config('request.jwt.claim.sub', v_u_almacen_a::text, true);
++  PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', v_u_almacen_a::text, 'role', 'authenticated')::text, true);
++  SET LOCAL ROLE authenticated;
++
++  ASSERT public.recibir_orden_compra(
++    v_po_6_id, NULL,
++    jsonb_build_array(jsonb_build_object('item_id', v_po_6_item, 'received_now', 4)),
++    NULL, NULL
++  ) IS NOT NULL, 'FALLO BLOQUEANTE 4: primera recepción parcial debe ser exitosa';
++
++  RESET ROLE;
++
++  SELECT status INTO v_after_po_status FROM public.purchase_orders WHERE id = v_po_6_id;
++  SELECT received_qty INTO v_after_item_rec FROM public.purchase_order_items WHERE id = v_po_6_item;
++  ASSERT v_after_po_status = 'partial' AND v_after_item_rec = 4,
++    'FALLO BLOQUEANTE 4: OC debió quedar en partial con received_qty = 4';
++
++  -- Bloqueo estricto de cancelación/transición sobre OC en partial
++  PERFORM set_config('request.jwt.claim.sub', v_u_dueno_a::text, true);
++  PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', v_u_dueno_a::text, 'role', 'authenticated')::text, true);
++  SET LOCAL ROLE authenticated;
++
++  v_unexpected_ok := false; v_err_state := NULL; v_err_msg := NULL;
++  BEGIN
++    PERFORM public.cambiar_estado_orden_compra(v_po_6_id, 'cancelled');
++    v_unexpected_ok := true;
++  EXCEPTION WHEN OTHERS THEN
++    GET STACKED DIAGNOSTICS v_err_state = RETURNED_SQLSTATE, v_err_msg = MESSAGE_TEXT;
++  END;
++  IF v_unexpected_ok THEN RAISE EXCEPTION 'FALLO BLOQUEANTE 4: OC en estado partial NO debe poder cancelarse'; END IF;
++  IF v_err_state <> 'P0001' OR coalesce(v_err_msg, '') NOT ILIKE '%recepción parcial%' THEN
++    RAISE EXCEPTION 'FALLO BLOQUEANTE 4 (partial->cancelled): error inesperado [%] %', v_err_state, v_err_msg;
++  END IF;
++
++  RESET ROLE;
++
++  -- Segunda recepción parcial (6 unidades restantes) -> received con acumulación exacta (+10 total, +20000 CxP)
++  PERFORM set_config('request.jwt.claim.sub', v_u_almacen_a::text, true);
++  PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', v_u_almacen_a::text, 'role', 'authenticated')::text, true);
++  SET LOCAL ROLE authenticated;
++
++  ASSERT public.recibir_orden_compra(
++    v_po_6_id, NULL,
++    jsonb_build_array(jsonb_build_object('item_id', v_po_6_item, 'received_now', 6)),
++    NULL, NULL
++  ) IS NOT NULL, 'FALLO BLOQUEANTE 4: segunda recepción parcial debe completar la orden';
++
++  RESET ROLE;
++
++  SELECT status INTO v_after_po_status FROM public.purchase_orders WHERE id = v_po_6_id;
++  SELECT received_qty INTO v_after_item_rec FROM public.purchase_order_items WHERE id = v_po_6_item;
++  SELECT stock INTO v_after_prod_stock FROM public.products WHERE id = v_prod_a AND company_id = v_co_a;
++  SELECT count(*) INTO v_cnt FROM public.warehouse_movements
++   WHERE company_id = v_co_a AND reference_type = 'purchase_order' AND reference_id = v_po_6_id;
++  ASSERT v_after_po_status = 'received' AND v_after_item_rec = 10
++     AND v_after_prod_stock = v_snap_prod_stock + 10
++     AND public._supplier_owed(v_co_a, v_sup_a) = v_snap_owed_6 + 20000
++     AND v_cnt = 2,
++    'FALLO BLOQUEANTE 4: recepciones parciales deben acumular inventario (+10), CxP (+20000) y 2 movimientos sin duplicación';
++
++  SELECT coalesce(quantity, 0) INTO v_after_prod_stock
++    FROM public.warehouse_stock WHERE company_id = v_co_a AND warehouse_id = v_wh_br1 AND product_id = v_prod_a;
++  ASSERT v_after_prod_stock = v_stock_wh_br1 + 10,
++    'FALLO BLOQUEANTE 4: warehouse_stock debió acumular exactamente +10 tras las dos recepciones parciales';
++
++  -- 6.11 Orden received no admite más cambios en cambiar_estado_orden_compra
++  PERFORM set_config('request.jwt.claim.sub', v_u_dueno_a::text, true);
++  PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', v_u_dueno_a::text, 'role', 'authenticated')::text, true);
++  SET LOCAL ROLE authenticated;
++
++  v_unexpected_ok := false; v_err_state := NULL; v_err_msg := NULL;
++  BEGIN
++    PERFORM public.cambiar_estado_orden_compra(v_po_6_id, 'cancelled');
++    v_unexpected_ok := true;
++  EXCEPTION WHEN OTHERS THEN
++    GET STACKED DIAGNOSTICS v_err_state = RETURNED_SQLSTATE, v_err_msg = MESSAGE_TEXT;
++  END;
++  IF v_unexpected_ok THEN RAISE EXCEPTION 'FALLO BLOQUEANTE 4: orden received NO debe poder cancelarse'; END IF;
++  IF v_err_state <> 'P0001' OR coalesce(v_err_msg, '') NOT ILIKE '%cerrada o cancelada%' THEN
++    RAISE EXCEPTION 'FALLO BLOQUEANTE 4 (received->cancelled): error inesperado [%] %', v_err_state, v_err_msg;
++  END IF;
++
++  RESET ROLE;
++
++  -- 6.12–6.14 Bloqueante 5: Privilegios directos DML en acc_* revocados + platform_admin limitado a SELECT en propia empresa
++  FOREACH v_tbl IN ARRAY ARRAY[
++    'public.acc_accounts',
++    'public.acc_entries',
++    'public.acc_lines',
++    'public.acc_periods',
++    'public.acc_closings',
++    'public.acc_settings',
++    'public.acc_counters'
++  ] LOOP
++    ASSERT NOT has_table_privilege('authenticated', v_tbl, 'INSERT'),   'FALLO BLOQUEANTE 5: authenticated tiene INSERT en ' || v_tbl;
++    ASSERT NOT has_table_privilege('authenticated', v_tbl, 'UPDATE'),   'FALLO BLOQUEANTE 5: authenticated tiene UPDATE en ' || v_tbl;
++    ASSERT NOT has_table_privilege('authenticated', v_tbl, 'DELETE'),   'FALLO BLOQUEANTE 5: authenticated tiene DELETE en ' || v_tbl;
++    ASSERT NOT has_table_privilege('authenticated', v_tbl, 'TRUNCATE'), 'FALLO BLOQUEANTE 5: authenticated tiene TRUNCATE en ' || v_tbl;
++    ASSERT NOT has_table_privilege('anon',          v_tbl, 'SELECT'),   'FALLO BLOQUEANTE 5: anon tiene SELECT en ' || v_tbl;
++    ASSERT NOT has_table_privilege('anon',          v_tbl, 'INSERT'),   'FALLO BLOQUEANTE 5: anon tiene INSERT en ' || v_tbl;
++  END LOOP;
++  ASSERT NOT has_table_privilege('authenticated', 'public.acc_counters', 'SELECT'),
++    'FALLO BLOQUEANTE 5: authenticated NO debe tener SELECT directo en acc_counters';
++
++  SELECT count(*) INTO v_cnt
++    FROM pg_policies
++   WHERE schemaname = 'public'
++     AND tablename IN ('acc_accounts', 'acc_entries', 'acc_lines', 'acc_periods', 'acc_closings', 'acc_settings')
++     AND policyname = 'platform_admin_company_all';
++  ASSERT v_cnt = 0, 'FALLO BLOQUEANTE 5: no debe quedar ninguna política platform_admin_company_all en tablas acc_*';
++
++  PERFORM set_config('request.jwt.claim.sub', v_u_admin_a::text, true);
++  PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', v_u_admin_a::text, 'role', 'authenticated')::text, true);
++  SET LOCAL ROLE authenticated;
++
++  -- Lectura propia permitida, lectura de Empresa B bloqueada (0 filas)
++  SELECT count(*) INTO v_cnt FROM public.acc_accounts WHERE company_id = v_co_a;
++  ASSERT v_cnt > 0, 'FALLO BLOQUEANTE 5: platform_admin debe conservar SELECT en acc_accounts de su empresa activa';
++  SELECT count(*) INTO v_cnt FROM public.acc_accounts WHERE company_id = v_co_b;
++  ASSERT v_cnt = 0, 'FALLO BLOQUEANTE 5: platform_admin de A NO debe leer acc_accounts de Empresa B';
++  SELECT count(*) INTO v_cnt FROM public.acc_entries WHERE company_id = v_co_b;
++  ASSERT v_cnt = 0, 'FALLO BLOQUEANTE 5: platform_admin de A NO debe leer acc_entries de Empresa B';
++  SELECT count(*) INTO v_cnt FROM public.acc_lines WHERE company_id = v_co_b;
++  ASSERT v_cnt = 0, 'FALLO BLOQUEANTE 5: platform_admin de A NO debe leer acc_lines de Empresa B';
++  SELECT count(*) INTO v_cnt FROM public.acc_settings WHERE company_id = v_co_b;
++  ASSERT v_cnt = 0, 'FALLO BLOQUEANTE 5: platform_admin de A NO debe leer acc_settings de Empresa B';
++
++  -- Escritura directa de platform_admin en tablas acc_* rechazada (42501)
++  v_unexpected_ok := false; v_err_state := NULL; v_err_msg := NULL;
++  BEGIN
++    INSERT INTO public.acc_entries (
++      company_id, number, entry_date, description, source_type, status
++    ) VALUES (
++      v_co_a, 'MAN-INTRUSION-1', current_date, 'Intento inserción directa', 'manual', 'borrador'
++    );
++    v_unexpected_ok := true;
++  EXCEPTION WHEN OTHERS THEN
++    GET STACKED DIAGNOSTICS v_err_state = RETURNED_SQLSTATE, v_err_msg = MESSAGE_TEXT;
++  END;
++  IF v_unexpected_ok THEN RAISE EXCEPTION 'FALLO BLOQUEANTE 5: platform_admin NO debe insertar directamente en acc_entries'; END IF;
++  IF v_err_state <> '42501' THEN RAISE EXCEPTION 'FALLO BLOQUEANTE 5 (INSERT acc_entries): SQLSTATE inesperado [%] %', v_err_state, v_err_msg; END IF;
++
++  v_unexpected_ok := false; v_err_state := NULL; v_err_msg := NULL;
++  BEGIN
++    UPDATE public.acc_settings SET active = false WHERE company_id = v_co_a;
++    v_unexpected_ok := true;
++  EXCEPTION WHEN OTHERS THEN
++    GET STACKED DIAGNOSTICS v_err_state = RETURNED_SQLSTATE, v_err_msg = MESSAGE_TEXT;
++  END;
++  IF v_unexpected_ok THEN RAISE EXCEPTION 'FALLO BLOQUEANTE 5: platform_admin NO debe modificar directamente acc_settings'; END IF;
++  IF v_err_state <> '42501' THEN RAISE EXCEPTION 'FALLO BLOQUEANTE 5 (UPDATE acc_settings): SQLSTATE inesperado [%] %', v_err_state, v_err_msg; END IF;
++
++  v_unexpected_ok := false; v_err_state := NULL; v_err_msg := NULL;
++  BEGIN
++    DELETE FROM public.acc_periods WHERE company_id = v_co_a;
++    v_unexpected_ok := true;
++  EXCEPTION WHEN OTHERS THEN
++    GET STACKED DIAGNOSTICS v_err_state = RETURNED_SQLSTATE, v_err_msg = MESSAGE_TEXT;
++  END;
++  IF v_unexpected_ok THEN RAISE EXCEPTION 'FALLO BLOQUEANTE 5: platform_admin NO debe borrar directamente acc_periods'; END IF;
++  IF v_err_state <> '42501' THEN RAISE EXCEPTION 'FALLO BLOQUEANTE 5 (DELETE acc_periods): SQLSTATE inesperado [%] %', v_err_state, v_err_msg; END IF;
++
++  RESET ROLE;
++
++  RAISE NOTICE 'ETAPA 1 TEST SUITE OK: todas las aserciones de permisos, separación de funciones, auditoría atómica, CxP, máquina de estados OC, recepciones parciales, atomicidad, acc_*, perfil activo, aislamiento multiempresa y privilegios aprobaron.';
+ END $$;
+ 
+ ROLLBACK;
+-- 
+2.34.1
+

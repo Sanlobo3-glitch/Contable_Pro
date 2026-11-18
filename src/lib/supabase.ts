@@ -7012,9 +7012,11 @@ function createMockSupabase(silent = false): SupabaseClient {
         if (trf.status !== 'in_transit') return demoErr('El traslado no está en tránsito')
 
         const srcWh = getTable('warehouses').find(w => w.id === trf.source_warehouse_id)
-        if (!srcWh || !isSameCompany(srcWh, companyId)) {
-          return demoErr('No autorizado: la bodega origen pertenece a otra empresa o no existe')
+        if (!srcWh) return demoErr('La bodega origen del traslado no existe')
+        if (!isSameCompany(srcWh, companyId)) {
+          return demoErr('No autorizado: la bodega origen pertenece a otra empresa')
         }
+        if (srcWh.active === false) return demoErr('La bodega origen del traslado está inactiva')
         const dstWh = getTable('warehouses').find(w => w.id === trf.destination_warehouse_id)
         if (!dstWh) return demoErr('La bodega destino del traslado no existe')
         if (!isSameCompany(dstWh, companyId)) {
@@ -7045,6 +7047,10 @@ function createMockSupabase(silent = false): SupabaseClient {
           const prodRow = prods.find(p => p.id === row.product_id && isSameCompany(p, companyId))
           if (!prodRow) {
             return demoErr('No autorizado: un producto del traslado pertenece a otra empresa o no existe')
+          }
+          const dispatchedQty = Number(row.quantity)
+          if (!Number.isFinite(dispatchedQty) || dispatchedQty <= 0) {
+            return demoErr('Cantidad inválida en el detalle del traslado')
           }
         }
 
@@ -7107,6 +7113,11 @@ function createMockSupabase(silent = false): SupabaseClient {
           const row = existingAll.find(e => e.product_id === prodId && isSameCompany(e, companyId))
           if (!row) return demoErr('Producto no pertenece al traslado')
 
+          const dispatchedQty = Number(row.quantity)
+          if (!Number.isFinite(dispatchedQty) || dispatchedQty <= 0) {
+            return demoErr('Cantidad inválida en el detalle del traslado')
+          }
+
           const rec = inc.received_quantity === undefined || inc.received_quantity === null || inc.received_quantity === ''
             ? NaN
             : Number(inc.received_quantity)
@@ -7123,7 +7134,7 @@ function createMockSupabase(silent = false): SupabaseClient {
             rec < 0 ||
             dmg < 0 ||
             mis < 0 ||
-            Math.abs(rec + dmg + mis - Number(row.quantity)) > 0.001
+            Math.abs(rec + dmg + mis - dispatchedQty) > 0.001
           ) {
             return demoErr('La suma de recibido, dañado y faltante debe coincidir con lo despachado')
           }

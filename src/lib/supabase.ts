@@ -6884,15 +6884,97 @@ function createMockSupabase(silent = false): SupabaseClient {
         const auth = requireDemoActor(['admin', 'dueno', 'admin_empresa', 'gerente', 'almacen', 'comprador'])
         if (!auth.ok) return { data: null, error: auth.error }
         const { companyId, uid } = auth.actor
-        const tId = String(args.p_transfer_id || '')
-        const action = String(args.p_action || '')
+        const tId = String(args.p_transfer_id || '').trim()
+        const action = String(args.p_action || '').trim()
+        if (action !== 'dispatch') {
+          return demoErr('Utiliza la recepción detallada para confirmar ingreso en destino')
+        }
+        if (!tId) return demoErr('Traslado no encontrado')
+
         const trf = getTable('inventory_transfers').find(t => t.id === tId && isSameCompany(t, companyId))
         if (!trf) return demoErr('Traslado no encontrado')
-        const items = getTable('inventory_transfer_items').filter(i => i.transfer_id === tId)
-        if (items.length === 0) return demoErr('El traslado no contiene productos')
-        if (action === 'dispatch') {
-          if (trf.status !== 'draft') return demoErr('Solo se pueden despachar traslados en borrador')
-          for (const it of items) {
+        if (trf.status !== 'draft') return demoErr('Solo se pueden despachar traslados en borrador')
+
+        const srcWh = getTable('warehouses').find(w => w.id === trf.source_warehouse_id)
+        if (!srcWh) return demoErr('La bodega origen del traslado no existe')
+        if (!isSameCompany(srcWh, companyId)) {
+          return demoErr('No autorizado: la bodega origen pertenece a otra empresa')
+        }
+        if (srcWh.active === false) return demoErr('La bodega origen del traslado está inactiva')
+
+        const dstWh = getTable('warehouses').find(w => w.id === trf.destination_warehouse_id)
+        if (!dstWh) return demoErr('La bodega destino del traslado no existe')
+        if (!isSameCompany(dstWh, companyId)) {
+          return demoErr('No autorizado: la bodega destino pertenece a otra empresa')
+        }
+        if (dstWh.active === false) return demoErr('La bodega destino del traslado está inactiva')
+        if (trf.source_warehouse_id === trf.destination_warehouse_id) {
+          return demoErr('La bodega origen y destino del traslado deben ser diferentes')
+        }
+
+        const alreadyDispatched = getTable('warehouse_movements').some(
+          m =>
+            isSameCompany(m, companyId) &&
+            m.reference_type === 'inventory_transfer' &&
+            m.reference_id === tId &&
+            m.movement_type === 'exit'
+        )
+        if (alreadyDispatched) {
+          return demoErr('El despacho de este traslado ya fue registrado anteriormente')
+        }
+
+        const allTransferItems = getTable('inventory_transfer_items').filter(i => i.transfer_id === tId)
+        if (allTransferItems.length === 0) return demoErr('El traslado no contiene productos')
+
+        const neededByProd = new Map<string, number>()
+        for (const it of allTransferItems) {
+          if (!isSameCompany(it, companyId)) {
+            return demoErr('No autorizado: un elemento del traslado pertenece a otra empresa')
+          }
+          const prodId = String(it.product_id || '').trim()
+          const prod = prods.find(p => p.id === prodId && isSameCompany(p, companyId))
+          if (!prod) {
+            return demoErr('No autorizado: el producto del traslado no existe o pertenece a otra empresa')
+          }
+          const qty = Number(it.quantity)
+          if (!Number.isFinite(qty) || qty <= 0) {
+            return demoErr('Cantidad inválida en el detalle del traslado')
+          }
+          neededByProd.set(prodId, (neededByProd.get(prodId) || 0) + qty)
+        }
+
+        const wsTable = getTable('warehouse_stock')
+        for (const [prodId, totalNeeded] of neededByProd.entries()) {
+          const ws = wsTable.find(
+            r => isSameCompany(r, companyId) && r.warehouse_id === trf.source_warehouse_id && r.product_id === prodId
+          )
+          const avail = (Number(ws?.quantity) || 0) - (Number(ws?.reserved_quantity) || 0)
+          if (!ws || avail < totalNeeded) {
+            return demoErr(`Stock disponible insuficiente en bodega origen (disponible: ${Math.max(0, avail)})`)
+          }
+        }
+
+        const cloneRow = (r: Row): Row =>
+          typeof structuredClone === 'function' ? structuredClone(r) : JSON.parse(JSON.stringify(r))
+        const txTables = [
+          'products',
+          'warehouse_stock',
+          'warehouse_movements',
+          'warehouse_stock_reservations',
+          'inventory_transfers',
+          'inventory_transfer_items',
+        ]
+        const snapshot: Record<string, Row[]> = {}
+        for (const tbl of txTables) snapshot[tbl] = getTable(tbl).map(cloneRow)
+        const rollbackTransferTx = () => {
+          for (const tbl of txTables) {
+            const arr = getTable(tbl)
+            arr.splice(0, arr.length, ...snapshot[tbl].map(cloneRow))
+          }
+        }
+
+        try {
+          for (const it of allTransferItems) {
             const res = await handleRpc('register_warehouse_movement', {
               p_warehouse_id: trf.source_warehouse_id,
               p_product_id: it.product_id,
@@ -6902,65 +6984,223 @@ function createMockSupabase(silent = false): SupabaseClient {
               p_reference_id: tId,
               p_notes: 'Despacho de traslado entre bodegas',
             })
-            if (res.error) return res
+            if (res.error) {
+              rollbackTransferTx()
+              return res
+            }
           }
           trf.status = 'in_transit'
           trf.approved_by = uid
           trf.approved_at = nowIso()
           trf.updated_at = nowIso()
           return { data: 'Traslado despachado correctamente', error: null }
+        } catch (err) {
+          rollbackTransferTx()
+          return demoErr(err instanceof Error ? err.message : 'Error atómico al despachar el traslado')
         }
-        return demoErr('Utiliza la recepción detallada para confirmar ingreso en destino')
       }
       case 'receive_inventory_transfer': {
         const auth = requireDemoActor(['admin', 'dueno', 'admin_empresa', 'gerente', 'almacen', 'comprador'])
         if (!auth.ok) return { data: null, error: auth.error }
         const { companyId, uid } = auth.actor
-        const tId = String(args.p_transfer_id || '')
+        const tId = String(args.p_transfer_id || '').trim()
+        if (!tId) return demoErr('Traslado no encontrado')
+
         const trf = getTable('inventory_transfers').find(t => t.id === tId && isSameCompany(t, companyId))
         if (!trf) return demoErr('Traslado no encontrado')
+        if (trf.status === 'received') return demoErr('Este traslado ya fue recibido anteriormente')
         if (trf.status !== 'in_transit') return demoErr('El traslado no está en tránsito')
+
+        const srcWh = getTable('warehouses').find(w => w.id === trf.source_warehouse_id)
+        if (!srcWh || !isSameCompany(srcWh, companyId)) {
+          return demoErr('No autorizado: la bodega origen pertenece a otra empresa o no existe')
+        }
+        const dstWh = getTable('warehouses').find(w => w.id === trf.destination_warehouse_id)
+        if (!dstWh) return demoErr('La bodega destino del traslado no existe')
+        if (!isSameCompany(dstWh, companyId)) {
+          return demoErr('No autorizado: la bodega destino pertenece a otra empresa')
+        }
+        if (dstWh.active === false) return demoErr('La bodega destino del traslado está inactiva')
+        if (trf.source_warehouse_id === trf.destination_warehouse_id) {
+          return demoErr('La bodega origen y destino del traslado deben ser diferentes')
+        }
+
+        const alreadyReceived = getTable('warehouse_movements').some(
+          m =>
+            isSameCompany(m, companyId) &&
+            m.reference_type === 'inventory_transfer' &&
+            m.reference_id === tId &&
+            m.movement_type === 'entry'
+        )
+        if (alreadyReceived) {
+          return demoErr('La recepción de este traslado ya fue registrada anteriormente')
+        }
+
+        const existingAll = getTable('inventory_transfer_items').filter(i => i.transfer_id === tId)
+        if (existingAll.length === 0) return demoErr('El traslado no contiene productos')
+        for (const row of existingAll) {
+          if (!isSameCompany(row, companyId)) {
+            return demoErr('No autorizado: un elemento del traslado pertenece a otra empresa')
+          }
+          const prodRow = prods.find(p => p.id === row.product_id && isSameCompany(p, companyId))
+          if (!prodRow) {
+            return demoErr('No autorizado: un producto del traslado pertenece a otra empresa o no existe')
+          }
+        }
+
         const incoming = Array.isArray(args.p_items) ? args.p_items : []
-        const existing = getTable('inventory_transfer_items').filter(i => i.transfer_id === tId)
-        if (incoming.length !== existing.length) {
+        if (incoming.length === 0) {
+          return demoErr('Debes enviar el detalle de recepción')
+        }
+        if (incoming.length !== existingAll.length) {
           return demoErr('Debes informar todos los productos del traslado')
         }
+
+        const seenProducts = new Set<string>()
+        const validatedLines: Array<{
+          row: Row
+          rec: number
+          dmg: number
+          mis: number
+          notes: string | null
+        }> = []
+
         for (const inc of incoming) {
-          const row = existing.find(e => e.product_id === inc.product_id)
+          if (!inc || typeof inc !== 'object') {
+            return demoErr('Elemento de recepción inválido')
+          }
+          if (inc.transfer_id !== undefined && inc.transfer_id !== null && String(inc.transfer_id).trim() !== tId) {
+            return demoErr('El elemento recibido pertenece a otro traslado')
+          }
+          if (inc.company_id !== undefined && inc.company_id !== null && String(inc.company_id).trim() !== companyId) {
+            return demoErr('No autorizado: el elemento recibido pertenece a otra empresa')
+          }
+          const incItemId = inc.item_id !== undefined && inc.item_id !== null
+            ? String(inc.item_id).trim()
+            : inc.id !== undefined && inc.id !== null
+              ? String(inc.id).trim()
+              : ''
+          const prodId = String(inc.product_id || '').trim()
+          if (!prodId) return demoErr('Falta product_id en el detalle de recepción')
+          if (seenProducts.has(prodId)) {
+            return demoErr('Hay productos repetidos en la recepción')
+          }
+          seenProducts.add(prodId)
+
+          const prod = prods.find(p => p.id === prodId && isSameCompany(p, companyId))
+          if (!prod) {
+            return demoErr('No autorizado: el producto no existe o pertenece a otra empresa')
+          }
+
+          if (incItemId) {
+            const explicitItem = getTable('inventory_transfer_items').find(i => i.id === incItemId)
+            if (
+              !explicitItem ||
+              !isSameCompany(explicitItem, companyId) ||
+              explicitItem.transfer_id !== tId ||
+              explicitItem.product_id !== prodId
+            ) {
+              return demoErr('El elemento indicado no pertenece a este traslado o empresa')
+            }
+          }
+
+          const row = existingAll.find(e => e.product_id === prodId && isSameCompany(e, companyId))
           if (!row) return demoErr('Producto no pertenece al traslado')
-          const rec = Number(inc.received_quantity) || 0
-          const dmg = Number(inc.damaged_quantity) || 0
-          const mis = Number(inc.missing_quantity) || 0
-          if (rec < 0 || dmg < 0 || mis < 0 || Math.abs(rec + dmg + mis - Number(row.quantity)) > 0.001) {
+
+          const rec = inc.received_quantity === undefined || inc.received_quantity === null || inc.received_quantity === ''
+            ? NaN
+            : Number(inc.received_quantity)
+          const dmg = inc.damaged_quantity === undefined || inc.damaged_quantity === null || inc.damaged_quantity === ''
+            ? 0
+            : Number(inc.damaged_quantity)
+          const mis = inc.missing_quantity === undefined || inc.missing_quantity === null || inc.missing_quantity === ''
+            ? 0
+            : Number(inc.missing_quantity)
+          if (
+            !Number.isFinite(rec) ||
+            !Number.isFinite(dmg) ||
+            !Number.isFinite(mis) ||
+            rec < 0 ||
+            dmg < 0 ||
+            mis < 0 ||
+            Math.abs(rec + dmg + mis - Number(row.quantity)) > 0.001
+          ) {
             return demoErr('La suma de recibido, dañado y faltante debe coincidir con lo despachado')
           }
-          row.received_quantity = rec
-          row.damaged_quantity = dmg
-          row.missing_quantity = mis
-          row.receipt_notes = inc.notes || null
-          if (rec > 0) {
-            const movRes = await handleRpc('register_warehouse_movement', {
-              p_warehouse_id: trf.destination_warehouse_id,
-              p_product_id: row.product_id,
-              p_movement_type: 'entry',
-              p_quantity: rec,
-              p_reference_type: 'inventory_transfer',
-              p_reference_id: tId,
-              p_notes: inc.notes || 'Recepción de traslado en destino',
-            })
-            if (movRes.error) return movRes
-          }
-          // Si hubo merma/faltante en tránsito, ajustar el consolidado de productos
-          if (dmg + mis > 0) {
-            const prod = prods.find(p => p.id === row.product_id && isSameCompany(p, companyId))
-            if (prod) prod.stock = Math.max(0, (Number(prod.stock) || 0) - (dmg + mis))
+
+          validatedLines.push({
+            row,
+            rec,
+            dmg,
+            mis,
+            notes: inc.notes ? String(inc.notes) : null,
+          })
+        }
+
+        if (seenProducts.size !== existingAll.length) {
+          return demoErr('Debes informar todos los productos del traslado sin duplicados')
+        }
+
+        const cloneRow = (r: Row): Row =>
+          typeof structuredClone === 'function' ? structuredClone(r) : JSON.parse(JSON.stringify(r))
+        const txTables = [
+          'products',
+          'warehouse_stock',
+          'warehouse_movements',
+          'warehouse_stock_reservations',
+          'inventory_transfers',
+          'inventory_transfer_items',
+        ]
+        const snapshot: Record<string, Row[]> = {}
+        for (const tbl of txTables) snapshot[tbl] = getTable(tbl).map(cloneRow)
+        const rollbackReceiveTx = () => {
+          for (const tbl of txTables) {
+            const arr = getTable(tbl)
+            arr.splice(0, arr.length, ...snapshot[tbl].map(cloneRow))
           }
         }
-        trf.status = 'received'
-        trf.received_by = uid
-        trf.received_at = nowIso()
-        trf.updated_at = nowIso()
-        return { data: 'Recepción registrada correctamente', error: null }
+
+        try {
+          for (const line of validatedLines) {
+            const { row, rec, dmg, mis, notes } = line
+            row.received_quantity = rec
+            row.damaged_quantity = dmg
+            row.missing_quantity = mis
+            row.receipt_notes = notes
+            if (rec > 0) {
+              const movRes = await handleRpc('register_warehouse_movement', {
+                p_warehouse_id: trf.destination_warehouse_id,
+                p_product_id: row.product_id,
+                p_movement_type: 'entry',
+                p_quantity: rec,
+                p_reference_type: 'inventory_transfer',
+                p_reference_id: tId,
+                p_notes: notes || 'Recepción de traslado en destino',
+              })
+              if (movRes.error) {
+                rollbackReceiveTx()
+                return movRes
+              }
+            }
+            // Si hubo merma/faltante en tránsito, ajustar el consolidado de productos
+            if (dmg + mis > 0) {
+              const prod = prods.find(p => p.id === row.product_id && isSameCompany(p, companyId))
+              if (!prod) {
+                rollbackReceiveTx()
+                return demoErr('Producto no encontrado al consolidar merma')
+              }
+              prod.stock = Math.max(0, Math.round(((Number(prod.stock) || 0) - (dmg + mis)) * 1000) / 1000)
+            }
+          }
+          trf.status = 'received'
+          trf.received_by = uid
+          trf.received_at = nowIso()
+          trf.updated_at = nowIso()
+          return { data: 'Recepción registrada correctamente', error: null }
+        } catch (err) {
+          rollbackReceiveTx()
+          return demoErr(err instanceof Error ? err.message : 'Error atómico al recibir el traslado')
+        }
       }
       case 'reserve_warehouse_stock': {
         const auth = requireDemoActor(['admin', 'dueno', 'admin_empresa', 'gerente', 'almacen', 'comprador', 'vendedor'])

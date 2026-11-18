@@ -660,6 +660,32 @@ alter table public.purchase_order_counters enable row level security;
 revoke all on table public.purchase_order_counters from public, anon, authenticated;
 grant all on table public.purchase_order_counters to service_role;
 
+-- Comprobación explícita de duplicados históricos antes de crear UNIQUE (company_id, po_number):
+-- si existen duplicados, la migración se detiene sin borrar, renumerar ni sobrescribir órdenes históricas.
+do $$
+declare
+  v_dups text;
+begin
+  select string_agg(
+    format('%s:%s (x%s)', coalesce(company_id::text, '<NULL>'), coalesce(po_number, '<NULL>'), cnt),
+    ', '
+    order by company_id, po_number
+  )
+  into v_dups
+  from (
+    select company_id, po_number, count(*) as cnt
+    from public.purchase_orders
+    group by company_id, po_number
+    having count(*) > 1
+  ) d;
+
+  if v_dups is not null then
+    raise exception
+      'No se puede crear UNIQUE (company_id, po_number) en public.purchase_orders: existen duplicados históricos (%). Resuélvalos manualmente sin borrar ni renumerar órdenes históricas.',
+      v_dups;
+  end if;
+end $$;
+
 do $$
 begin
   if not exists (
@@ -693,6 +719,22 @@ begin
       add constraint uq_purchase_orders_company_po_number unique (company_id, po_number);
   end if;
 end $$;
+
+-- Inicialización idempotente de contadores por empresa sin reiniciar ni retroceder empresas con historial
+insert into public.purchase_order_counters (company_id, last_seq, updated_at)
+select
+  po.company_id,
+  greatest(
+    coalesce(max((regexp_match(po.po_number, '^OC-([0-9]{1,9})$'))[1]::integer), 0),
+    count(*)::integer
+  ) as last_seq,
+  now()
+from public.purchase_orders po
+where po.company_id is not null
+group by po.company_id
+on conflict (company_id) do update
+  set last_seq = greatest(public.purchase_order_counters.last_seq, excluded.last_seq),
+      updated_at = now();
 
 create or replace function public.crear_orden_compra(
   p_supplier_id uuid,
@@ -781,7 +823,9 @@ begin
     end if;
   end if;
 
-  -- Numeración atómica por empresa (tolerante a concurrencia, órdenes históricas o anuladas)
+  -- Numeración atómica por empresa (bloqueo transaccional por empresa + contador atómico)
+  perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended('po_counter:' || v_co::text, 0));
+
   select greatest(
     coalesce((
       select max((regexp_match(po.po_number, '^OC-([0-9]{1,9})$'))[1]::integer)

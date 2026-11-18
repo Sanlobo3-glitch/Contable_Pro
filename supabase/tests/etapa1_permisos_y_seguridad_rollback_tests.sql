@@ -163,8 +163,13 @@ DECLARE
   v_po_6_cancel_id       uuid;
   v_po_6_seq1_id         uuid;
   v_po_6_seq2_id         uuid;
+  v_po_6_seq3_id         uuid;
+  v_po_6_b1_id           uuid;
   v_po_6_num1            text;
   v_po_6_num2            text;
+  v_po_6_num3            text;
+  v_po_6_b1_num          text;
+  v_cnt_b_seq            int;
   v_pay_pre_6            uuid;
   v_sup_debt_6           numeric;
   v_tbl                  text;
@@ -2417,6 +2422,7 @@ BEGIN
 
   -- 6.16 Endurecimiento Bloqueante 3 (migración 000068):
   --      Contador atómico purchase_order_counters cerrado a clientes + numeración monótona por empresa + UNIQUE (company_id, po_number)
+  --      NOTA: la concurrencia real multi-sesión debe probarse con sesiones independientes usando supabase/tests/etapa1_po_concurrency_test.sh
   ASSERT NOT has_table_privilege('authenticated', 'public.purchase_order_counters', 'SELECT'),
     'FALLO 6.16: authenticated NO debe tener SELECT sobre purchase_order_counters';
   ASSERT NOT has_table_privilege('authenticated', 'public.purchase_order_counters', 'INSERT'),
@@ -2454,6 +2460,46 @@ BEGIN
   ASSERT v_po_6_num1 IS NOT NULL AND v_po_6_num2 IS NOT NULL AND v_po_6_num1 <> v_po_6_num2
      AND (regexp_match(v_po_6_num2, '^OC-([0-9]+)$'))[1]::int = (regexp_match(v_po_6_num1, '^OC-([0-9]+)$'))[1]::int + 1,
     format('FALLO 6.16: la numeración de OC debe ser monótona por empresa sin reutilizar/colisionar (%s -> %s)', v_po_6_num1, v_po_6_num2);
+
+  -- Simular contador histórico adelantado (ej. órdenes históricas depuradas/anuladas):
+  -- crear_orden_compra NO debe reiniciar ni retroceder al count(*)
+  UPDATE public.purchase_order_counters
+     SET last_seq = last_seq + 10
+   WHERE company_id = v_co_a;
+
+  PERFORM set_config('request.jwt.claim.sub', v_u_compra_a::text, true);
+  PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', v_u_compra_a::text, 'role', 'authenticated')::text, true);
+  SET LOCAL ROLE authenticated;
+
+  v_po_6_seq3_id := public.crear_orden_compra(
+    v_sup_a,
+    jsonb_build_array(jsonb_build_object('product_id', v_prod_a, 'ordered_qty', 1, 'unit_cost', 1000)),
+    NULL, v_wh_a, 'credito', 30, current_date + 3, 'OC sin reinicio de contador histórico', false
+  );
+
+  RESET ROLE;
+
+  SELECT po_number INTO v_po_6_num3 FROM public.purchase_orders WHERE id = v_po_6_seq3_id AND company_id = v_co_a;
+  ASSERT (regexp_match(v_po_6_num3, '^OC-([0-9]+)$'))[1]::int = (regexp_match(v_po_6_num2, '^OC-([0-9]+)$'))[1]::int + 11,
+    format('FALLO 6.16: el contador no debe reiniciarse a count(*) (%s -> %s)', v_po_6_num2, v_po_6_num3);
+
+  -- Independencia de contador entre Empresa A y Empresa B
+  PERFORM set_config('request.jwt.claim.sub', v_u_dueno_b::text, true);
+  PERFORM set_config('request.jwt.claims', jsonb_build_object('sub', v_u_dueno_b::text, 'role', 'authenticated')::text, true);
+  SET LOCAL ROLE authenticated;
+
+  v_po_6_b1_id := public.crear_orden_compra(
+    v_sup_b,
+    jsonb_build_array(jsonb_build_object('product_id', v_prod_b, 'ordered_qty', 1, 'unit_cost', 1000)),
+    NULL, v_wh_b, 'credito', 30, current_date + 3, 'OC independiente Empresa B', false
+  );
+
+  RESET ROLE;
+
+  SELECT po_number INTO v_po_6_b1_num FROM public.purchase_orders WHERE id = v_po_6_b1_id AND company_id = v_co_b;
+  SELECT last_seq INTO v_cnt_b_seq FROM public.purchase_order_counters WHERE company_id = v_co_b;
+  ASSERT v_po_6_b1_num = 'OC-0001' AND v_cnt_b_seq = 1,
+    format('FALLO 6.16: Empresa B debe iniciar su propio contador independiente en OC-0001 (obtenido %s, seq=%s)', v_po_6_b1_num, v_cnt_b_seq);
 
   v_unexpected_ok := false; v_err_state := NULL; v_err_msg := NULL;
   BEGIN

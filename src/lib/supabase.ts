@@ -6448,6 +6448,30 @@ function createMockSupabase(silent = false): SupabaseClient {
         return { data: { ok: true, product_id: prod.id, image_url: cleanUrl }, error: null }
       }
       case 'crear_orden_compra': {
+        const uid = typeof currentSession?.user?.id === 'string' ? currentSession.user.id.trim() : ''
+        if (!uid) {
+          return { data: null, error: { message: 'No autorizado: sesión sin identidad válida' } }
+        }
+        const actorProfile = getTable('profiles').find(x => typeof x.id === 'string' && x.id.trim() === uid)
+        if (!actorProfile || actorProfile.active !== true) {
+          return { data: null, error: { message: 'No autorizado' } }
+        }
+        const actorRole = typeof actorProfile.role === 'string' ? actorProfile.role.trim().toLowerCase() : ''
+        if (!['admin', 'dueno', 'admin_empresa', 'comprador'].includes(actorRole)) {
+          return { data: null, error: { message: 'No autorizado' } }
+        }
+        const autoApprove = Boolean(args.p_auto_approve)
+        if (autoApprove && !['admin', 'dueno', 'admin_empresa'].includes(actorRole)) {
+          return { data: null, error: { message: `No autorizado: el rol ${actorRole} no puede autoaprobar órdenes de compra` } }
+        }
+        const terms = String(args.p_payment_terms || 'credito').trim() || 'credito'
+        if (!['credito', 'transferencia', 'efectivo', 'tarjeta'].includes(terms)) {
+          return { data: null, error: { message: `Condición de pago inválida en orden de compra: ${terms}` } }
+        }
+        const creditDays = args.p_credit_days === undefined || args.p_credit_days === null ? 30 : Number(args.p_credit_days)
+        if (!Number.isFinite(creditDays) || creditDays < 0 || creditDays > 365) {
+          return { data: null, error: { message: 'Los días de crédito deben estar entre 0 y 365' } }
+        }
         const items = Array.isArray(args.p_items) ? args.p_items : []
         if (items.length === 0) return { data: null, error: { message: 'Agrega al menos un producto a la orden de compra' } }
         const supId = args.p_supplier_id ? String(args.p_supplier_id) : null
@@ -6462,19 +6486,18 @@ function createMockSupabase(silent = false): SupabaseClient {
           const c = Number(it.unit_cost ?? it.cost) || 0
           total += Math.round(q * c * 100) / 100
         }
-        const actorName = currentSession?.user?.user_metadata?.full_name || currentSession?.user?.email || 'Usuario Demo'
-        const autoApprove = Boolean(args.p_auto_approve)
+        const actorName = actorProfile.full_name || currentSession?.user?.user_metadata?.full_name || currentSession?.user?.email || 'Usuario Demo'
         pos.unshift({
           id: poId,
-          company_id: DEMO_COMPANY_ID,
+          company_id: actorProfile.company_id || DEMO_COMPANY_ID,
           po_number: `OC-${String(nextNum).padStart(4, '0')}`,
           supplier_id: supId,
           supplier_name: sup?.name || 'Proveedor general',
           branch_id: args.p_branch_id ? String(args.p_branch_id) : null,
           target_warehouse_id: args.p_target_warehouse_id ? String(args.p_target_warehouse_id) : null,
           status: autoApprove ? 'approved' : 'draft',
-          payment_terms: String(args.p_payment_terms || 'credito'),
-          credit_days: Number(args.p_credit_days) || 30,
+          payment_terms: terms,
+          credit_days: Math.trunc(creditDays),
           expected_date: args.p_expected_date ? String(args.p_expected_date) : null,
           subtotal: Math.round(total * 100) / 100,
           total: Math.round(total * 100) / 100,
@@ -6491,7 +6514,7 @@ function createMockSupabase(silent = false): SupabaseClient {
           const prod = prods.find(p => p.id === it.product_id)
           poItems.push({
             id: genId(),
-            company_id: DEMO_COMPANY_ID,
+            company_id: actorProfile.company_id || DEMO_COMPANY_ID,
             po_id: poId,
             product_id: it.product_id,
             product_name: prod?.name || it.product_name || 'Producto',
@@ -6505,16 +6528,46 @@ function createMockSupabase(silent = false): SupabaseClient {
         return { data: poId, error: null }
       }
       case 'cambiar_estado_orden_compra': {
+        const uid = typeof currentSession?.user?.id === 'string' ? currentSession.user.id.trim() : ''
+        if (!uid) {
+          return { data: null, error: { message: 'No autorizado: sesión sin identidad válida' } }
+        }
+        const actorProfile = getTable('profiles').find(x => typeof x.id === 'string' && x.id.trim() === uid)
+        if (!actorProfile || actorProfile.active !== true) {
+          return { data: null, error: { message: 'No autorizado' } }
+        }
+        const actorRole = typeof actorProfile.role === 'string' ? actorProfile.role.trim().toLowerCase() : ''
+        if (!['admin', 'dueno', 'admin_empresa', 'comprador'].includes(actorRole)) {
+          return { data: null, error: { message: 'No autorizado' } }
+        }
         const poId = String(args.p_po_id || '')
         const status = String(args.p_status || '')
-        const po = getTable('purchase_orders').find(p => p.id === poId)
+        if (status === 'approved' && !['admin', 'dueno', 'admin_empresa'].includes(actorRole)) {
+          return { data: null, error: { message: `No autorizado: el rol ${actorRole} no puede aprobar órdenes de compra` } }
+        }
+        if (!['approved', 'sent', 'cancelled'].includes(status)) {
+          return { data: null, error: { message: 'Estado de transición inválido' } }
+        }
+        const po = getTable('purchase_orders').find(p => p.id === poId && p.company_id === (actorProfile.company_id || DEMO_COMPANY_ID))
         if (!po) return { data: null, error: { message: 'Orden de compra no encontrada' } }
         if (po.status === 'received' || po.status === 'cancelled') {
-          return { data: null, error: { message: 'No se puede modificar una orden cerrada o cancelada' } }
+          return { data: null, error: { message: 'No se puede modificar una orden ya cerrada o cancelada' } }
+        }
+        if (po.status === 'partial') {
+          return { data: null, error: { message: 'No se puede cambiar el estado ni cancelar una orden de compra con recepción parcial' } }
+        }
+        if (po.status === 'draft' && !['approved', 'cancelled'].includes(status)) {
+          return { data: null, error: { message: 'Una orden en borrador debe aprobarse antes de marcarse como enviada' } }
+        }
+        if (po.status === 'approved' && !['sent', 'cancelled'].includes(status)) {
+          return { data: null, error: { message: `Transición inválida desde orden aprobada hacia "${status}"` } }
+        }
+        if (po.status === 'sent' && status !== 'cancelled') {
+          return { data: null, error: { message: 'Una orden enviada solo admite recepción en bodega o cancelación previa a recibir' } }
         }
         po.status = status
         if (status === 'approved') {
-          po.approved_by_name = currentSession?.user?.user_metadata?.full_name || 'Dirección'
+          po.approved_by_name = actorProfile.full_name || currentSession?.user?.user_metadata?.full_name || 'Dirección'
           po.approved_at = nowIso()
         }
         po.updated_at = nowIso()

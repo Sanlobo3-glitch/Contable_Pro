@@ -387,6 +387,10 @@ export function canManagePurchaseOrders(role: Role | undefined): boolean {
   )
 }
 
+export function canApprovePurchaseOrders(role: Role | undefined): boolean {
+  return isCompanyAdminOrOwner(role)
+}
+
 export function canReceivePurchaseOrders(role: Role | undefined): boolean {
   return (
     isCompanyAdminOrOwner(role) ||

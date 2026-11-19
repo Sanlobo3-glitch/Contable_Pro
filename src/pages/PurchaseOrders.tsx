@@ -5,6 +5,7 @@ import {
   isReadOnly,
   isCompanyManager,
   canManagePurchaseOrders,
+  canApprovePurchaseOrders,
   canReceivePurchaseOrders,
   canViewAccounting,
 } from '../lib/auth'
@@ -164,7 +165,7 @@ export default function PurchaseOrders({ onNavigate }: { onNavigate?: (page: str
     canReceivePurchaseOrders(user?.role) ||
     canViewAccounting(user?.role)
   const canEdit = !readOnly && canManagePurchaseOrders(user?.role)
-  const canApprove = !readOnly && canManagePurchaseOrders(user?.role)
+  const canApprove = !readOnly && canApprovePurchaseOrders(user?.role)
   const canReceive = !readOnly && canReceivePurchaseOrders(user?.role)
 
   const companyKey = user?.company_id || user?.id || 'default'
@@ -582,6 +583,19 @@ export default function PurchaseOrders({ onNavigate }: { onNavigate?: (page: str
     if (busyOrderId) return
     if (nextStatus === 'approved' && !canApprove) return
     if (nextStatus !== 'approved' && !canEdit) return
+
+    if (po.status === 'received' || po.status === 'cancelled') {
+      setFeedback({ ok: false, text: 'No se puede modificar una orden ya cerrada o cancelada.' })
+      return
+    }
+    if (po.status === 'partial') {
+      setFeedback({ ok: false, text: 'No se puede cambiar el estado ni cancelar una orden con recepción parcial.' })
+      return
+    }
+    if (po.status === 'draft' && nextStatus === 'sent') {
+      setFeedback({ ok: false, text: 'Una orden en borrador debe aprobarse antes de marcarse como enviada.' })
+      return
+    }
 
     setBusyOrderId(po.id)
     setConfirmCancelId(null)
@@ -1284,7 +1298,7 @@ export default function PurchaseOrders({ onNavigate }: { onNavigate?: (page: str
                             Detalle
                           </button>
 
-                          {po.status !== 'received' && po.status !== 'cancelled' && canEdit && (
+                          {(po.status === 'draft' || po.status === 'approved' || po.status === 'sent') && canEdit && (
                             confirmCancelId === po.id ? (
                               <span className="inline-flex items-center gap-1">
                                 <button

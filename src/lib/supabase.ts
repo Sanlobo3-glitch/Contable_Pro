@@ -78,6 +78,14 @@ function createMockSupabase(silent = false): SupabaseClient {
   }
 
   const tables: Record<string, Row[]> = {
+    companies: [
+      {
+        id: DEMO_COMPANY_ID,
+        name: 'Distribuidora Los Andes C.A.',
+        active: true,
+        created_at: daysAgoIso(90),
+      },
+    ],
     profiles: [
       {
         id: 'demo-dueno-1',
@@ -493,10 +501,10 @@ function createMockSupabase(silent = false): SupabaseClient {
       },
     ],
     categories: [
-      { id: 'cat-1', name: 'Víveres y Granos', description: 'Harinas, arroz, pastas y granos básicos', created_at: daysAgoIso(60) },
-      { id: 'cat-2', name: 'Bebidas y Café', description: 'Café tostado, infusiones y bebidas', created_at: daysAgoIso(60) },
-      { id: 'cat-3', name: 'Lácteos y Refrigerados', description: 'Leches, quesos y derivados con control de lote', created_at: daysAgoIso(60) },
-      { id: 'cat-4', name: 'Hogar y Limpieza', description: 'Detergentes, desinfectantes e insumos', created_at: daysAgoIso(60) },
+      { id: 'cat-1', company_id: DEMO_COMPANY_ID, name: 'Víveres y Granos', description: 'Harinas, arroz, pastas y granos básicos', created_at: daysAgoIso(60) },
+      { id: 'cat-2', company_id: DEMO_COMPANY_ID, name: 'Bebidas y Café', description: 'Café tostado, infusiones y bebidas', created_at: daysAgoIso(60) },
+      { id: 'cat-3', company_id: DEMO_COMPANY_ID, name: 'Lácteos y Refrigerados', description: 'Leches, quesos y derivados con control de lote', created_at: daysAgoIso(60) },
+      { id: 'cat-4', company_id: DEMO_COMPANY_ID, name: 'Hogar y Limpieza', description: 'Detergentes, desinfectantes e insumos', created_at: daysAgoIso(60) },
     ],
     products: [
       {
@@ -706,6 +714,7 @@ function createMockSupabase(silent = false): SupabaseClient {
     product_lots: [
       {
         id: 'lot-demo-1',
+        company_id: DEMO_COMPANY_ID,
         product_id: 'prod-6',
         product_name: 'Leche Entera UHT 1L',
         lot_code: 'L-2026-09A',
@@ -717,6 +726,7 @@ function createMockSupabase(silent = false): SupabaseClient {
       },
       {
         id: 'lot-demo-2',
+        company_id: DEMO_COMPANY_ID,
         product_id: 'prod-5',
         product_name: 'Queso Blanco Pasteurizado 1kg',
         lot_code: 'Q-2026-10B',
@@ -730,6 +740,7 @@ function createMockSupabase(silent = false): SupabaseClient {
     customers: [
       {
         id: 'cust-1',
+        company_id: DEMO_COMPANY_ID,
         name: 'Abasto El Progreso',
         document: 'J-40123456-1',
         email: 'compras@elprogreso.com',
@@ -740,6 +751,7 @@ function createMockSupabase(silent = false): SupabaseClient {
       },
       {
         id: 'cust-2',
+        company_id: DEMO_COMPANY_ID,
         name: 'María Gómez',
         document: 'V-18234567',
         email: 'maria@correo.com',
@@ -750,6 +762,7 @@ function createMockSupabase(silent = false): SupabaseClient {
       },
       {
         id: 'cust-3',
+        company_id: DEMO_COMPANY_ID,
         name: 'Panadería San José',
         document: 'J-41209876-3',
         email: 'admin@panaderiasanjose.com',
@@ -760,6 +773,7 @@ function createMockSupabase(silent = false): SupabaseClient {
       },
       {
         id: 'cust-4',
+        company_id: DEMO_COMPANY_ID,
         name: 'Supermercado La Estación',
         document: 'J-31778210-9',
         email: 'recepcion@laestacion.com',
@@ -770,6 +784,7 @@ function createMockSupabase(silent = false): SupabaseClient {
       },
       {
         id: 'cust-5',
+        company_id: DEMO_COMPANY_ID,
         name: 'Cafetería Central',
         document: 'J-40551290-2',
         email: 'pedidos@cafeteriacentral.com',
@@ -780,18 +795,18 @@ function createMockSupabase(silent = false): SupabaseClient {
       },
     ],
     customer_credit: [
-      { customer_id: 'cust-1', credit_limit: 800, credit_days: 15 },
-      { customer_id: 'cust-2', credit_limit: 150, credit_days: 7 },
-      { customer_id: 'cust-3', credit_limit: 1000, credit_days: 15 },
-      { customer_id: 'cust-4', credit_limit: 1500, credit_days: 30 },
-      { customer_id: 'cust-5', credit_limit: 400, credit_days: 15 },
+      { company_id: DEMO_COMPANY_ID, customer_id: 'cust-1', credit_limit: 800, credit_days: 15 },
+      { company_id: DEMO_COMPANY_ID, customer_id: 'cust-2', credit_limit: 150, credit_days: 7 },
+      { company_id: DEMO_COMPANY_ID, customer_id: 'cust-3', credit_limit: 1000, credit_days: 15 },
+      { company_id: DEMO_COMPANY_ID, customer_id: 'cust-4', credit_limit: 1500, credit_days: 30 },
+      { company_id: DEMO_COMPANY_ID, customer_id: 'cust-5', credit_limit: 400, credit_days: 15 },
     ],
     customer_locations: [
-      { customer_id: 'cust-1', lat: 10.488, lng: -66.879, updated_at: daysAgoIso(10) },
-      { customer_id: 'cust-2', lat: 10.495, lng: -66.865, updated_at: daysAgoIso(10) },
-      { customer_id: 'cust-3', lat: 10.482, lng: -66.888, updated_at: daysAgoIso(10) },
-      { customer_id: 'cust-4', lat: 10.501, lng: -66.872, updated_at: daysAgoIso(10) },
-      { customer_id: 'cust-5', lat: 10.491, lng: -66.854, updated_at: daysAgoIso(10) },
+      { company_id: DEMO_COMPANY_ID, customer_id: 'cust-1', lat: 10.488, lng: -66.879, updated_at: daysAgoIso(10) },
+      { company_id: DEMO_COMPANY_ID, customer_id: 'cust-2', lat: 10.495, lng: -66.865, updated_at: daysAgoIso(10) },
+      { company_id: DEMO_COMPANY_ID, customer_id: 'cust-3', lat: 10.482, lng: -66.888, updated_at: daysAgoIso(10) },
+      { company_id: DEMO_COMPANY_ID, customer_id: 'cust-4', lat: 10.501, lng: -66.872, updated_at: daysAgoIso(10) },
+      { company_id: DEMO_COMPANY_ID, customer_id: 'cust-5', lat: 10.491, lng: -66.854, updated_at: daysAgoIso(10) },
     ],
     visits: [
       {
@@ -881,6 +896,7 @@ function createMockSupabase(silent = false): SupabaseClient {
     sales: [
       {
         id: 'sale-demo-1',
+        company_id: DEMO_COMPANY_ID,
         customer_id: 'cust-1',
         customer_name: 'Abasto El Progreso',
         items: [
@@ -899,6 +915,7 @@ function createMockSupabase(silent = false): SupabaseClient {
       },
       {
         id: 'sale-demo-2',
+        company_id: DEMO_COMPANY_ID,
         customer_id: 'cust-3',
         customer_name: 'Panadería San José',
         items: [
@@ -918,6 +935,7 @@ function createMockSupabase(silent = false): SupabaseClient {
       },
       {
         id: 'sale-demo-3',
+        company_id: DEMO_COMPANY_ID,
         customer_id: 'cust-2',
         customer_name: 'María Gómez',
         items: [
@@ -938,6 +956,7 @@ function createMockSupabase(silent = false): SupabaseClient {
       },
       {
         id: 'sale-demo-yesterday-1',
+        company_id: DEMO_COMPANY_ID,
         customer_id: 'cust-4',
         customer_name: 'Supermercado La Estación',
         items: [
@@ -958,6 +977,7 @@ function createMockSupabase(silent = false): SupabaseClient {
       },
       {
         id: 'sale-demo-yesterday-2',
+        company_id: DEMO_COMPANY_ID,
         customer_id: 'cust-5',
         customer_name: 'Cafetería Central',
         items: [
@@ -976,6 +996,7 @@ function createMockSupabase(silent = false): SupabaseClient {
       },
       {
         id: 'sale-demo-3d',
+        company_id: DEMO_COMPANY_ID,
         customer_id: 'cust-3',
         customer_name: 'Panadería San José',
         items: [
@@ -995,6 +1016,7 @@ function createMockSupabase(silent = false): SupabaseClient {
       },
       {
         id: 'sale-demo-5d',
+        company_id: DEMO_COMPANY_ID,
         customer_id: 'cust-4',
         customer_name: 'Supermercado La Estación',
         items: [
@@ -1015,6 +1037,7 @@ function createMockSupabase(silent = false): SupabaseClient {
       },
       {
         id: 'sale-demo-fiado-overdue',
+        company_id: DEMO_COMPANY_ID,
         customer_id: 'cust-1',
         customer_name: 'Abasto El Progreso',
         items: [
@@ -1034,6 +1057,7 @@ function createMockSupabase(silent = false): SupabaseClient {
       },
       {
         id: 'sale-demo-8d',
+        company_id: DEMO_COMPANY_ID,
         customer_id: 'cust-5',
         customer_name: 'Cafetería Central',
         items: [
@@ -1052,6 +1076,7 @@ function createMockSupabase(silent = false): SupabaseClient {
       },
       {
         id: 'sale-demo-12d',
+        company_id: DEMO_COMPANY_ID,
         customer_id: 'cust-3',
         customer_name: 'Panadería San José',
         items: [
@@ -1072,6 +1097,7 @@ function createMockSupabase(silent = false): SupabaseClient {
     purchases: [
       {
         id: 'pur-demo-1',
+        company_id: DEMO_COMPANY_ID,
         supplier_id: 'sup-1',
         supplier_name: 'Distribuidora Nacional C.A.',
         items: [
@@ -1089,6 +1115,7 @@ function createMockSupabase(silent = false): SupabaseClient {
       },
       {
         id: 'pur-demo-2',
+        company_id: DEMO_COMPANY_ID,
         supplier_id: 'sup-2',
         supplier_name: 'Molinos del Sur C.A.',
         items: [
@@ -1105,6 +1132,7 @@ function createMockSupabase(silent = false): SupabaseClient {
       },
       {
         id: 'pur-demo-3',
+        company_id: DEMO_COMPANY_ID,
         supplier_id: 'sup-3',
         supplier_name: 'Lácteos La Pradera C.A.',
         items: [
@@ -1123,6 +1151,7 @@ function createMockSupabase(silent = false): SupabaseClient {
     cash_entries: [
       {
         id: 'cash-1',
+        company_id: DEMO_COMPANY_ID,
         type: 'ingreso',
         amount: 67.92,
         description: 'Venta FAC-00109 · Abasto El Progreso',
@@ -1132,6 +1161,7 @@ function createMockSupabase(silent = false): SupabaseClient {
       },
       {
         id: 'cash-2',
+        company_id: DEMO_COMPANY_ID,
         type: 'ingreso',
         amount: 104.8,
         description: 'Venta FAC-00107 · Supermercado La Estación',
@@ -1141,6 +1171,7 @@ function createMockSupabase(silent = false): SupabaseClient {
       },
       {
         id: 'cash-3',
+        company_id: DEMO_COMPANY_ID,
         type: 'egreso',
         amount: 18.5,
         description: 'Gasto (Transporte y fletes) - Combustible ruta norte',
@@ -1152,6 +1183,7 @@ function createMockSupabase(silent = false): SupabaseClient {
     cash_movements: [
       {
         id: 'cash-1',
+        company_id: DEMO_COMPANY_ID,
         type: 'ingreso',
         amount: 67.92,
         description: 'Venta FAC-00109 · Abasto El Progreso',
@@ -1161,6 +1193,7 @@ function createMockSupabase(silent = false): SupabaseClient {
       },
       {
         id: 'cash-2',
+        company_id: DEMO_COMPANY_ID,
         type: 'ingreso',
         amount: 104.8,
         description: 'Venta FAC-00107 · Supermercado La Estación',
@@ -1170,6 +1203,7 @@ function createMockSupabase(silent = false): SupabaseClient {
       },
       {
         id: 'cash-3',
+        company_id: DEMO_COMPANY_ID,
         type: 'egreso',
         amount: 18.5,
         description: 'Gasto (Transporte y fletes) - Combustible ruta norte',
@@ -1181,6 +1215,7 @@ function createMockSupabase(silent = false): SupabaseClient {
     kardex: [
       {
         id: 'kdx-1',
+        company_id: DEMO_COMPANY_ID,
         product_id: 'prod-1',
         product_name: 'Café Molido Gourmet 500g',
         type: 'salida',
@@ -1192,6 +1227,7 @@ function createMockSupabase(silent = false): SupabaseClient {
       },
       {
         id: 'kdx-2',
+        company_id: DEMO_COMPANY_ID,
         product_id: 'prod-3',
         product_name: 'Harina de Maíz Precocida 1kg',
         type: 'salida',
@@ -1203,6 +1239,7 @@ function createMockSupabase(silent = false): SupabaseClient {
       },
       {
         id: 'kdx-3',
+        company_id: DEMO_COMPANY_ID,
         product_id: 'prod-1',
         product_name: 'Café Molido Gourmet 500g',
         type: 'entrada',
@@ -1890,20 +1927,26 @@ function createMockSupabase(silent = false): SupabaseClient {
         unit_cost: 0.95,
       },
     ],
+    purchase_order_counters: [
+      { company_id: DEMO_COMPANY_ID, last_seq: 41, updated_at: daysAgoIso(1, 5) },
+    ],
+    purchase_iva_adjustments: [],
+    audit_log: [],
     supplier_credit: [
-      { supplier_id: 'sup-1', credit_limit: 2500, credit_days: 30 },
-      { supplier_id: 'sup-2', credit_limit: 1500, credit_days: 15 },
-      { supplier_id: 'sup-3', credit_limit: 1200, credit_days: 15 },
+      { company_id: DEMO_COMPANY_ID, supplier_id: 'sup-1', credit_limit: 2500, credit_days: 30 },
+      { company_id: DEMO_COMPANY_ID, supplier_id: 'sup-2', credit_limit: 1500, credit_days: 15 },
+      { company_id: DEMO_COMPANY_ID, supplier_id: 'sup-3', credit_limit: 1200, credit_days: 15 },
     ],
     supplier_payments: [],
     supplier_allocations: [],
     credit_payments: [],
     credit_allocations: [],
-    cxp_settings: [{ id: 'cxp-1', account_id: 'acc-5' }],
-    cxc_settings: [{ id: 'cxc-1', account_id: 'acc-3' }],
+    cxp_settings: [{ id: 'cxp-1', company_id: DEMO_COMPANY_ID, account_id: 'acc-5' }],
+    cxc_settings: [{ id: 'cxc-1', company_id: DEMO_COMPANY_ID, account_id: 'acc-3' }],
     acc_settings: [
       {
         id: 'acc-st-1',
+        company_id: DEMO_COMPANY_ID,
         active: true,
         start_date: `${new Date().getFullYear()}-01-01`,
         timezone: 'America/Caracas',
@@ -1921,19 +1964,20 @@ function createMockSupabase(silent = false): SupabaseClient {
       },
     ],
     acc_accounts: [
-      { id: 'acc-1', code: '1101', name: 'Caja General', type: 'activo', nature: 'debito', parent_id: null, is_postable: true, active: true },
-      { id: 'acc-2', code: '1102', name: 'Bancos Moneda Nacional / Divisas', type: 'activo', nature: 'debito', parent_id: null, is_postable: true, active: true },
-      { id: 'acc-3', code: '1103', name: 'Cuentas por Cobrar Clientes', type: 'activo', nature: 'debito', parent_id: null, is_postable: true, active: true },
-      { id: 'acc-4', code: '1104', name: 'Inventario de Mercancías', type: 'activo', nature: 'debito', parent_id: null, is_postable: true, active: true },
-      { id: 'acc-5', code: '2101', name: 'Cuentas por Pagar Proveedores', type: 'pasivo', nature: 'credito', parent_id: null, is_postable: true, active: true },
-      { id: 'acc-6', code: '3101', name: 'Capital Social y Aportes', type: 'patrimonio', nature: 'credito', parent_id: null, is_postable: true, active: true },
-      { id: 'acc-7', code: '4101', name: 'Ingresos por Ventas de Mercancía', type: 'ingreso', nature: 'credito', parent_id: null, is_postable: true, active: true },
-      { id: 'acc-8', code: '5101', name: 'Costo de Mercancía Vendida', type: 'costo', nature: 'debito', parent_id: null, is_postable: true, active: true },
-      { id: 'acc-9', code: '6101', name: 'Gastos Operativos y Servicios', type: 'gasto', nature: 'debito', parent_id: null, is_postable: true, active: true },
+      { id: 'acc-1', company_id: DEMO_COMPANY_ID, code: '1101', name: 'Caja General', type: 'activo', nature: 'debito', parent_id: null, is_postable: true, active: true },
+      { id: 'acc-2', company_id: DEMO_COMPANY_ID, code: '1102', name: 'Bancos Moneda Nacional / Divisas', type: 'activo', nature: 'debito', parent_id: null, is_postable: true, active: true },
+      { id: 'acc-3', company_id: DEMO_COMPANY_ID, code: '1103', name: 'Cuentas por Cobrar Clientes', type: 'activo', nature: 'debito', parent_id: null, is_postable: true, active: true },
+      { id: 'acc-4', company_id: DEMO_COMPANY_ID, code: '1104', name: 'Inventario de Mercancías', type: 'activo', nature: 'debito', parent_id: null, is_postable: true, active: true },
+      { id: 'acc-5', company_id: DEMO_COMPANY_ID, code: '2101', name: 'Cuentas por Pagar Proveedores', type: 'pasivo', nature: 'credito', parent_id: null, is_postable: true, active: true },
+      { id: 'acc-6', company_id: DEMO_COMPANY_ID, code: '3101', name: 'Capital Social y Aportes', type: 'patrimonio', nature: 'credito', parent_id: null, is_postable: true, active: true },
+      { id: 'acc-7', company_id: DEMO_COMPANY_ID, code: '4101', name: 'Ingresos por Ventas de Mercancía', type: 'ingreso', nature: 'credito', parent_id: null, is_postable: true, active: true },
+      { id: 'acc-8', company_id: DEMO_COMPANY_ID, code: '5101', name: 'Costo de Mercancía Vendida', type: 'costo', nature: 'debito', parent_id: null, is_postable: true, active: true },
+      { id: 'acc-9', company_id: DEMO_COMPANY_ID, code: '6101', name: 'Gastos Operativos y Servicios', type: 'gasto', nature: 'debito', parent_id: null, is_postable: true, active: true },
     ],
     acc_entries: [
       {
         id: 'ae-1',
+        company_id: DEMO_COMPANY_ID,
         number: 'ASI-0001',
         entry_date: `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}-01`,
         description: 'Apertura operativa e inventario inicial de demostración',
@@ -1942,6 +1986,7 @@ function createMockSupabase(silent = false): SupabaseClient {
       },
       {
         id: 'ae-2',
+        company_id: DEMO_COMPANY_ID,
         number: 'ASI-0002',
         entry_date: daysFromNowYmd(-3),
         description: 'Ventas consolidadas de ruta y mostrador',
@@ -1950,6 +1995,7 @@ function createMockSupabase(silent = false): SupabaseClient {
       },
       {
         id: 'ae-3',
+        company_id: DEMO_COMPANY_ID,
         number: 'ASI-0003',
         entry_date: daysFromNowYmd(0),
         description: 'Registro de servicios de internet y gastos operativos',
@@ -1958,19 +2004,20 @@ function createMockSupabase(silent = false): SupabaseClient {
       },
     ],
     acc_lines: [
-      { id: 'al-1', entry_id: 'ae-1', account_id: 'acc-1', debit: 450, credit: 0, memo: 'Efectivo inicial en caja', acc_accounts: { code: '1101', name: 'Caja General' } },
-      { id: 'al-2', entry_id: 'ae-1', account_id: 'acc-2', debit: 1200, credit: 0, memo: 'Saldo operativo en bancos', acc_accounts: { code: '1102', name: 'Bancos Moneda Nacional / Divisas' } },
-      { id: 'al-3', entry_id: 'ae-1', account_id: 'acc-4', debit: 850, credit: 0, memo: 'Inventario inicial valorizado', acc_accounts: { code: '1104', name: 'Inventario de Mercancías' } },
-      { id: 'al-4', entry_id: 'ae-1', account_id: 'acc-5', debit: 0, credit: 253, memo: 'Facturas proveedores vigentes', acc_accounts: { code: '2101', name: 'Cuentas por Pagar Proveedores' } },
-      { id: 'al-5', entry_id: 'ae-1', account_id: 'acc-6', debit: 0, credit: 2247, memo: 'Patrimonio neto inicial', acc_accounts: { code: '3101', name: 'Capital Social y Aportes' } },
-      { id: 'al-6', entry_id: 'ae-2', account_id: 'acc-2', debit: 710, credit: 0, memo: 'Cobros ventas en bancos y caja', acc_accounts: { code: '1102', name: 'Bancos Moneda Nacional / Divisas' } },
-      { id: 'al-7', entry_id: 'ae-2', account_id: 'acc-3', debit: 110.9, credit: 0, memo: 'Ventas a crédito clientes', acc_accounts: { code: '1103', name: 'Cuentas por Cobrar Clientes' } },
-      { id: 'al-8', entry_id: 'ae-2', account_id: 'acc-7', debit: 0, credit: 820.9, memo: 'Ingresos brutos por ventas', acc_accounts: { code: '4101', name: 'Ingresos por Ventas de Mercancía' } },
-      { id: 'al-9', entry_id: 'ae-2', account_id: 'acc-8', debit: 534.5, credit: 0, memo: 'Costo de mercancía despachada', acc_accounts: { code: '5101', name: 'Costo de Mercancía Vendida' } },
-      { id: 'al-10', entry_id: 'ae-2', account_id: 'acc-4', debit: 0, credit: 534.5, memo: 'Descargo de inventario', acc_accounts: { code: '1104', name: 'Inventario de Mercancías' } },
-      { id: 'al-11', entry_id: 'ae-3', account_id: 'acc-9', debit: 50.5, credit: 0, memo: 'Servicios y fletes de ruta', acc_accounts: { code: '6101', name: 'Gastos Operativos y Servicios' } },
-      { id: 'al-12', entry_id: 'ae-3', account_id: 'acc-2', debit: 0, credit: 50.5, memo: 'Pago por transferencia y caja', acc_accounts: { code: '1102', name: 'Bancos Moneda Nacional / Divisas' } },
+      { id: 'al-1', company_id: DEMO_COMPANY_ID, entry_id: 'ae-1', account_id: 'acc-1', debit: 450, credit: 0, memo: 'Efectivo inicial en caja', acc_accounts: { code: '1101', name: 'Caja General' } },
+      { id: 'al-2', company_id: DEMO_COMPANY_ID, entry_id: 'ae-1', account_id: 'acc-2', debit: 1200, credit: 0, memo: 'Saldo operativo en bancos', acc_accounts: { code: '1102', name: 'Bancos Moneda Nacional / Divisas' } },
+      { id: 'al-3', company_id: DEMO_COMPANY_ID, entry_id: 'ae-1', account_id: 'acc-4', debit: 850, credit: 0, memo: 'Inventario inicial valorizado', acc_accounts: { code: '1104', name: 'Inventario de Mercancías' } },
+      { id: 'al-4', company_id: DEMO_COMPANY_ID, entry_id: 'ae-1', account_id: 'acc-5', debit: 0, credit: 253, memo: 'Facturas proveedores vigentes', acc_accounts: { code: '2101', name: 'Cuentas por Pagar Proveedores' } },
+      { id: 'al-5', company_id: DEMO_COMPANY_ID, entry_id: 'ae-1', account_id: 'acc-6', debit: 0, credit: 2247, memo: 'Patrimonio neto inicial', acc_accounts: { code: '3101', name: 'Capital Social y Aportes' } },
+      { id: 'al-6', company_id: DEMO_COMPANY_ID, entry_id: 'ae-2', account_id: 'acc-2', debit: 710, credit: 0, memo: 'Cobros ventas en bancos y caja', acc_accounts: { code: '1102', name: 'Bancos Moneda Nacional / Divisas' } },
+      { id: 'al-7', company_id: DEMO_COMPANY_ID, entry_id: 'ae-2', account_id: 'acc-3', debit: 110.9, credit: 0, memo: 'Ventas a crédito clientes', acc_accounts: { code: '1103', name: 'Cuentas por Cobrar Clientes' } },
+      { id: 'al-8', company_id: DEMO_COMPANY_ID, entry_id: 'ae-2', account_id: 'acc-7', debit: 0, credit: 820.9, memo: 'Ingresos brutos por ventas', acc_accounts: { code: '4101', name: 'Ingresos por Ventas de Mercancía' } },
+      { id: 'al-9', company_id: DEMO_COMPANY_ID, entry_id: 'ae-2', account_id: 'acc-8', debit: 534.5, credit: 0, memo: 'Costo de mercancía despachada', acc_accounts: { code: '5101', name: 'Costo de Mercancía Vendida' } },
+      { id: 'al-10', company_id: DEMO_COMPANY_ID, entry_id: 'ae-2', account_id: 'acc-4', debit: 0, credit: 534.5, memo: 'Descargo de inventario', acc_accounts: { code: '1104', name: 'Inventario de Mercancías' } },
+      { id: 'al-11', company_id: DEMO_COMPANY_ID, entry_id: 'ae-3', account_id: 'acc-9', debit: 50.5, credit: 0, memo: 'Servicios y fletes de ruta', acc_accounts: { code: '6101', name: 'Gastos Operativos y Servicios' } },
+      { id: 'al-12', company_id: DEMO_COMPANY_ID, entry_id: 'ae-3', account_id: 'acc-2', debit: 0, credit: 50.5, memo: 'Pago por transferencia y caja', acc_accounts: { code: '1102', name: 'Bancos Moneda Nacional / Divisas' } },
     ],
+    acc_periods: [],
     acc_closings: [],
     support_tickets: [
       {
@@ -2856,6 +2903,520 @@ function createMockSupabase(silent = false): SupabaseClient {
     return builder
   }
 
+  type DemoActor = {
+    uid: string
+    role: string
+    companyId: string
+    profile: Row
+    displayName: string
+  }
+
+  const isSameCompany = (row: Row | null | undefined, companyId: string): boolean =>
+    Boolean(row && typeof row.company_id === 'string' && row.company_id.trim() === companyId)
+
+  const demoErr = (message: string) => ({ data: null, error: { message } })
+
+  const requireDemoActor = (
+    allowedRoles?: string[] | null
+  ): { ok: true; actor: DemoActor } | { ok: false; error: { message: string } } => {
+    const uid = typeof currentSession?.user?.id === 'string' ? currentSession.user.id.trim() : ''
+    if (!uid) {
+      return { ok: false, error: { message: 'No autorizado: sesión sin identidad válida' } }
+    }
+    const actorProfile = getTable('profiles').find(x => typeof x.id === 'string' && x.id.trim() === uid)
+    if (!actorProfile) {
+      return { ok: false, error: { message: 'No autorizado: perfil de usuario inexistente' } }
+    }
+    if (actorProfile.active !== true) {
+      return { ok: false, error: { message: 'No autorizado: perfil inactivo' } }
+    }
+    const companyId = typeof actorProfile.company_id === 'string' ? actorProfile.company_id.trim() : ''
+    if (!companyId) {
+      return { ok: false, error: { message: 'No autorizado: perfil sin empresa asignada' } }
+    }
+    const matchedCompanyRow = getTable('companies').find(c => String(c.id || '').trim() === companyId)
+    if (matchedCompanyRow && matchedCompanyRow.active === false) {
+      return { ok: false, error: { message: 'No autorizado: empresa inactiva' } }
+    }
+    const matchedConfigRow = getTable('company_config').find(c => String(c.company_id || '').trim() === companyId)
+    if (matchedConfigRow && matchedConfigRow.active === false) {
+      return { ok: false, error: { message: 'No autorizado: empresa inactiva' } }
+    }
+    if (!matchedCompanyRow && !matchedConfigRow) {
+      return { ok: false, error: { message: 'No autorizado: empresa inexistente o inválida' } }
+    }
+    const role = typeof actorProfile.role === 'string' ? actorProfile.role.trim().toLowerCase() : ''
+    if (!role) {
+      return { ok: false, error: { message: 'No autorizado: perfil sin rol válido' } }
+    }
+    if (allowedRoles && !allowedRoles.includes(role)) {
+      return { ok: false, error: { message: 'No autorizado' } }
+    }
+    const displayName =
+      (typeof actorProfile.full_name === 'string' && actorProfile.full_name.trim()) ||
+      (typeof actorProfile.email === 'string' && actorProfile.email.trim()) ||
+      'Usuario'
+    return { ok: true, actor: { uid, role, companyId, profile: actorProfile, displayName } }
+  }
+
+  const demoToYmdInTz = (rawIso: string, tzRaw: unknown): string => {
+    const tz = typeof tzRaw === 'string' && tzRaw.trim() ? tzRaw.trim() : 'America/Bogota'
+    const dt = new Date(rawIso)
+    if (Number.isNaN(dt.getTime())) return String(rawIso).slice(0, 10)
+    try {
+      return new Intl.DateTimeFormat('sv-SE', { timeZone: tz }).format(dt)
+    } catch {
+      try {
+        return new Intl.DateTimeFormat('sv-SE', { timeZone: 'America/Bogota' }).format(dt)
+      } catch {
+        return dt.toISOString().slice(0, 10)
+      }
+    }
+  }
+
+  const demoIsPeriodClosed = (companyId: string, ymd: string): boolean => {
+    const year = Number(ymd.slice(0, 4))
+    const month = Number(ymd.slice(5, 7))
+    if (!Number.isFinite(year) || !Number.isFinite(month)) return false
+    const inPeriods = getTable('acc_periods').some(
+      p => isSameCompany(p, companyId) && Number(p.year) === year && Number(p.month) === month && p.status === 'cerrado'
+    )
+    if (inPeriods) return true
+    return getTable('acc_closings').some(
+      c => isSameCompany(c, companyId) && Number(c.year) === year && Number(c.month) === month && c.status === 'cerrado'
+    )
+  }
+
+  const demoSystemEntry = (
+    companyId: string,
+    entryDate: string,
+    description: string,
+    sourceType: string,
+    sourceId: string,
+    sourceEvent: string,
+    numberPrefix: string,
+    lines: Array<{ account_id: string; debit?: number; credit?: number; memo?: string }>
+  ): { entryId: string | null; error: { message: string } | null } => {
+    const entries = getTable('acc_entries')
+    const existing = entries.find(
+      e =>
+        isSameCompany(e, companyId) &&
+        e.source_type === sourceType &&
+        e.source_id === sourceId &&
+        e.source_event === sourceEvent
+    )
+    if (existing) return { entryId: String(existing.id), error: null }
+
+    if (demoIsPeriodClosed(companyId, entryDate)) {
+      return {
+        entryId: null,
+        error: { message: `El periodo contable ${entryDate.slice(0, 7)} está cerrado; no se puede contabilizar` },
+      }
+    }
+
+    const accs = getTable('acc_accounts')
+    let totD = 0
+    let totC = 0
+    const normalizedLines: Row[] = []
+    for (const ln of lines) {
+      const acc = accs.find(a => a.id === ln.account_id && isSameCompany(a, companyId) && a.is_postable === true && a.active === true)
+      if (!acc) {
+        return {
+          entryId: null,
+          error: { message: 'Cuenta contable inexistente, inactiva o de otra empresa al generar asiento automático' },
+        }
+      }
+      const d = Math.round((Number(ln.debit) || 0) * 100) / 100
+      const c = Math.round((Number(ln.credit) || 0) * 100) / 100
+      totD += d
+      totC += c
+      normalizedLines.push({
+        account_id: acc.id,
+        debit: d,
+        credit: c,
+        memo: ln.memo || null,
+        acc_accounts: { code: acc.code, name: acc.name },
+      })
+    }
+
+    if (normalizedLines.length < 2 || Math.abs(Math.round((totD - totC) * 100) / 100) > 0.01) {
+      return { entryId: null, error: { message: 'Asiento contable descuadrado al contabilizar operación' } }
+    }
+
+    const entryId = genId()
+    const num = `${numberPrefix}-${String(entries.filter(e => isSameCompany(e, companyId)).length + 1).padStart(4, '0')}`
+    entries.unshift({
+      id: entryId,
+      company_id: companyId,
+      number: num,
+      entry_date: entryDate,
+      description,
+      status: 'contabilizado',
+      source_type: sourceType,
+      source_id: sourceId,
+      source_event: sourceEvent,
+      created_at: nowIso(),
+    })
+    const allLines = getTable('acc_lines')
+    for (const ln of normalizedLines) {
+      allLines.push({
+        id: genId(),
+        company_id: companyId,
+        entry_id: entryId,
+        account_id: ln.account_id,
+        debit: ln.debit,
+        credit: ln.credit,
+        memo: ln.memo,
+        acc_accounts: ln.acc_accounts,
+      })
+    }
+    return { entryId, error: null }
+  }
+
+  const demoPostSupplierPayment = (
+    companyId: string,
+    paymentId: string
+  ): { entryId: string | null; error: { message: string } | null } => {
+    const p = getTable('supplier_payments').find(x => x.id === paymentId && isSameCompany(x, companyId))
+    if (!p || p.status !== 'activo') return { entryId: null, error: null }
+
+    const s = getTable('acc_settings').find(x => isSameCompany(x, companyId))
+    if (!s || s.active !== true) return { entryId: null, error: null }
+
+    const startDate = s.start_date ? String(s.start_date).trim().slice(0, 10) : ''
+    if (!startDate) {
+      return {
+        entryId: null,
+        error: { message: 'Configuración contable incompleta: la contabilidad está activa pero falta definir la fecha de inicio (start_date)' },
+      }
+    }
+
+    if (!p.created_at) {
+      return {
+        entryId: null,
+        error: { message: `No se puede contabilizar el pago a proveedor ${p.id} porque carece de fecha de creación` },
+      }
+    }
+
+    const tz = typeof s.timezone === 'string' && s.timezone.trim() ? s.timezone.trim() : 'America/Bogota'
+    const vDate = demoToYmdInTz(String(p.created_at), tz)
+    if (vDate < startDate) return { entryId: null, error: null }
+
+    const cxpRow = getTable('cxp_settings').find(x => isSameCompany(x, companyId))
+    const cxpAcc = cxpRow?.account_id ? String(cxpRow.account_id).trim() : null
+    const payKey = p.method === 'efectivo' ? 'caja' : 'bancos'
+    const rawPay = s.map?.[payKey]
+    const payAcc = rawPay && String(rawPay).trim() ? String(rawPay).trim() : null
+    const rawExp = s.map?.gastos
+    const expAcc = rawExp && String(rawExp).trim() ? String(rawExp).trim() : null
+
+    const purchases = getTable('purchases')
+    let vIn = 0
+    let vOut = 0
+    for (const a of getTable('supplier_allocations')) {
+      if (a.payment_id !== p.id || !isSameCompany(a, companyId)) continue
+      const pu = purchases.find(x => x.id === a.purchase_id && isSameCompany(x, companyId))
+      if (!pu || !pu.created_at) continue
+      const puDate = demoToYmdInTz(String(pu.created_at), tz)
+      if (puDate >= startDate) vIn += Number(a.amount) || 0
+      else vOut += Number(a.amount) || 0
+    }
+    vIn = Math.round(vIn * 100) / 100
+    vOut = Math.round(vOut * 100) / 100
+
+    if (vIn > 0 && !cxpAcc) {
+      return { entryId: null, error: { message: 'Falta configurar la cuenta por pagar a proveedores para contabilizar el pago' } }
+    }
+    if (!payAcc) {
+      return {
+        entryId: null,
+        error: { message: `Falta configurar la cuenta de "${payKey}" en Config. contable para contabilizar el pago a proveedor` },
+      }
+    }
+    if (vOut > 0 && !expAcc) {
+      return {
+        entryId: null,
+        error: { message: 'Falta configurar la cuenta de "gastos" para contabilizar pagos a compras anteriores al inicio contable' },
+      }
+    }
+
+    const lines: Array<{ account_id: string; debit?: number; credit?: number; memo?: string }> = []
+    if (vIn > 0 && cxpAcc) lines.push({ account_id: cxpAcc, debit: vIn })
+    if (vOut > 0 && expAcc) {
+      lines.push({ account_id: expAcc, debit: vOut, memo: 'Pago de compras anteriores al inicio contable' })
+    }
+    lines.push({ account_id: payAcc, credit: Number(p.amount) || 0, memo: `Pago a proveedor (${p.method})` })
+
+    if (lines.length < 2 || Math.abs(Math.round((vIn + vOut) * 100) / 100 - Math.round(Number(p.amount) * 100) / 100) > 0.01) {
+      return { entryId: null, error: { message: `No se pudo construir un asiento contable cuadrado para el pago a proveedor ${p.id}` } }
+    }
+
+    const sup = getTable('suppliers').find(x => x.id === p.supplier_id && isSameCompany(x, companyId))
+    return demoSystemEntry(
+      companyId,
+      vDate,
+      `Pago a proveedor${sup?.name ? `: ${sup.name}` : ''}`,
+      'pago_proveedor',
+      String(p.id),
+      'registro',
+      `PP-${String(p.id).slice(0, 8)}`,
+      lines
+    )
+  }
+
+  const demoPostPending = (
+    companyId: string
+  ): { data: Record<string, number> | null; error: { message: string } | null } => {
+    const s = getTable('acc_settings').find(x => isSameCompany(x, companyId))
+    const startDate = s?.start_date ? String(s.start_date).trim().slice(0, 10) : ''
+    if (!s || s.active !== true || !startDate) {
+      return {
+        data: null,
+        error: { message: 'Activa y configura la fecha de inicio de la contabilidad automática antes de contabilizar pendientes' },
+      }
+    }
+
+    const tz = typeof s.timezone === 'string' && s.timezone.trim() ? s.timezone.trim() : 'America/Bogota'
+    const existingEntryIds = new Set(getTable('acc_entries').map(e => String(e.id)))
+    let ppCount = 0
+
+    const pendingPays = getTable('supplier_payments')
+      .filter(
+        x =>
+          isSameCompany(x, companyId) &&
+          x.status === 'activo' &&
+          x.created_at &&
+          demoToYmdInTz(String(x.created_at), tz) >= startDate &&
+          !getTable('acc_entries').some(
+            e =>
+              isSameCompany(e, companyId) &&
+              e.source_type === 'pago_proveedor' &&
+              e.source_id === x.id &&
+              e.source_event === 'registro'
+          )
+      )
+      .sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')))
+
+    for (const sp of pendingPays) {
+      const res = demoPostSupplierPayment(companyId, String(sp.id))
+      if (res.error) {
+        tables.acc_entries = getTable('acc_entries').filter(e => existingEntryIds.has(String(e.id)))
+        tables.acc_lines = getTable('acc_lines').filter(l => existingEntryIds.has(String(l.entry_id)))
+        return { data: null, error: res.error }
+      }
+      if (res.entryId) ppCount++
+    }
+
+    return {
+      data: {
+        ventas: 0,
+        compras: 0,
+        abonos: 0,
+        pagos_proveedor: ppCount,
+        gastos: 0,
+        devoluciones: 0,
+        devoluciones_compra: 0,
+        caja: 0,
+        ajustes: 0,
+      },
+      error: null,
+    }
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const registrarCompraCore = (actor: DemoActor, args: Record<string, any>) => {
+    const items: Row[] = Array.isArray(args.p_items) ? args.p_items : []
+    if (!items.length) return demoErr('La compra debe tener al menos un producto')
+    const method = String(args.p_payment_method || 'efectivo').trim()
+    if (!['efectivo', 'tarjeta', 'transferencia', 'credito'].includes(method)) {
+      return demoErr('Forma de pago de compra inválida')
+    }
+    const sups = getTable('suppliers').filter(s => isSameCompany(s, actor.companyId))
+    const supId = args.p_supplier_id ? String(args.p_supplier_id).trim() : null
+    const sup = supId ? sups.find(s => s.id === supId) : null
+    if (supId && !sup) {
+      return demoErr('Proveedor no válido para esta empresa')
+    }
+    if (method === 'credito' && !sup) {
+      return demoErr('Selecciona un proveedor para comprar a crédito')
+    }
+
+    let taxStatus = String(args.p_tax_status || 'sin_iva')
+    if (!['sin_iva', 'descontable', 'pendiente', 'costo'].includes(taxStatus)) {
+      return demoErr('Estado tributario de IVA inválido')
+    }
+    const taxIncluded = Boolean(args.p_tax_included)
+    const taxRate = args.p_tax_rate != null ? Number(args.p_tax_rate) : null
+    const companyProds = getTable('products').filter(p => isSameCompany(p, actor.companyId))
+
+    const rawItems: Row[] = []
+    for (const it of items) {
+      const prod = companyProds.find(p => p.id === it.product_id)
+      if (!prod) {
+        return demoErr('Producto no encontrado en el catálogo de la empresa')
+      }
+      const qty = Number(it.quantity)
+      const cost = Number(it.cost)
+      if (!Number.isFinite(qty) || qty <= 0 || !Number.isFinite(cost) || cost < 0) {
+        return demoErr('Cantidad y costo deben ser válidos y positivos en la compra')
+      }
+      rawItems.push({
+        product_id: prod.id,
+        product_name: prod.name || it.product_name || 'Producto',
+        quantity: qty,
+        rawCost: cost,
+        rawSub: Math.round(qty * cost * 100) / 100,
+        lot_code: it.expiry_date ? (it.lot_code || 'S/L') : undefined,
+        expiry_date: it.expiry_date || undefined,
+      })
+    }
+
+    const itemsSum = Math.round(rawItems.reduce((s, i) => s + i.rawSub, 0) * 100) / 100
+    let vat = 0
+    if (args.p_tax != null) {
+      vat = Math.round(Number(args.p_tax) * 100) / 100
+      if (!Number.isFinite(vat) || vat < 0) return demoErr('IVA inválido')
+    } else if (taxRate != null && taxRate > 0 && itemsSum > 0) {
+      vat = taxIncluded
+        ? Math.round((itemsSum - itemsSum / (1 + taxRate / 100)) * 100) / 100
+        : Math.round((itemsSum * (taxRate / 100)) * 100) / 100
+    }
+    const total = taxIncluded ? itemsSum : Math.round((itemsSum + vat) * 100) / 100
+    const subtotal = taxIncluded ? Math.round((total - vat) * 100) / 100 : itemsSum
+    if (vat <= 0) {
+      vat = 0
+      taxStatus = 'sin_iva'
+    } else if (taxStatus === 'sin_iva') {
+      return demoErr('Una compra con IVA > 0 requiere estado descontable, pendiente o costo')
+    }
+    const recognizedCost = taxStatus === 'costo' ? total : subtotal
+
+    let remBase = subtotal
+    let remTax = vat
+    const normalized = rawItems.map((it, idx) => {
+      const prod = companyProds.find(p => p.id === it.product_id)
+      const isLast = idx === rawItems.length - 1
+      const lineBase = isLast ? remBase : (itemsSum > 0 ? Math.round(subtotal * (it.rawSub / itemsSum) * 100) / 100 : 0)
+      const lineTax = isLast ? remTax : (itemsSum > 0 ? Math.round(vat * (it.rawSub / itemsSum) * 100) / 100 : 0)
+      remBase = Math.round((remBase - lineBase) * 100) / 100
+      remTax = Math.round((remTax - lineTax) * 100) / 100
+      const invAdd = lineBase + (taxStatus === 'costo' ? lineTax : 0)
+      const unitBaseCost = it.quantity > 0 ? Math.round((lineBase / it.quantity) * 10000) / 10000 : it.rawCost
+      const effUnitCost = it.quantity > 0 ? Math.round((invAdd / it.quantity) * 10000) / 10000 : it.rawCost
+      return {
+        product_id: it.product_id,
+        product_name: it.product_name,
+        quantity: it.quantity,
+        cost: unitBaseCost,
+        unit_base_cost: unitBaseCost,
+        tax_amount: lineTax,
+        recognized_unit_cost: effUnitCost,
+        prev_cost: Number(prod?.cost) || 0,
+        subtotal: lineBase,
+        line_total: Math.round((lineBase + lineTax) * 100) / 100,
+        ...(it.expiry_date ? { lot_code: it.lot_code || 'S/L', expiry_date: it.expiry_date } : {}),
+      }
+    })
+
+    let days: number | null = null
+    let dueDate: string | null = null
+    if (method === 'credito' && sup) {
+      const sc = getTable('supplier_credit').find(x => isSameCompany(x, actor.companyId) && x.supplier_id === sup.id)
+      const parsedDays = Number(args.p_credit_days != null ? args.p_credit_days : (sc?.credit_days ?? 30))
+      if (!Number.isFinite(parsedDays) || parsedDays < 0 || parsedDays > 365) {
+        return demoErr('Los días de crédito deben estar entre 0 y 365')
+      }
+      days = parsedDays
+      if (sc && Number(sc.credit_limit) > 0) {
+        const allocs = getTable('supplier_allocations').filter(a => isSameCompany(a, actor.companyId))
+        const activePays = new Set(
+          getTable('supplier_payments')
+            .filter(p => isSameCompany(p, actor.companyId) && p.status === 'activo')
+            .map(p => p.id)
+        )
+        const curOwed = getTable('purchases')
+          .filter(p => isSameCompany(p, actor.companyId) && p.supplier_id === sup.id && p.payment_method === 'credito' && p.status !== 'anulada')
+          .reduce((sum, p) => {
+            const paid = allocs.filter(a => a.purchase_id === p.id && activePays.has(a.payment_id)).reduce((s, a) => s + Number(a.amount), 0)
+            return sum + Math.max(0, Number(p.total) - paid)
+          }, 0)
+        if (curOwed + total > Number(sc.credit_limit)) {
+          return demoErr('Supera el cupo de crédito con este proveedor')
+        }
+      }
+      const d = new Date()
+      d.setDate(d.getDate() + (days || 0))
+      dueDate = d.toLocaleDateString('sv-SE')
+    }
+
+    const purchaseId = genId()
+    const newPurchase: Row = {
+      id: purchaseId,
+      company_id: actor.companyId,
+      supplier_id: sup?.id || null,
+      supplier_name: sup?.name || null,
+      items: normalized,
+      total,
+      subtotal,
+      tax: vat,
+      tax_rate: taxRate,
+      tax_included: taxIncluded,
+      tax_status: taxStatus,
+      recognized_cost: recognizedCost,
+      status: 'recibida',
+      payment_method: method,
+      due_date: dueDate,
+      credit_days: days,
+      created_by: actor.uid,
+      created_by_name: actor.displayName,
+      created_at: nowIso(),
+    }
+    getTable('purchases').unshift(newPurchase)
+
+    for (const it of normalized) {
+      const prod = companyProds.find(p => p.id === it.product_id)
+      if (prod) {
+        const oldStock = Number(prod.stock) || 0
+        const oldCost = Number(prod.cost) || 0
+        const newStock = oldStock + it.quantity
+        const invAdd = Number(it.subtotal) + (taxStatus === 'costo' ? Number(it.tax_amount || 0) : 0)
+        prod.cost = oldStock > 0 && newStock > 0
+          ? Math.round(((oldStock * oldCost) + invAdd) / newStock * 100) / 100
+          : Math.round((Number(it.recognized_unit_cost) || it.cost) * 100) / 100
+        prod.stock = newStock
+        getTable('kardex').unshift({
+          id: genId(),
+          company_id: actor.companyId,
+          product_id: prod.id,
+          product_name: prod.name,
+          type: 'entrada',
+          quantity: it.quantity,
+          balance: prod.stock,
+          reference_type: 'purchase',
+          reference_id: purchaseId,
+          seq_verified: true,
+          created_at: nowIso(),
+        })
+      }
+    }
+
+    if (method === 'efectivo') {
+      const entry = {
+        id: genId(),
+        company_id: actor.companyId,
+        type: 'egreso',
+        amount: total,
+        description: `Compra CMP-${String(purchaseId).slice(0, 8).toUpperCase()}`,
+        reference_type: 'purchase',
+        reference_id: purchaseId,
+        created_at: nowIso(),
+      }
+      getTable('cash_entries').unshift(entry)
+      getTable('cash_movements').unshift(entry)
+    }
+    return { data: purchaseId, error: null }
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleRpc = async (fn: string, args: Record<string, any> = {}): Promise<{ data: any; error: any }> => {
     const prods = getTable('products')
@@ -3560,9 +4121,14 @@ function createMockSupabase(silent = false): SupabaseClient {
         }
       }
       case 'cxp_config': {
-        const st = getTable('cxp_settings')[0]
-        const acc = st?.account_id ? getTable('acc_accounts').find(a => a.id === st.account_id) : null
-        const active = Boolean(getTable('acc_settings')[0]?.active)
+        const auth = requireDemoActor(['admin', 'dueno', 'admin_empresa', 'gerente'])
+        if (!auth.ok) return { data: null, error: auth.error }
+        const { companyId } = auth.actor
+        const st = getTable('cxp_settings').find(x => isSameCompany(x, companyId))
+        const acc = st?.account_id
+          ? getTable('acc_accounts').find(a => a.id === st.account_id && isSameCompany(a, companyId))
+          : null
+        const active = Boolean(getTable('acc_settings').find(x => isSameCompany(x, companyId))?.active)
         return {
           data: {
             account_id: st?.account_id ?? null,
@@ -3574,200 +4140,92 @@ function createMockSupabase(silent = false): SupabaseClient {
         }
       }
       case 'cxp_save_account': {
+        const auth = requireDemoActor(['admin', 'dueno', 'admin_empresa'])
+        if (!auth.ok) return { data: null, error: auth.error }
+        const { companyId } = auth.actor
+        const accIdRaw = args.p_account ?? args.p_account_id ?? null
+        const accId = accIdRaw && String(accIdRaw).trim() ? String(accIdRaw).trim() : null
+        if (accId) {
+          const acc = getTable('acc_accounts').find(
+            a => a.id === accId && isSameCompany(a, companyId) && a.is_postable === true && a.active === true
+          )
+          if (!acc) {
+            return demoErr('Cuenta contable no válida, inactiva o perteneciente a otra empresa')
+          }
+        }
         const rows = getTable('cxp_settings')
-        const accId = args.p_account ?? args.p_account_id ?? null
-        if (rows.length) rows[0].account_id = accId
-        else rows.push({ id: 'cxp-1', account_id: accId })
+        const existingIdx = rows.findIndex(x => isSameCompany(x, companyId))
+        const prevSnapshot = existingIdx >= 0 ? { ...rows[existingIdx] } : null
+        if (existingIdx >= 0) {
+          rows[existingIdx].account_id = accId
+          rows[existingIdx].updated_at = nowIso()
+        } else {
+          rows.push({ id: genId(), company_id: companyId, account_id: accId, updated_at: nowIso() })
+        }
+
+        const accSet = getTable('acc_settings').find(x => isSameCompany(x, companyId))
+        if (accId !== null && accSet && accSet.active === true) {
+          const pendRes = demoPostPending(companyId)
+          if (pendRes.error) {
+            const curIdx = rows.findIndex(x => isSameCompany(x, companyId))
+            if (prevSnapshot) {
+              if (curIdx >= 0) rows[curIdx] = prevSnapshot
+              else rows.push(prevSnapshot)
+            } else if (curIdx >= 0) {
+              rows.splice(curIdx, 1)
+            }
+            return { data: null, error: pendRes.error }
+          }
+        }
         return { data: {}, error: null }
       }
       case 'set_product_expiry': {
-        const prod = prods.find(p => p.id === args.p_product)
-        if (!prod) return { data: null, error: { message: 'Producto no encontrado' } }
+        const auth = requireDemoActor(null)
+        if (!auth.ok) return { data: null, error: auth.error }
+        const prod = prods.find(p => p.id === args.p_product && isSameCompany(p, auth.actor.companyId))
+        if (!prod) return demoErr('Producto no encontrado')
         prod.tracks_expiry = Boolean(args.p_on)
         return { data: null, error: null }
       }
       case 'registrar_compra':
       case 'registrar_compra_con_iva': {
-        const items: Row[] = Array.isArray(args.p_items) ? args.p_items : []
-        if (!items.length) return { data: null, error: { message: 'La compra debe tener al menos un producto' } }
-        const method = String(args.p_payment_method || 'efectivo')
-        if (!['efectivo', 'tarjeta', 'transferencia', 'credito'].includes(method)) {
-          return { data: null, error: { message: 'Forma de pago de compra inválida' } }
-        }
-        const sups = getTable('suppliers')
-        const sup = sups.find(s => s.id === args.p_supplier_id)
-        if (method === 'credito' && !sup) {
-          return { data: null, error: { message: 'Selecciona un proveedor para comprar a crédito' } }
-        }
-        let taxStatus = String(args.p_tax_status || 'sin_iva')
-        if (!['sin_iva', 'descontable', 'pendiente', 'costo'].includes(taxStatus)) {
-          return { data: null, error: { message: 'Estado tributario de IVA inválido' } }
-        }
-        const taxIncluded = Boolean(args.p_tax_included)
-        const taxRate = args.p_tax_rate != null ? Number(args.p_tax_rate) : null
-        const rawItems = items.map(it => {
-          const prod = prods.find(p => p.id === it.product_id)
-          const qty = Number(it.quantity) || 0
-          const cost = Number(it.cost) || 0
-          return {
-            product_id: it.product_id,
-            product_name: prod?.name || it.product_name || 'Producto',
-            quantity: qty,
-            rawCost: cost,
-            rawSub: Math.round(qty * cost * 100) / 100,
-            lot_code: it.expiry_date ? (it.lot_code || 'S/L') : undefined,
-            expiry_date: it.expiry_date || undefined,
-          }
-        })
-        const itemsSum = Math.round(rawItems.reduce((s, i) => s + i.rawSub, 0) * 100) / 100
-        let vat = 0
-        if (args.p_tax != null) {
-          vat = Math.round(Number(args.p_tax) * 100) / 100
-        } else if (taxRate != null && taxRate > 0 && itemsSum > 0) {
-          vat = taxIncluded
-            ? Math.round((itemsSum - itemsSum / (1 + taxRate / 100)) * 100) / 100
-            : Math.round((itemsSum * (taxRate / 100)) * 100) / 100
-        }
-        const total = taxIncluded ? itemsSum : Math.round((itemsSum + vat) * 100) / 100
-        const subtotal = taxIncluded ? Math.round((total - vat) * 100) / 100 : itemsSum
-        if (vat <= 0) {
-          vat = 0
-          taxStatus = 'sin_iva'
-        } else if (taxStatus === 'sin_iva') {
-          return { data: null, error: { message: 'Una compra con IVA > 0 requiere estado descontable, pendiente o costo' } }
-        }
-        const recognizedCost = taxStatus === 'costo' ? total : subtotal
-
-        let remBase = subtotal
-        let remTax = vat
-        const normalized = rawItems.map((it, idx) => {
-          const prod = prods.find(p => p.id === it.product_id)
-          const isLast = idx === rawItems.length - 1
-          const lineBase = isLast ? remBase : (itemsSum > 0 ? Math.round(subtotal * (it.rawSub / itemsSum) * 100) / 100 : 0)
-          const lineTax = isLast ? remTax : (itemsSum > 0 ? Math.round(vat * (it.rawSub / itemsSum) * 100) / 100 : 0)
-          remBase = Math.round((remBase - lineBase) * 100) / 100
-          remTax = Math.round((remTax - lineTax) * 100) / 100
-          const invAdd = lineBase + (taxStatus === 'costo' ? lineTax : 0)
-          const unitBaseCost = it.quantity > 0 ? Math.round((lineBase / it.quantity) * 10000) / 10000 : it.rawCost
-          const effUnitCost = it.quantity > 0 ? Math.round((invAdd / it.quantity) * 10000) / 10000 : it.rawCost
-          return {
-            product_id: it.product_id,
-            product_name: it.product_name,
-            quantity: it.quantity,
-            cost: unitBaseCost,
-            unit_base_cost: unitBaseCost,
-            tax_amount: lineTax,
-            recognized_unit_cost: effUnitCost,
-            prev_cost: Number(prod?.cost) || 0,
-            subtotal: lineBase,
-            line_total: Math.round((lineBase + lineTax) * 100) / 100,
-            ...(it.expiry_date ? { lot_code: it.lot_code || 'S/L', expiry_date: it.expiry_date } : {}),
-          }
-        })
-
-        let days: number | null = null
-        let dueDate: string | null = null
-        if (method === 'credito' && sup) {
-          const sc = getTable('supplier_credit').find(x => x.supplier_id === sup.id)
-          days = args.p_credit_days != null ? Number(args.p_credit_days) : (sc?.credit_days ?? 30)
-          if (sc && Number(sc.credit_limit) > 0) {
-            const allocs = getTable('supplier_allocations')
-            const activePays = new Set(getTable('supplier_payments').filter(p => p.status === 'activo').map(p => p.id))
-            const curOwed = getTable('purchases')
-              .filter(p => p.supplier_id === sup.id && p.payment_method === 'credito' && p.status !== 'anulada')
-              .reduce((sum, p) => {
-                const paid = allocs.filter(a => a.purchase_id === p.id && activePays.has(a.payment_id)).reduce((s, a) => s + Number(a.amount), 0)
-                return sum + Math.max(0, Number(p.total) - paid)
-              }, 0)
-            if (curOwed + total > Number(sc.credit_limit)) {
-              return { data: null, error: { message: 'Supera el cupo de crédito con este proveedor' } }
-            }
-          }
-          const d = new Date()
-          d.setDate(d.getDate() + (days || 0))
-          dueDate = d.toLocaleDateString('sv-SE')
-        }
-        const purchaseId = genId()
-        const newPurchase: Row = {
-          id: purchaseId,
-          supplier_id: sup?.id || null,
-          supplier_name: sup?.name || null,
-          items: normalized,
-          total,
-          subtotal,
-          tax: vat,
-          tax_rate: taxRate,
-          tax_included: taxIncluded,
-          tax_status: taxStatus,
-          recognized_cost: recognizedCost,
-          status: 'recibida',
-          payment_method: method,
-          due_date: dueDate,
-          credit_days: days,
-          created_at: nowIso(),
-        }
-        getTable('purchases').unshift(newPurchase)
-        for (const it of normalized) {
-          const prod = prods.find(p => p.id === it.product_id)
-          if (prod) {
-            const oldStock = Number(prod.stock) || 0
-            const oldCost = Number(prod.cost) || 0
-            const newStock = oldStock + it.quantity
-            const invAdd = Number(it.subtotal) + (taxStatus === 'costo' ? Number(it.tax_amount || 0) : 0)
-            prod.cost = oldStock > 0 && newStock > 0
-              ? Math.round(((oldStock * oldCost) + invAdd) / newStock * 100) / 100
-              : Math.round((Number(it.recognized_unit_cost) || it.cost) * 100) / 100
-            prod.stock = newStock
-            getTable('kardex').unshift({
-              id: genId(),
-              product_id: prod.id,
-              product_name: prod.name,
-              type: 'entrada',
-              quantity: it.quantity,
-              balance: prod.stock,
-              reference_type: 'purchase',
-              reference_id: purchaseId,
-              seq_verified: true,
-              created_at: nowIso(),
-            })
-          }
-        }
-        if (method === 'efectivo') {
-          const entry = {
-            id: genId(),
-            type: 'egreso',
-            amount: total,
-            description: `Compra CMP-${String(purchaseId).slice(0, 8).toUpperCase()}`,
-            reference_type: 'purchase',
-            reference_id: purchaseId,
-            created_at: nowIso(),
-          }
-          getTable('cash_entries').unshift(entry)
-          getTable('cash_movements').unshift(entry)
-        }
-        return { data: purchaseId, error: null }
+        const auth = requireDemoActor(['admin', 'dueno', 'admin_empresa', 'comprador'])
+        if (!auth.ok) return { data: null, error: auth.error }
+        return registrarCompraCore(auth.actor, args)
       }
       case 'anular_compra': {
-        const p = getTable('purchases').find(x => x.id === args.p_purchase_id)
-        if (!p) return { data: null, error: { message: 'La compra no existe' } }
-        if (p.status === 'anulada') return { data: null, error: { message: 'La compra ya fue anulada' } }
-        const hasDevs = getTable('purchase_devolutions').some(d => d.purchase_id === p.id && d.status === 'activa')
+        const auth = requireDemoActor(['admin', 'dueno', 'admin_empresa'])
+        if (!auth.ok) return { data: null, error: auth.error }
+        const { companyId } = auth.actor
+        const p = getTable('purchases').find(x => x.id === args.p_purchase_id && isSameCompany(x, companyId))
+        if (!p) return demoErr('La compra no existe')
+        if (p.status === 'anulada') return demoErr('La compra ya fue anulada')
+        const hasDevs = getTable('purchase_devolutions').some(
+          d => isSameCompany(d, companyId) && d.purchase_id === p.id && d.status === 'activa'
+        )
         if (hasDevs) {
-          return { data: null, error: { message: 'No se puede anular: esta compra ya tiene devoluciones parciales a proveedor. Anula primero esas devoluciones en el módulo Devoluciones.' } }
+          return demoErr('No se puede anular: esta compra ya tiene devoluciones parciales a proveedor. Anula primero esas devoluciones en el módulo Devoluciones.')
         }
-        const activePays = new Set(getTable('supplier_payments').filter(x => x.status === 'activo').map(x => x.id))
-        const hasAllocs = getTable('supplier_allocations').some(a => a.purchase_id === p.id && activePays.has(a.payment_id))
+        const activePays = new Set(
+          getTable('supplier_payments')
+            .filter(x => isSameCompany(x, companyId) && x.status === 'activo')
+            .map(x => x.id)
+        )
+        const hasAllocs = getTable('supplier_allocations').some(
+          a => isSameCompany(a, companyId) && a.purchase_id === p.id && activePays.has(a.payment_id)
+        )
         if (hasAllocs) {
-          return { data: null, error: { message: 'Esta compra tiene pagos aplicados. Anula primero los pagos en Cuentas por pagar.' } }
+          return demoErr('Esta compra tiene pagos aplicados. Anula primero los pagos en Cuentas por pagar.')
         }
+        const companyProds = prods.filter(x => isSameCompany(x, companyId))
         for (const it of (p.items || [])) {
-          const prod = prods.find(x => x.id === it.product_id)
+          const prod = companyProds.find(x => x.id === it.product_id)
           if (prod && (Number(prod.stock) || 0) < (Number(it.quantity) || 0)) {
-            return { data: null, error: { message: `No hay suficiente stock de ${prod.name} para revertir esta compra` } }
+            return demoErr(`No hay suficiente stock de ${prod.name} para revertir esta compra`)
           }
         }
         for (const it of (p.items || [])) {
-          const prod = prods.find(x => x.id === it.product_id)
+          const prod = companyProds.find(x => x.id === it.product_id)
           if (prod) {
             const oldStock = Number(prod.stock) || 0
             const oldCost = Number(prod.cost) || 0
@@ -3784,6 +4242,7 @@ function createMockSupabase(silent = false): SupabaseClient {
             prod.stock = newStock
             getTable('kardex').unshift({
               id: genId(),
+              company_id: companyId,
               product_id: prod.id,
               product_name: prod.name,
               type: 'salida',
@@ -3797,7 +4256,7 @@ function createMockSupabase(silent = false): SupabaseClient {
           }
         }
         for (const adj of getTable('purchase_iva_adjustments')) {
-          if (adj.purchase_id === p.id && adj.status === 'aplicado') {
+          if (isSameCompany(adj, companyId) && adj.purchase_id === p.id && adj.status === 'aplicado') {
             adj.status = 'reversado'
             adj.reversed_at = nowIso()
           }
@@ -3806,6 +4265,7 @@ function createMockSupabase(silent = false): SupabaseClient {
         if ((p.payment_method || 'efectivo') === 'efectivo') {
           const entry = {
             id: genId(),
+            company_id: companyId,
             type: 'ingreso',
             amount: Number(p.total) || 0,
             description: `Anulación CMP-${String(p.id).slice(0, 8).toUpperCase()}`,
@@ -3819,13 +4279,21 @@ function createMockSupabase(silent = false): SupabaseClient {
         return { data: null, error: null }
       }
       case 'cuentas_por_pagar': {
+        const auth = requireDemoActor(['admin', 'dueno', 'admin_empresa', 'gerente'])
+        if (!auth.ok) return { data: null, error: auth.error }
+        const { companyId } = auth.actor
         const todayStr = new Date().toLocaleDateString('sv-SE')
-        const sups = getTable('suppliers')
-        const credits = getTable('supplier_credit')
-        const allocs = getTable('supplier_allocations')
-        const activePays = new Set(getTable('supplier_payments').filter(x => x.status === 'activo').map(x => x.id))
-        const pDevs = getTable('purchase_devolutions').filter(d => d.status === 'activa' && d.refund_method === 'credito')
-        const creditPurchases = getTable('purchases').filter(p => p.payment_method === 'credito' && p.status !== 'anulada')
+        const sups = getTable('suppliers').filter(s => isSameCompany(s, companyId))
+        const credits = getTable('supplier_credit').filter(c => isSameCompany(c, companyId))
+        const allocs = getTable('supplier_allocations').filter(a => isSameCompany(a, companyId))
+        const companyPays = getTable('supplier_payments').filter(x => isSameCompany(x, companyId))
+        const activePays = new Set(companyPays.filter(x => x.status === 'activo').map(x => x.id))
+        const pDevs = getTable('purchase_devolutions').filter(
+          d => isSameCompany(d, companyId) && d.status === 'activa' && d.refund_method === 'credito'
+        )
+        const creditPurchases = getTable('purchases').filter(
+          p => isSameCompany(p, companyId) && p.payment_method === 'credito' && p.status !== 'anulada'
+        )
         const suppliersOut: Row[] = []
         let totalOwed = 0
         let totalOverdue = 0
@@ -3844,7 +4312,7 @@ function createMockSupabase(silent = false): SupabaseClient {
           const owed = Math.round(open.reduce((acc, p) => acc + p.balance, 0) * 100) / 100
           const overdue = Math.round(open.filter(p => p.due_date && p.due_date < todayStr).reduce((acc, p) => acc + p.balance, 0) * 100) / 100
           const dueDates = open.map(p => p.due_date).filter(Boolean).sort()
-          const lastPay = getTable('supplier_payments').find(py => py.supplier_id === s.id && py.status === 'activo')
+          const lastPay = companyPays.find(py => py.supplier_id === s.id && py.status === 'activo')
           totalOwed += owed
           totalOverdue += overdue
           suppliersOut.push({
@@ -3874,16 +4342,21 @@ function createMockSupabase(silent = false): SupabaseClient {
         }
       }
       case 'cuenta_por_pagar_proveedor': {
+        const auth = requireDemoActor(['admin', 'dueno', 'admin_empresa', 'gerente'])
+        if (!auth.ok) return { data: null, error: auth.error }
+        const { companyId } = auth.actor
         const todayStr = new Date().toLocaleDateString('sv-SE')
-        const sup = getTable('suppliers').find(s => s.id === args.p_supplier_id)
-        if (!sup) return { data: null, error: { message: 'El proveedor no existe' } }
-        const sc = getTable('supplier_credit').find(c => c.supplier_id === sup.id)
-        const allocs = getTable('supplier_allocations')
-        const allPays = getTable('supplier_payments').filter(x => x.supplier_id === sup.id)
+        const sup = getTable('suppliers').find(s => s.id === args.p_supplier_id && isSameCompany(s, companyId))
+        if (!sup) return demoErr('El proveedor no existe')
+        const sc = getTable('supplier_credit').find(c => isSameCompany(c, companyId) && c.supplier_id === sup.id)
+        const allocs = getTable('supplier_allocations').filter(a => isSameCompany(a, companyId))
+        const allPays = getTable('supplier_payments').filter(x => isSameCompany(x, companyId) && x.supplier_id === sup.id)
         const activePays = new Set(allPays.filter(x => x.status === 'activo').map(x => x.id))
-        const pDevs = getTable('purchase_devolutions').filter(d => d.status === 'activa' && d.refund_method === 'credito')
+        const pDevs = getTable('purchase_devolutions').filter(
+          d => isSameCompany(d, companyId) && d.status === 'activa' && d.refund_method === 'credito'
+        )
         const allCredit = getTable('purchases')
-          .filter(p => p.supplier_id === sup.id && p.payment_method === 'credito' && p.status !== 'anulada')
+          .filter(p => isSameCompany(p, companyId) && p.supplier_id === sup.id && p.payment_method === 'credito' && p.status !== 'anulada')
           .map(p => {
             const paid = Math.round(allocs.filter(a => a.purchase_id === p.id && activePays.has(a.payment_id)).reduce((acc, a) => acc + Number(a.amount), 0) * 100) / 100
             const credRet = Math.round(pDevs.filter(d => d.purchase_id === p.id).reduce((acc, d) => acc + Number(d.amount), 0) * 100) / 100
@@ -3922,7 +4395,7 @@ function createMockSupabase(silent = false): SupabaseClient {
               method: py.method || py.payment_method || 'efectivo',
               note: py.note ?? py.notes ?? null,
               status: py.status,
-              by: py.created_by_name || 'Administrador Demo',
+              by: py.created_by_name || 'Usuario',
               created_at: py.created_at,
             })),
           },
@@ -3930,58 +4403,110 @@ function createMockSupabase(silent = false): SupabaseClient {
         }
       }
       case 'guardar_credito_proveedor': {
+        const auth = requireDemoActor(['admin', 'dueno', 'admin_empresa'])
+        if (!auth.ok) return { data: null, error: auth.error }
+        const { companyId } = auth.actor
         const supId = args.p_supplier ?? args.p_supplier_id
+        const sup = getTable('suppliers').find(s => s.id === supId && isSameCompany(s, companyId))
+        if (!sup) return demoErr('El proveedor no existe')
+        const limitVal = Number(args.p_limit)
+        const daysVal = args.p_days ?? 30
+        if (!Number.isFinite(limitVal) || limitVal < 0) return demoErr('Cupo de crédito inválido')
         const rows = getTable('supplier_credit')
-        const existing = rows.find(x => x.supplier_id === supId)
+        const existing = rows.find(x => isSameCompany(x, companyId) && x.supplier_id === supId)
         if (existing) {
-          existing.credit_limit = Number(args.p_limit) || 0
-          existing.credit_days = args.p_days ?? 30
+          existing.credit_limit = limitVal
+          existing.credit_days = daysVal
         } else {
-          rows.push({ supplier_id: supId, credit_limit: Number(args.p_limit) || 0, credit_days: args.p_days ?? 30 })
+          rows.push({ company_id: companyId, supplier_id: supId, credit_limit: limitVal, credit_days: daysVal })
         }
         return { data: null, error: null }
       }
       case 'registrar_pago_proveedor': {
-        const sup = getTable('suppliers').find(s => s.id === args.p_supplier_id)
-        if (!sup) return { data: null, error: { message: 'El proveedor no existe' } }
-        const amt = Math.round((Number(args.p_amount) || 0) * 100) / 100
-        if (!(amt > 0)) return { data: null, error: { message: 'El pago debe ser mayor a cero' } }
-        const allocs = getTable('supplier_allocations')
-        const activePays = new Set(getTable('supplier_payments').filter(x => x.status === 'activo').map(x => x.id))
-        const pDevs = getTable('purchase_devolutions').filter(d => d.status === 'activa' && d.refund_method === 'credito')
+        const auth = requireDemoActor(['admin', 'dueno', 'admin_empresa'])
+        if (!auth.ok) return { data: null, error: auth.error }
+        const { companyId, uid, displayName } = auth.actor
+        const sup = getTable('suppliers').find(s => s.id === args.p_supplier_id && isSameCompany(s, companyId))
+        if (!sup) return demoErr('El proveedor no existe')
+
+        const clientUuid = args.p_client_id ? String(args.p_client_id).trim() : null
+        const paymentsTbl = getTable('supplier_payments')
+        if (clientUuid) {
+          const existingPay = paymentsTbl.find(x => isSameCompany(x, companyId) && x.client_uuid === clientUuid)
+          if (existingPay) return { data: existingPay.id, error: null }
+        }
+
+        const rawAmt = Number(args.p_amount)
+        const amt = Math.round((Number.isFinite(rawAmt) ? rawAmt : 0) * 100) / 100
+        if (!(amt > 0)) return demoErr('El pago debe ser mayor a cero')
+
+        const method = String(args.p_method || 'efectivo').trim()
+        if (!['efectivo', 'tarjeta', 'transferencia'].includes(method)) {
+          return demoErr('Forma de pago inválida')
+        }
+
+        const allocsTbl = getTable('supplier_allocations')
+        const activePays = new Set(
+          paymentsTbl.filter(x => isSameCompany(x, companyId) && x.status === 'activo').map(x => x.id)
+        )
+        const pDevs = getTable('purchase_devolutions').filter(
+          d => isSameCompany(d, companyId) && d.status === 'activa' && d.refund_method === 'credito'
+        )
         const openPurchases = getTable('purchases')
-          .filter(p => p.supplier_id === sup.id && p.payment_method === 'credito' && p.status !== 'anulada')
+          .filter(
+            p => isSameCompany(p, companyId) && p.supplier_id === sup.id && p.payment_method === 'credito' && p.status !== 'anulada'
+          )
           .map(p => {
-            const paid = allocs.filter(a => a.purchase_id === p.id && activePays.has(a.payment_id)).reduce((acc, a) => acc + Number(a.amount), 0)
+            const paid = allocsTbl
+              .filter(a => isSameCompany(a, companyId) && a.purchase_id === p.id && activePays.has(a.payment_id))
+              .reduce((acc, a) => acc + Number(a.amount), 0)
             const credRet = pDevs.filter(d => d.purchase_id === p.id).reduce((acc, d) => acc + Number(d.amount), 0)
             return { purchase: p, balance: Math.round(Math.max(0, Number(p.total) - credRet - paid) * 100) / 100 }
           })
           .filter(x => x.balance > 0)
           .sort((a, b) => String(a.purchase.created_at || '').localeCompare(String(b.purchase.created_at || '')))
         const totalOwed = Math.round(openPurchases.reduce((acc, x) => acc + x.balance, 0) * 100) / 100
-        if (amt > totalOwed + 0.005) return { data: null, error: { message: 'El pago supera la deuda actual del proveedor' } }
-        const payId = args.p_client_id || genId()
-        const method = args.p_method || 'efectivo'
-        getTable('supplier_payments').unshift({
+        if (amt > totalOwed + 0.005) return demoErr('El pago supera la deuda actual del proveedor')
+
+        const payId = genId()
+        const createdAt = args.p_captured_at || nowIso()
+        paymentsTbl.unshift({
           id: payId,
+          company_id: companyId,
           supplier_id: sup.id,
           amount: amt,
           method,
           note: args.p_note ?? args.p_notes ?? null,
           status: 'activo',
-          created_by_name: 'Administrador Demo',
-          created_at: args.p_captured_at || nowIso(),
+          client_uuid: clientUuid,
+          created_by: uid,
+          created_by_name: displayName,
+          created_at: createdAt,
         })
+
+        const newAllocIds: string[] = []
         let rem = amt
         for (const item of openPurchases) {
           if (rem <= 0) break
           const apply = Math.round(Math.min(rem, item.balance) * 100) / 100
-          allocs.push({ id: genId(), payment_id: payId, purchase_id: item.purchase.id, amount: apply })
+          const allocId = genId()
+          newAllocIds.push(allocId)
+          allocsTbl.push({
+            id: allocId,
+            company_id: companyId,
+            payment_id: payId,
+            purchase_id: item.purchase.id,
+            amount: apply,
+          })
           rem = Math.round((rem - apply) * 100) / 100
         }
+
+        let cashEntryId: string | null = null
         if (method === 'efectivo') {
+          cashEntryId = genId()
           const entry = {
-            id: genId(),
+            id: cashEntryId,
+            company_id: companyId,
             type: 'egreso',
             amount: amt,
             description: `Pago a proveedor - ${sup.name}`,
@@ -3992,17 +4517,41 @@ function createMockSupabase(silent = false): SupabaseClient {
           getTable('cash_entries').unshift(entry)
           getTable('cash_movements').unshift(entry)
         }
+
+        const accRes = demoPostSupplierPayment(companyId, payId)
+        if (accRes.error) {
+          const pIdx = paymentsTbl.findIndex(x => x.id === payId)
+          if (pIdx >= 0) paymentsTbl.splice(pIdx, 1)
+          const allocSet = new Set(newAllocIds)
+          for (let i = allocsTbl.length - 1; i >= 0; i--) {
+            if (allocSet.has(allocsTbl[i].id)) allocsTbl.splice(i, 1)
+          }
+          if (cashEntryId) {
+            for (const tblName of ['cash_entries', 'cash_movements']) {
+              const arr = getTable(tblName)
+              const cIdx = arr.findIndex(e => e.id === cashEntryId)
+              if (cIdx >= 0) arr.splice(cIdx, 1)
+            }
+          }
+          return { data: null, error: accRes.error }
+        }
         return { data: payId, error: null }
       }
       case 'anular_pago_proveedor': {
-        const pay = getTable('supplier_payments').find(x => x.id === args.p_payment_id)
-        if (!pay) return { data: null, error: { message: 'El pago no existe' } }
-        if (pay.status === 'anulado') return { data: null, error: { message: 'El pago ya está anulado' } }
-        tables.supplier_allocations = getTable('supplier_allocations').filter(a => a.payment_id !== pay.id)
+        const auth = requireDemoActor(['admin', 'dueno', 'admin_empresa'])
+        if (!auth.ok) return { data: null, error: auth.error }
+        const { companyId } = auth.actor
+        const pay = getTable('supplier_payments').find(x => x.id === args.p_payment_id && isSameCompany(x, companyId))
+        if (!pay) return demoErr('El pago no existe')
+        if (pay.status === 'anulado') return demoErr('El pago ya está anulado')
+        tables.supplier_allocations = getTable('supplier_allocations').filter(
+          a => !(a.payment_id === pay.id && isSameCompany(a, companyId))
+        )
         pay.status = 'anulado'
         if ((pay.method || pay.payment_method) === 'efectivo') {
           const entry = {
             id: genId(),
+            company_id: companyId,
             type: 'ingreso',
             amount: Number(pay.amount) || 0,
             description: `Anulación pago a proveedor`,
@@ -4163,12 +4712,15 @@ function createMockSupabase(silent = false): SupabaseClient {
         return { data: devId, error: null }
       }
       case 'registrar_devolucion_compra': {
+        const auth = requireDemoActor(['admin', 'dueno', 'admin_empresa'])
+        if (!auth.ok) return { data: null, error: auth.error }
+        const { companyId, displayName } = auth.actor
         const qty = Number(args.p_quantity) || 0
-        if (!(qty > 0)) return { data: null, error: { message: 'Cantidad inválida' } }
+        if (!(qty > 0)) return demoErr('Cantidad inválida')
         const reason = String(args.p_reason || '').trim()
-        if (!reason) return { data: null, error: { message: 'El motivo de la devolución es obligatorio' } }
-        const pur = getTable('purchases').find(p => p.id === args.p_purchase_id)
-        if (!pur || pur.status === 'anulada') return { data: null, error: { message: 'Compra no disponible' } }
+        if (!reason) return demoErr('El motivo de la devolución es obligatorio')
+        const pur = getTable('purchases').find(p => p.id === args.p_purchase_id && isSameCompany(p, companyId))
+        if (!pur || pur.status === 'anulada') return demoErr('Compra no disponible')
         const items: Row[] = Array.isArray(pur.items) ? pur.items : []
         const prodItems = items.filter(x => x.product_id === args.p_product_id)
         const bought = prodItems.reduce((acc, x) => acc + (Number(x.quantity) || 0), 0)
@@ -4179,14 +4731,14 @@ function createMockSupabase(silent = false): SupabaseClient {
           : Number(pur.tax || 0) > 0 && Number(pur.subtotal || 0) > 0
             ? Math.round(Number(pur.tax) * (boughtAmt / Number(pur.subtotal)) * 100) / 100
             : 0
-        if (bought <= 0) return { data: null, error: { message: 'Ese producto no pertenece a la compra seleccionada' } }
+        if (bought <= 0) return demoErr('Ese producto no pertenece a la compra seleccionada')
         const activeProdDevs = getTable('purchase_devolutions')
-          .filter(d => d.purchase_id === pur.id && d.product_id === args.p_product_id && d.status === 'activa')
+          .filter(d => isSameCompany(d, companyId) && d.purchase_id === pur.id && d.product_id === args.p_product_id && d.status === 'activa')
         const returned = activeProdDevs.reduce((acc, d) => acc + (Number(d.quantity) || 0), 0)
         const returnedAmt = activeProdDevs.reduce((acc, d) => acc + Number(d.subtotal ?? d.amount ?? 0), 0)
         const returnedTax = activeProdDevs.reduce((acc, d) => acc + Number(d.tax_amount ?? 0), 0)
         if (qty > bought - returned + 0.0001) {
-          return { data: null, error: { message: `Solo quedan ${bought - returned} unidad(es) disponibles para devolver` } }
+          return demoErr(`Solo quedan ${bought - returned} unidad(es) disponibles para devolver`)
         }
         const isLast = Math.abs((returned + qty) - bought) <= 0.0001
         const devBase = isLast
@@ -4202,23 +4754,25 @@ function createMockSupabase(silent = false): SupabaseClient {
         const refund = String(args.p_refund_method || pur.payment_method || 'efectivo')
         if (refund === 'credito') {
           if (pur.payment_method !== 'credito') {
-            return { data: null, error: { message: 'Solo puedes descontar de Cuentas por pagar cuando la compra original fue a crédito' } }
+            return demoErr('Solo puedes descontar de Cuentas por pagar cuando la compra original fue a crédito')
           }
-          const allocs = getTable('supplier_allocations')
-          const activePays = new Set(getTable('supplier_payments').filter(x => x.status === 'activo').map(x => x.id))
+          const allocs = getTable('supplier_allocations').filter(a => isSameCompany(a, companyId))
+          const activePays = new Set(
+            getTable('supplier_payments').filter(x => isSameCompany(x, companyId) && x.status === 'activo').map(x => x.id)
+          )
           const paid = allocs.filter(a => a.purchase_id === pur.id && activePays.has(a.payment_id)).reduce((acc, a) => acc + Number(a.amount), 0)
           const credRet = getTable('purchase_devolutions')
-            .filter(d => d.purchase_id === pur.id && d.status === 'activa' && d.refund_method === 'credito')
+            .filter(d => isSameCompany(d, companyId) && d.purchase_id === pur.id && d.status === 'activa' && d.refund_method === 'credito')
             .reduce((acc, d) => acc + Number(d.amount), 0)
           const bal = Math.max(0, Number(pur.total) - credRet - paid)
           if (amount > bal + 0.005) {
-            return { data: null, error: { message: `La devolución supera el saldo pendiente de esta compra (${bal.toFixed(2)})` } }
+            return demoErr(`La devolución supera el saldo pendiente de esta compra (${bal.toFixed(2)})`)
           }
         }
-        const prod = prods.find(p => p.id === args.p_product_id)
-        if (!prod) return { data: null, error: { message: 'El producto ya no existe' } }
+        const prod = prods.find(p => p.id === args.p_product_id && isSameCompany(p, companyId))
+        if (!prod) return demoErr('El producto ya no existe')
         if ((Number(prod.stock) || 0) < qty) {
-          return { data: null, error: { message: `Stock actual insuficiente de "${prod.name}" (en inventario: ${prod.stock})` } }
+          return demoErr(`Stock actual insuficiente de "${prod.name}" (en inventario: ${prod.stock})`)
         }
         const oldStock = Number(prod.stock) || 0
         const oldCost = Number(prod.cost) || 0
@@ -4231,6 +4785,7 @@ function createMockSupabase(silent = false): SupabaseClient {
         const devId = genId()
         getTable('purchase_devolutions').unshift({
           id: devId,
+          company_id: companyId,
           purchase_id: pur.id,
           supplier_id: pur.supplier_id || null,
           supplier_name: pur.supplier_name || null,
@@ -4246,11 +4801,12 @@ function createMockSupabase(silent = false): SupabaseClient {
           refund_method: refund,
           reason,
           status: 'activa',
-          created_by_name: 'Administrador Demo',
+          created_by_name: displayName,
           created_at: nowIso(),
         })
         getTable('kardex').unshift({
           id: genId(),
+          company_id: companyId,
           product_id: prod.id,
           product_name: prod.name,
           type: 'salida',
@@ -4263,6 +4819,7 @@ function createMockSupabase(silent = false): SupabaseClient {
         if (refund === 'efectivo' && amount > 0) {
           const entry = {
             id: genId(),
+            company_id: companyId,
             type: 'ingreso',
             amount,
             description: `Devolución a proveedor - ${prod.name}`,
@@ -4276,11 +4833,14 @@ function createMockSupabase(silent = false): SupabaseClient {
         return { data: devId, error: null }
       }
       case 'anular_devolucion_compra': {
-        const d = getTable('purchase_devolutions').find(x => x.id === args.p_dev_id)
-        if (!d) return { data: null, error: { message: 'La devolución a proveedor no existe' } }
-        if (d.status === 'anulada') return { data: null, error: { message: 'Esta devolución ya fue anulada' } }
-        const prod = prods.find(p => p.id === d.product_id)
-        if (!prod) return { data: null, error: { message: 'El producto ya no existe' } }
+        const auth = requireDemoActor(['admin', 'dueno', 'admin_empresa'])
+        if (!auth.ok) return { data: null, error: auth.error }
+        const { companyId } = auth.actor
+        const d = getTable('purchase_devolutions').find(x => x.id === args.p_dev_id && isSameCompany(x, companyId))
+        if (!d) return demoErr('La devolución a proveedor no existe')
+        if (d.status === 'anulada') return demoErr('Esta devolución ya fue anulada')
+        const prod = prods.find(p => p.id === d.product_id && isSameCompany(p, companyId))
+        if (!prod) return demoErr('El producto ya no existe')
         const oldStock = Number(prod.stock) || 0
         const oldCost = Number(prod.cost) || 0
         const qty = Number(d.quantity) || 0
@@ -4294,6 +4854,7 @@ function createMockSupabase(silent = false): SupabaseClient {
         d.status = 'anulada'
         getTable('kardex').unshift({
           id: genId(),
+          company_id: companyId,
           product_id: prod.id,
           product_name: prod.name,
           type: 'entrada',
@@ -4306,6 +4867,7 @@ function createMockSupabase(silent = false): SupabaseClient {
         if (d.refund_method === 'efectivo' && amt > 0) {
           const entry = {
             id: genId(),
+            company_id: companyId,
             type: 'egreso',
             amount: amt,
             description: `Anulación devolución a proveedor - ${prod.name}`,
@@ -5554,24 +6116,32 @@ function createMockSupabase(silent = false): SupabaseClient {
       }
       case 'lotes_cuadrar':
         return { data: 0, error: null }
-      case 'acc_post_pending':
-        return {
-          data: { ventas: 0, compras: 0, abonos: 0, pagos_proveedor: 0, gastos: 0, devoluciones: 0, devoluciones_compra: 0, caja: 0, ajustes: 0 },
-          error: null,
-        }
+      case 'acc_post_pending': {
+        const auth = requireDemoActor(['admin', 'dueno', 'admin_empresa', 'gerente'])
+        if (!auth.ok) return { data: null, error: auth.error }
+        return demoPostPending(auth.actor.companyId)
+      }
       case 'acc_reconcile': {
-        const postedIds = new Set(getTable('acc_entries').filter(e => e.status === 'contabilizado').map(e => e.id))
+        const auth = requireDemoActor(['admin', 'dueno', 'admin_empresa', 'gerente', 'contador'])
+        if (!auth.ok) return { data: null, error: auth.error }
+        const { companyId } = auth.actor
+        const postedIds = new Set(
+          getTable('acc_entries').filter(e => isSameCompany(e, companyId) && e.status === 'contabilizado').map(e => e.id)
+        )
         const allLines = getTable('acc_lines').filter(l => postedIds.has(l.entry_id))
-        const sumAcc = (accId: string, nature: 'debito' | 'credito') => {
-          const ls = allLines.filter(l => l.account_id === accId)
+        const compAccs = getTable('acc_accounts').filter(a => isSameCompany(a, companyId))
+        const sumByCodeOrId = (codePrefix: string, fallbackId: string, nature: 'debito' | 'credito') => {
+          const matchAcc = compAccs.find(a => String(a.code || '') === codePrefix) || compAccs.find(a => a.id === fallbackId)
+          if (!matchAcc) return 0
+          const ls = allLines.filter(l => l.account_id === matchAcc.id)
           const d = ls.reduce((s, l) => s + (Number(l.debit) || 0), 0)
           const c = ls.reduce((s, l) => s + (Number(l.credit) || 0), 0)
           return Math.round((nature === 'debito' ? d - c : c - d) * 100) / 100
         }
-        const ventasCont = sumAcc('acc-7', 'credito')
-        const gastosCont = sumAcc('acc-9', 'debito')
-        const invCont = sumAcc('acc-4', 'debito')
-        const cxcCont = sumAcc('acc-3', 'debito')
+        const ventasCont = sumByCodeOrId('4101', 'acc-7', 'credito')
+        const gastosCont = sumByCodeOrId('6101', 'acc-9', 'debito')
+        const invCont = sumByCodeOrId('1104', 'acc-4', 'debito')
+        const cxcCont = sumByCodeOrId('1103', 'acc-3', 'debito')
         return {
           data: [
             {
@@ -5611,39 +6181,70 @@ function createMockSupabase(silent = false): SupabaseClient {
         }
       }
       case 'acc_save_settings': {
+        const auth = requireDemoActor(['admin', 'dueno', 'admin_empresa'])
+        if (!auth.ok) return { data: null, error: auth.error }
+        const { companyId } = auth.actor
+        const newMap: Record<string, string> = args.p_map && typeof args.p_map === 'object' ? args.p_map : {}
+        const compAccs = getTable('acc_accounts').filter(a => isSameCompany(a, companyId))
+        for (const val of Object.values(newMap)) {
+          if (val !== null && val !== undefined && String(val).trim() !== '') {
+            const acc = compAccs.find(a => a.id === String(val).trim())
+            if (!acc) {
+              return demoErr('Cuenta contable mapeada inválida o perteneciente a otra empresa')
+            }
+          }
+        }
         const st = getTable('acc_settings')
-        if (st.length) st[0].map = args.p_map || {}
-        else st.push({ id: 'acc-st-1', active: false, start_date: null, timezone: 'America/Caracas', map: args.p_map || {} })
+        const existing = st.find(x => isSameCompany(x, companyId))
+        if (existing) existing.map = newMap
+        else st.push({ id: genId(), company_id: companyId, active: false, start_date: null, timezone: 'America/Bogota', map: newMap })
         return { data: null, error: null }
       }
       case 'acc_activate': {
+        const auth = requireDemoActor(['admin', 'dueno', 'admin_empresa'])
+        if (!auth.ok) return { data: null, error: auth.error }
+        const { companyId } = auth.actor
         const st = getTable('acc_settings')
-        if (st.length) {
-          st[0].active = Boolean(args.p_active)
-          st[0].start_date = args.p_start || null
+        const existing = st.find(x => isSameCompany(x, companyId))
+        if (existing) {
+          existing.active = Boolean(args.p_active)
+          existing.start_date = args.p_start || null
         } else {
-          st.push({ id: 'acc-st-1', active: Boolean(args.p_active), start_date: args.p_start || null, timezone: 'America/Caracas', map: {} })
+          st.push({
+            id: genId(),
+            company_id: companyId,
+            active: Boolean(args.p_active),
+            start_date: args.p_start || null,
+            timezone: 'America/Bogota',
+            map: {},
+          })
         }
         return { data: null, error: null }
       }
-      case 'acc_seed_template':
+      case 'acc_seed_template': {
+        const auth = requireDemoActor(['admin', 'dueno', 'admin_empresa'])
+        if (!auth.ok) return { data: null, error: auth.error }
         return { data: null, error: null }
+      }
       case 'acc_upsert_account': {
+        const auth = requireDemoActor(['admin', 'dueno', 'admin_empresa'])
+        if (!auth.ok) return { data: null, error: auth.error }
+        const { companyId } = auth.actor
         const accs = getTable('acc_accounts')
         if (args.p_id) {
-          const ex = accs.find(a => a.id === args.p_id)
-          if (ex) {
-            ex.code = args.p_code
-            ex.name = args.p_name
-            ex.type = args.p_type
-            ex.nature = args.p_nature
-            ex.parent_id = args.p_parent ?? null
-            ex.is_postable = Boolean(args.p_postable)
-            ex.active = args.p_active !== false
-          }
+          const ex = accs.find(a => a.id === args.p_id && isSameCompany(a, companyId))
+          if (!ex) return demoErr('Cuenta contable no encontrada')
+          ex.code = args.p_code
+          ex.name = args.p_name
+          ex.type = args.p_type
+          ex.nature = args.p_nature
+          ex.parent_id = args.p_parent ?? null
+          ex.is_postable = Boolean(args.p_postable)
+          ex.active = args.p_active !== false
         } else {
           accs.push({
             id: genId(),
+            company_id: companyId,
             code: String(args.p_code || '').trim(),
             name: String(args.p_name || '').trim(),
             type: args.p_type || 'activo',
@@ -5656,63 +6257,124 @@ function createMockSupabase(silent = false): SupabaseClient {
         return { data: null, error: null }
       }
       case 'acc_create_entry': {
+        const auth = requireDemoActor(['admin', 'dueno', 'admin_empresa', 'gerente', 'contador'])
+        if (!auth.ok) return { data: null, error: auth.error }
+        const { companyId, uid } = auth.actor
+        const entryDate = String(args.p_date || daysFromNowYmd(0)).slice(0, 10)
+        const sourceType = String(args.p_source_type || 'manual')
+        if (!['manual', 'ajuste'].includes(sourceType)) {
+          return demoErr('Tipo de origen no permitido')
+        }
+        const rawLines: Row[] = Array.isArray(args.p_lines) ? args.p_lines : []
+        if (rawLines.length < 2) {
+          return demoErr('El asiento debe incluir al menos 2 líneas')
+        }
+        if (args.p_post) {
+          if (demoIsPeriodClosed(companyId, entryDate)) {
+            return demoErr(`El periodo contable ${entryDate.slice(0, 7)} está cerrado`)
+          }
+        }
         const entries = getTable('acc_entries')
-        const accs = getTable('acc_accounts')
-        const allLines = getTable('acc_lines')
+        const accs = getTable('acc_accounts').filter(a => isSameCompany(a, companyId))
+        let totD = 0
+        let totC = 0
+        const resolvedLines: Row[] = []
+        for (const l of rawLines) {
+          const ac = accs.find(a => a.id === l.account_id && a.is_postable === true && a.active === true)
+          if (!ac) {
+            return demoErr('Cuenta contable no encontrada, inactiva o perteneciente a otra empresa')
+          }
+          const d = Math.round((Number(l.debit) || 0) * 100) / 100
+          const c = Math.round((Number(l.credit) || 0) * 100) / 100
+          totD += d
+          totC += c
+          resolvedLines.push({
+            account_id: ac.id,
+            debit: d,
+            credit: c,
+            memo: l.memo || null,
+            acc_accounts: { code: ac.code, name: ac.name },
+          })
+        }
+        if (args.p_post && (Math.abs(Math.round((totD - totC) * 100) / 100) > 0.01 || totD <= 0)) {
+          return demoErr('El asiento está descuadrado o sin movimientos válidos')
+        }
         const id = genId()
-        const num = `ASI-${String(entries.length + 1).padStart(4, '0')}`
+        const num = `ASI-${String(entries.filter(e => isSameCompany(e, companyId)).length + 1).padStart(4, '0')}`
         entries.unshift({
           id,
+          company_id: companyId,
           number: num,
-          entry_date: args.p_date || daysFromNowYmd(0),
+          entry_date: entryDate,
           description: args.p_description || 'Asiento manual',
           status: args.p_post ? 'contabilizado' : 'borrador',
-          source_type: String(args.p_source_type || 'manual'),
-          created_by: currentSession?.user?.id || null,
+          source_type: sourceType,
+          created_by: uid,
+          created_at: nowIso(),
         })
-        for (const l of (args.p_lines || [])) {
-          const ac = accs.find(a => a.id === l.account_id)
+        const allLines = getTable('acc_lines')
+        for (const l of resolvedLines) {
           allLines.push({
             id: genId(),
+            company_id: companyId,
             entry_id: id,
             account_id: l.account_id,
-            debit: Number(l.debit) || 0,
-            credit: Number(l.credit) || 0,
-            memo: l.memo || null,
-            acc_accounts: ac ? { code: ac.code, name: ac.name } : null,
+            debit: l.debit,
+            credit: l.credit,
+            memo: l.memo,
+            acc_accounts: l.acc_accounts,
           })
         }
         return { data: id, error: null }
       }
       case 'acc_post_entry': {
-        const e = getTable('acc_entries').find(x => x.id === args.p_entry_id)
+        const auth = requireDemoActor(['admin', 'dueno', 'admin_empresa', 'gerente', 'contador'])
+        if (!auth.ok) return { data: null, error: auth.error }
+        const { companyId, uid, role: actorRole } = auth.actor
+        const e = getTable('acc_entries').find(x => x.id === args.p_entry_id && isSameCompany(x, companyId))
         if (!e || e.status !== 'borrador') {
-          return { data: null, error: { message: 'El asiento no existe o ya no es un borrador' } }
+          return demoErr('El asiento no existe o ya no es un borrador')
         }
-        const actorRole = String(currentSession?.user?.role || '')
         if (
           actorRole === 'contador' &&
-          (!['manual', 'ajuste'].includes(String(e.source_type || '')) || e.created_by !== currentSession?.user?.id)
+          (!['manual', 'ajuste'].includes(String(e.source_type || '')) || e.created_by !== uid)
         ) {
-          return {
-            data: null,
-            error: { message: 'No autorizado: el contador solo puede contabilizar sus propios asientos manuales o de ajuste' },
-          }
+          return demoErr('No autorizado: el contador solo puede contabilizar sus propios asientos manuales o de ajuste')
+        }
+        if (demoIsPeriodClosed(companyId, String(e.entry_date || ''))) {
+          return demoErr(`El periodo contable de ${String(e.entry_date || '').slice(0, 7)} está cerrado`)
+        }
+        const entryLines = getTable('acc_lines').filter(l => l.entry_id === e.id)
+        const dSum = Math.round(entryLines.reduce((s, l) => s + (Number(l.debit) || 0), 0) * 100) / 100
+        const cSum = Math.round(entryLines.reduce((s, l) => s + (Number(l.credit) || 0), 0) * 100) / 100
+        if (entryLines.length < 2 || Math.abs(dSum - cSum) > 0.01 || dSum <= 0) {
+          return demoErr('El asiento no puede contabilizarse porque está descuadrado')
         }
         e.status = 'contabilizado'
         return { data: null, error: null }
       }
       case 'acc_reverse_entry': {
-        const e = getTable('acc_entries').find(x => x.id === args.p_entry_id)
-        if (e) e.status = 'reversado'
+        const auth = requireDemoActor(['admin', 'dueno', 'admin_empresa', 'gerente'])
+        if (!auth.ok) return { data: null, error: auth.error }
+        const { companyId } = auth.actor
+        const e = getTable('acc_entries').find(x => x.id === args.p_entry_id && isSameCompany(x, companyId))
+        if (!e) return demoErr('Asiento no encontrado')
+        if (demoIsPeriodClosed(companyId, String(e.entry_date || ''))) {
+          return demoErr('El periodo del asiento está cerrado')
+        }
+        e.status = 'reversado'
         return { data: null, error: null }
       }
       case 'acc_ledger': {
+        const auth = requireDemoActor(['admin', 'dueno', 'admin_empresa', 'gerente', 'contador'])
+        if (!auth.ok) return { data: null, error: auth.error }
+        const { companyId } = auth.actor
         const accId = args.p_account
-        const ac = getTable('acc_accounts').find(a => a.id === accId)
+        const ac = getTable('acc_accounts').find(a => a.id === accId && isSameCompany(a, companyId))
+        if (!ac) return { data: [], error: null }
         const postedEntries = new Map(
           getTable('acc_entries')
-            .filter(e => e.status === 'contabilizado')
+            .filter(e => isSameCompany(e, companyId) && e.status === 'contabilizado')
             .map(e => [e.id, e])
         )
         const rawLines = getTable('acc_lines').filter(l => l.account_id === accId && postedEntries.has(l.entry_id))
@@ -5721,7 +6383,7 @@ function createMockSupabase(silent = false): SupabaseClient {
           const ent = postedEntries.get(l.entry_id)!
           const deb = Number(l.debit) || 0
           const cred = Number(l.credit) || 0
-          running += ac?.nature === 'credito' ? cred - deb : deb - cred
+          running += ac.nature === 'credito' ? cred - deb : deb - cred
           return {
             seq: idx + 1,
             entry_date: ent.entry_date,
@@ -5736,10 +6398,15 @@ function createMockSupabase(silent = false): SupabaseClient {
         return { data: out, error: null }
       }
       case 'acc_trial_balance': {
-        const postedIds = new Set(getTable('acc_entries').filter(e => e.status === 'contabilizado').map(e => e.id))
+        const auth = requireDemoActor(['admin', 'dueno', 'admin_empresa', 'gerente', 'contador'])
+        if (!auth.ok) return { data: null, error: auth.error }
+        const { companyId } = auth.actor
+        const postedIds = new Set(
+          getTable('acc_entries').filter(e => isSameCompany(e, companyId) && e.status === 'contabilizado').map(e => e.id)
+        )
         const allLines = getTable('acc_lines').filter(l => postedIds.has(l.entry_id))
         const out = getTable('acc_accounts')
-          .filter(a => a.is_postable)
+          .filter(a => isSameCompany(a, companyId) && a.is_postable)
           .map(a => {
             const ls = allLines.filter(l => l.account_id === a.id)
             const deb = Math.round(ls.reduce((s, l) => s + (Number(l.debit) || 0), 0) * 100) / 100
@@ -5761,10 +6428,15 @@ function createMockSupabase(silent = false): SupabaseClient {
         return { data: out, error: null }
       }
       case 'acc_income_statement': {
-        const postedIds = new Set(getTable('acc_entries').filter(e => e.status === 'contabilizado').map(e => e.id))
+        const auth = requireDemoActor(['admin', 'dueno', 'admin_empresa', 'gerente', 'contador'])
+        if (!auth.ok) return { data: null, error: auth.error }
+        const { companyId } = auth.actor
+        const postedIds = new Set(
+          getTable('acc_entries').filter(e => isSameCompany(e, companyId) && e.status === 'contabilizado').map(e => e.id)
+        )
         const allLines = getTable('acc_lines').filter(l => postedIds.has(l.entry_id))
         const out = getTable('acc_accounts')
-          .filter(a => ['ingreso', 'costo', 'gasto'].includes(a.type))
+          .filter(a => isSameCompany(a, companyId) && ['ingreso', 'costo', 'gasto'].includes(a.type))
           .map(a => {
             const ls = allLines.filter(l => l.account_id === a.id)
             const deb = ls.reduce((s, l) => s + (Number(l.debit) || 0), 0)
@@ -5776,11 +6448,16 @@ function createMockSupabase(silent = false): SupabaseClient {
         return { data: out, error: null }
       }
       case 'acc_balance_sheet': {
-        const postedIds = new Set(getTable('acc_entries').filter(e => e.status === 'contabilizado').map(e => e.id))
+        const auth = requireDemoActor(['admin', 'dueno', 'admin_empresa', 'gerente', 'contador'])
+        if (!auth.ok) return { data: null, error: auth.error }
+        const { companyId } = auth.actor
+        const postedIds = new Set(
+          getTable('acc_entries').filter(e => isSameCompany(e, companyId) && e.status === 'contabilizado').map(e => e.id)
+        )
         const allLines = getTable('acc_lines').filter(l => postedIds.has(l.entry_id))
         const rowsOut: Row[] = []
         let netIncome = 0
-        for (const a of getTable('acc_accounts')) {
+        for (const a of getTable('acc_accounts').filter(x => isSameCompany(x, companyId))) {
           const ls = allLines.filter(l => l.account_id === a.id)
           const deb = ls.reduce((s, l) => s + (Number(l.debit) || 0), 0)
           const cred = ls.reduce((s, l) => s + (Number(l.credit) || 0), 0)
@@ -5806,12 +6483,17 @@ function createMockSupabase(silent = false): SupabaseClient {
         }
         return { data: rowsOut, error: null }
       }
-      case 'acc_statement_status':
+      case 'acc_statement_status': {
+        const auth = requireDemoActor(['admin', 'dueno', 'admin_empresa', 'gerente', 'contador'])
+        if (!auth.ok) return { data: null, error: auth.error }
         return {
           data: [{ kind: 'nota', reason: 'Entorno de demostración con asientos cuadrados automáticamente.' }],
           error: null,
         }
-      case 'acc_close_check':
+      }
+      case 'acc_close_check': {
+        const auth = requireDemoActor(['admin', 'dueno', 'admin_empresa', 'gerente', 'contador'])
+        if (!auth.ok) return { data: null, error: auth.error }
         return {
           data: [
             { code: 'partidas', label: 'Partida doble cuadrada en todos los asientos', status: 'ok', detail: 'Débitos iguales a créditos' },
@@ -5820,33 +6502,122 @@ function createMockSupabase(silent = false): SupabaseClient {
           ],
           error: null,
         }
+      }
       case 'acc_close_period': {
+        const auth = requireDemoActor(['admin', 'dueno', 'admin_empresa', 'gerente'])
+        if (!auth.ok) return { data: null, error: auth.error }
+        const { companyId, uid, displayName } = auth.actor
+        const year = Number(args.p_year)
+        const month = Number(args.p_month)
+        if (!Number.isInteger(year) || year < 2000 || year > 2100 || !Number.isInteger(month) || month < 1 || month > 12) {
+          return demoErr('Periodo contable inválido (año 2000-2100, mes 1-12)')
+        }
+        const periods = getTable('acc_periods')
         const closings = getTable('acc_closings')
+        if (
+          periods.some(p => isSameCompany(p, companyId) && Number(p.year) === year && Number(p.month) === month && p.status === 'cerrado') ||
+          closings.some(c => isSameCompany(c, companyId) && Number(c.year) === year && Number(c.month) === month && c.status === 'cerrado')
+        ) {
+          return demoErr(`El periodo ${year}-${String(month).padStart(2, '0')} ya se encuentra cerrado`)
+        }
+        const pRow = periods.find(p => isSameCompany(p, companyId) && Number(p.year) === year && Number(p.month) === month)
+        if (pRow) {
+          pRow.status = 'cerrado'
+          pRow.closed_at = nowIso()
+          pRow.closed_by = uid
+        } else {
+          periods.push({
+            id: genId(),
+            company_id: companyId,
+            year,
+            month,
+            status: 'cerrado',
+            closed_at: nowIso(),
+            closed_by: uid,
+          })
+        }
+        const closingId = genId()
         closings.unshift({
-          id: genId(),
-          year: Number(args.p_year),
-          month: Number(args.p_month),
+          id: closingId,
+          company_id: companyId,
+          year,
+          month,
           status: 'cerrado',
           notes: args.p_notes || null,
           checks: [{ code: 'partidas', label: 'Partida doble cuadrada', status: 'ok', detail: 'Verificado' }],
           trial_balance: [],
-          totals: { debitos: 3905.9, creditos: 3905.9 },
-          closed_by_name: 'Valentina Morales',
+          totals: { debitos: 0, creditos: 0 },
+          closed_by_name: displayName,
           closed_at: nowIso(),
           reopened_by_name: null,
           reopened_at: null,
           reopen_reason: null,
         })
-        return { data: null, error: null }
+        getTable('audit_log').unshift({
+          id: genId(),
+          company_id: companyId,
+          user_id: uid,
+          user_name: displayName,
+          action: 'cierre_contable',
+          table_name: 'acc_closings',
+          record_id: closingId,
+          new_data: { year, month, status: 'cerrado' },
+          created_at: nowIso(),
+        })
+        return { data: closingId, error: null }
       }
       case 'acc_reopen_period': {
-        const c = getTable('acc_closings').find(x => x.year === Number(args.p_year) && x.month === Number(args.p_month))
-        if (c) {
-          c.status = 'reabierto'
-          c.reopened_by_name = 'Valentina Morales'
-          c.reopened_at = nowIso()
-          c.reopen_reason = args.p_reason || 'Ajuste contable'
+        const auth = requireDemoActor(['admin', 'dueno', 'admin_empresa'])
+        if (!auth.ok) return { data: null, error: auth.error }
+        const { companyId, uid, displayName } = auth.actor
+        const year = Number(args.p_year)
+        const month = Number(args.p_month)
+        if (!Number.isInteger(year) || year < 2000 || year > 2100 || !Number.isInteger(month) || month < 1 || month > 12) {
+          return demoErr('Periodo contable inválido (año 2000-2100, mes 1-12)')
         }
+        const reason = String(args.p_reason || '').trim()
+        if (!reason) {
+          return demoErr('Debes indicar el motivo de reapertura del periodo')
+        }
+        const periods = getTable('acc_periods')
+        const closings = getTable('acc_closings')
+        const hasLaterClosed =
+          periods.some(
+            p => isSameCompany(p, companyId) && p.status === 'cerrado' && (Number(p.year) > year || (Number(p.year) === year && Number(p.month) > month))
+          ) ||
+          closings.some(
+            c => isSameCompany(c, companyId) && c.status === 'cerrado' && (Number(c.year) > year || (Number(c.year) === year && Number(c.month) > month))
+          )
+        if (hasLaterClosed) {
+          return demoErr('No puedes reabrir este periodo mientras exista un periodo posterior cerrado')
+        }
+        const pRow = periods.find(p => isSameCompany(p, companyId) && Number(p.year) === year && Number(p.month) === month && p.status === 'cerrado')
+        const cRow = closings.find(x => isSameCompany(x, companyId) && Number(x.year) === year && Number(x.month) === month && x.status === 'cerrado')
+        if (!pRow && !cRow) {
+          return demoErr(`El periodo ${year}-${String(month).padStart(2, '0')} no está cerrado`)
+        }
+        if (pRow) {
+          pRow.status = 'abierto'
+          pRow.reopened_at = nowIso()
+          pRow.reopened_by = uid
+        }
+        if (cRow) {
+          cRow.status = 'reabierto'
+          cRow.reopened_by_name = displayName
+          cRow.reopened_at = nowIso()
+          cRow.reopen_reason = reason
+        }
+        getTable('audit_log').unshift({
+          id: genId(),
+          company_id: companyId,
+          user_id: uid,
+          user_name: displayName,
+          action: 'reapertura_contable',
+          table_name: 'acc_closings',
+          record_id: cRow?.id || pRow?.id || null,
+          new_data: { year, month, status: 'reabierto', reason },
+          created_at: nowIso(),
+        })
         return { data: null, error: null }
       }
       case 'ai_run_tool': {
@@ -6051,60 +6822,25 @@ function createMockSupabase(silent = false): SupabaseClient {
         }
         return { data: { ok: false, status: 'error', error: 'Consulta no disponible.' }, error: null }
       }
-      case 'cuentas_por_pagar': {
-        const todayStr = new Date().toLocaleDateString('sv-SE')
-        const pendingPurchases = getTable('purchases').filter(
-          p => p.status !== 'anulada' && p.payment_method === 'credito' && Number(p.balance ?? p.total) > 0
-        )
-        const bySup = new Map<string, Row>()
-        let totalOwed = 0
-        let totalOverdue = 0
-        for (const p of pendingPurchases) {
-          const amt = Number(p.balance ?? p.total) || 0
-          if (amt <= 0) continue
-          const isOver = Boolean(p.due_date && p.due_date < todayStr)
-          totalOwed += amt
-          if (isOver) totalOverdue += amt
-          const sup = getTable('suppliers').find(s => s.id === p.supplier_id)
-          const key = String(p.supplier_id || p.supplier_name || p.id)
-          const cur = bySup.get(key) || {
-            supplier_id: p.supplier_id || key,
-            name: p.supplier_name || sup?.name || 'Proveedor',
-            document: sup?.document || null,
-            owed: 0,
-            overdue: 0,
-            oldest_due: null,
-            open_purchases: 0,
-          }
-          cur.owed = Math.round((Number(cur.owed) + amt) * 100) / 100
-          if (isOver) cur.overdue = Math.round((Number(cur.overdue) + amt) * 100) / 100
-          cur.open_purchases = Number(cur.open_purchases) + 1
-          if (p.due_date && (!cur.oldest_due || p.due_date < cur.oldest_due)) cur.oldest_due = p.due_date
-          bySup.set(key, cur)
-        }
-        return {
-          data: {
-            total_owed: Math.round(totalOwed * 100) / 100,
-            total_overdue: Math.round(totalOverdue * 100) / 100,
-            suppliers: Array.from(bySup.values()),
-          },
-          error: null,
-        }
-      }
       case 'register_warehouse_movement': {
+        const auth = requireDemoActor(['admin', 'dueno', 'admin_empresa', 'gerente', 'almacen', 'comprador', 'vendedor', 'transportador'])
+        if (!auth.ok) return { data: null, error: auth.error }
+        const { companyId, uid } = auth.actor
         const whId = String(args.p_warehouse_id || '')
         const prodId = String(args.p_product_id || '')
         const mType = String(args.p_movement_type || '') as 'entry' | 'exit' | 'adjustment'
         const qty = Number(args.p_quantity) || 0
-        const wh = getTable('warehouses').find(w => w.id === whId && w.active !== false)
-        if (!wh) return { data: null, error: { message: 'La bodega seleccionada no existe o está inactiva' } }
+        const wh = getTable('warehouses').find(w => w.id === whId && isSameCompany(w, companyId) && w.active !== false)
+        if (!wh) return demoErr('La bodega seleccionada no existe, está inactiva o pertenece a otra empresa')
+        const prod = prods.find(p => p.id === prodId && isSameCompany(p, companyId))
+        if (!prod) return demoErr('Producto no encontrado o perteneciente a otra empresa')
         if (!['entry', 'exit', 'adjustment'].includes(mType) || qty === 0) {
-          return { data: null, error: { message: 'Movimiento o cantidad no válida' } }
+          return demoErr('Movimiento o cantidad no válida')
         }
         const wsTable = getTable('warehouse_stock')
-        let ws = wsTable.find(r => r.warehouse_id === whId && r.product_id === prodId)
+        let ws = wsTable.find(r => isSameCompany(r, companyId) && r.warehouse_id === whId && r.product_id === prodId)
         if (!ws) {
-          ws = { company_id: DEMO_COMPANY_ID, warehouse_id: whId, product_id: prodId, quantity: 0, reserved_quantity: 0, updated_at: nowIso() }
+          ws = { company_id: companyId, warehouse_id: whId, product_id: prodId, quantity: 0, reserved_quantity: 0, updated_at: nowIso() }
           wsTable.push(ws)
         }
         const before = Number(ws.quantity) || 0
@@ -6112,27 +6848,24 @@ function createMockSupabase(silent = false): SupabaseClient {
         const delta = mType === 'entry' ? Math.abs(qty) : mType === 'exit' ? -Math.abs(qty) : qty
         const after = Math.round((before + delta) * 1000) / 1000
         if (mType === 'exit' && before - reserved < Math.abs(qty)) {
-          return { data: null, error: { message: `Stock disponible insuficiente en bodega (disponible: ${before - reserved})` } }
+          return demoErr(`Stock disponible insuficiente en bodega (disponible: ${before - reserved})`)
         }
         if (after < reserved || after < 0) {
-          return { data: null, error: { message: 'La operación dejaría existencias negativas o por debajo de lo reservado' } }
+          return demoErr('La operación dejaría existencias negativas o por debajo de lo reservado')
         }
         ws.quantity = after
         ws.updated_at = nowIso()
         // Mantener sincronizado el stock consolidado del producto cuando no viene de traslado interno
         if (args.p_reference_type !== 'inventory_transfer') {
-          const prod = prods.find(p => p.id === prodId)
-          if (prod) {
-            const totalWh = wsTable
-              .filter(r => r.product_id === prodId)
-              .reduce((acc, r) => acc + (Number(r.quantity) || 0), 0)
-            prod.stock = Math.max(0, Math.round(totalWh * 1000) / 1000)
-          }
+          const totalWh = wsTable
+            .filter(r => isSameCompany(r, companyId) && r.product_id === prodId)
+            .reduce((acc, r) => acc + (Number(r.quantity) || 0), 0)
+          prod.stock = Math.max(0, Math.round(totalWh * 1000) / 1000)
         }
         const movId = genId()
         getTable('warehouse_movements').unshift({
           id: movId,
-          company_id: DEMO_COMPANY_ID,
+          company_id: companyId,
           warehouse_id: whId,
           product_id: prodId,
           movement_type: mType,
@@ -6142,21 +6875,106 @@ function createMockSupabase(silent = false): SupabaseClient {
           reference_type: args.p_reference_type || 'manual',
           reference_id: args.p_reference_id || null,
           notes: args.p_notes || null,
-          created_by: currentSession?.user?.id || 'demo-dueno-1',
+          created_by: uid,
           created_at: nowIso(),
         })
         return { data: movId, error: null }
       }
       case 'process_inventory_transfer': {
-        const tId = String(args.p_transfer_id || '')
-        const action = String(args.p_action || '')
-        const trf = getTable('inventory_transfers').find(t => t.id === tId)
-        if (!trf) return { data: null, error: { message: 'Traslado no encontrado' } }
-        const items = getTable('inventory_transfer_items').filter(i => i.transfer_id === tId)
-        if (items.length === 0) return { data: null, error: { message: 'El traslado no contiene productos' } }
-        if (action === 'dispatch') {
-          if (trf.status !== 'draft') return { data: null, error: { message: 'Solo se pueden despachar traslados en borrador' } }
-          for (const it of items) {
+        const auth = requireDemoActor(['admin', 'dueno', 'admin_empresa', 'gerente', 'almacen', 'comprador'])
+        if (!auth.ok) return { data: null, error: auth.error }
+        const { companyId, uid } = auth.actor
+        const tId = String(args.p_transfer_id || '').trim()
+        const action = String(args.p_action || '').trim()
+        if (action !== 'dispatch') {
+          return demoErr('Utiliza la recepción detallada para confirmar ingreso en destino')
+        }
+        if (!tId) return demoErr('Traslado no encontrado')
+
+        const trf = getTable('inventory_transfers').find(t => t.id === tId && isSameCompany(t, companyId))
+        if (!trf) return demoErr('Traslado no encontrado')
+        if (trf.status !== 'draft') return demoErr('Solo se pueden despachar traslados en borrador')
+
+        const srcWh = getTable('warehouses').find(w => w.id === trf.source_warehouse_id)
+        if (!srcWh) return demoErr('La bodega origen del traslado no existe')
+        if (!isSameCompany(srcWh, companyId)) {
+          return demoErr('No autorizado: la bodega origen pertenece a otra empresa')
+        }
+        if (srcWh.active === false) return demoErr('La bodega origen del traslado está inactiva')
+
+        const dstWh = getTable('warehouses').find(w => w.id === trf.destination_warehouse_id)
+        if (!dstWh) return demoErr('La bodega destino del traslado no existe')
+        if (!isSameCompany(dstWh, companyId)) {
+          return demoErr('No autorizado: la bodega destino pertenece a otra empresa')
+        }
+        if (dstWh.active === false) return demoErr('La bodega destino del traslado está inactiva')
+        if (trf.source_warehouse_id === trf.destination_warehouse_id) {
+          return demoErr('La bodega origen y destino del traslado deben ser diferentes')
+        }
+
+        const alreadyDispatched = getTable('warehouse_movements').some(
+          m =>
+            isSameCompany(m, companyId) &&
+            m.reference_type === 'inventory_transfer' &&
+            m.reference_id === tId &&
+            m.movement_type === 'exit'
+        )
+        if (alreadyDispatched) {
+          return demoErr('El despacho de este traslado ya fue registrado anteriormente')
+        }
+
+        const allTransferItems = getTable('inventory_transfer_items').filter(i => i.transfer_id === tId)
+        if (allTransferItems.length === 0) return demoErr('El traslado no contiene productos')
+
+        const neededByProd = new Map<string, number>()
+        for (const it of allTransferItems) {
+          if (!isSameCompany(it, companyId)) {
+            return demoErr('No autorizado: un elemento del traslado pertenece a otra empresa')
+          }
+          const prodId = String(it.product_id || '').trim()
+          const prod = prods.find(p => p.id === prodId && isSameCompany(p, companyId))
+          if (!prod) {
+            return demoErr('No autorizado: el producto del traslado no existe o pertenece a otra empresa')
+          }
+          const qty = Number(it.quantity)
+          if (!Number.isFinite(qty) || qty <= 0) {
+            return demoErr('Cantidad inválida en el detalle del traslado')
+          }
+          neededByProd.set(prodId, (neededByProd.get(prodId) || 0) + qty)
+        }
+
+        const wsTable = getTable('warehouse_stock')
+        for (const [prodId, totalNeeded] of neededByProd.entries()) {
+          const ws = wsTable.find(
+            r => isSameCompany(r, companyId) && r.warehouse_id === trf.source_warehouse_id && r.product_id === prodId
+          )
+          const avail = (Number(ws?.quantity) || 0) - (Number(ws?.reserved_quantity) || 0)
+          if (!ws || avail < totalNeeded) {
+            return demoErr(`Stock disponible insuficiente en bodega origen (disponible: ${Math.max(0, avail)})`)
+          }
+        }
+
+        const cloneRow = (r: Row): Row =>
+          typeof structuredClone === 'function' ? structuredClone(r) : JSON.parse(JSON.stringify(r))
+        const txTables = [
+          'products',
+          'warehouse_stock',
+          'warehouse_movements',
+          'warehouse_stock_reservations',
+          'inventory_transfers',
+          'inventory_transfer_items',
+        ]
+        const snapshot: Record<string, Row[]> = {}
+        for (const tbl of txTables) snapshot[tbl] = getTable(tbl).map(cloneRow)
+        const rollbackTransferTx = () => {
+          for (const tbl of txTables) {
+            const arr = getTable(tbl)
+            arr.splice(0, arr.length, ...snapshot[tbl].map(cloneRow))
+          }
+        }
+
+        try {
+          for (const it of allTransferItems) {
             const res = await handleRpc('register_warehouse_movement', {
               p_warehouse_id: trf.source_warehouse_id,
               p_product_id: it.product_id,
@@ -6166,79 +6984,257 @@ function createMockSupabase(silent = false): SupabaseClient {
               p_reference_id: tId,
               p_notes: 'Despacho de traslado entre bodegas',
             })
-            if (res.error) return res
+            if (res.error) {
+              rollbackTransferTx()
+              return res
+            }
           }
           trf.status = 'in_transit'
-          trf.approved_by = currentSession?.user?.id || 'demo-dueno-1'
+          trf.approved_by = uid
           trf.approved_at = nowIso()
           trf.updated_at = nowIso()
           return { data: 'Traslado despachado correctamente', error: null }
+        } catch (err) {
+          rollbackTransferTx()
+          return demoErr(err instanceof Error ? err.message : 'Error atómico al despachar el traslado')
         }
-        return { data: null, error: { message: 'Utiliza la recepción detallada para confirmar ingreso en destino' } }
       }
       case 'receive_inventory_transfer': {
-        const tId = String(args.p_transfer_id || '')
-        const trf = getTable('inventory_transfers').find(t => t.id === tId)
-        if (!trf) return { data: null, error: { message: 'Traslado no encontrado' } }
-        if (trf.status !== 'in_transit') return { data: null, error: { message: 'El traslado no está en tránsito' } }
+        const auth = requireDemoActor(['admin', 'dueno', 'admin_empresa', 'gerente', 'almacen', 'comprador'])
+        if (!auth.ok) return { data: null, error: auth.error }
+        const { companyId, uid } = auth.actor
+        const tId = String(args.p_transfer_id || '').trim()
+        if (!tId) return demoErr('Traslado no encontrado')
+
+        const trf = getTable('inventory_transfers').find(t => t.id === tId && isSameCompany(t, companyId))
+        if (!trf) return demoErr('Traslado no encontrado')
+        if (trf.status === 'received') return demoErr('Este traslado ya fue recibido anteriormente')
+        if (trf.status !== 'in_transit') return demoErr('El traslado no está en tránsito')
+
+        const srcWh = getTable('warehouses').find(w => w.id === trf.source_warehouse_id)
+        if (!srcWh) return demoErr('La bodega origen del traslado no existe')
+        if (!isSameCompany(srcWh, companyId)) {
+          return demoErr('No autorizado: la bodega origen pertenece a otra empresa')
+        }
+        if (srcWh.active === false) return demoErr('La bodega origen del traslado está inactiva')
+        const dstWh = getTable('warehouses').find(w => w.id === trf.destination_warehouse_id)
+        if (!dstWh) return demoErr('La bodega destino del traslado no existe')
+        if (!isSameCompany(dstWh, companyId)) {
+          return demoErr('No autorizado: la bodega destino pertenece a otra empresa')
+        }
+        if (dstWh.active === false) return demoErr('La bodega destino del traslado está inactiva')
+        if (trf.source_warehouse_id === trf.destination_warehouse_id) {
+          return demoErr('La bodega origen y destino del traslado deben ser diferentes')
+        }
+
+        const alreadyReceived = getTable('warehouse_movements').some(
+          m =>
+            isSameCompany(m, companyId) &&
+            m.reference_type === 'inventory_transfer' &&
+            m.reference_id === tId &&
+            m.movement_type === 'entry'
+        )
+        if (alreadyReceived) {
+          return demoErr('La recepción de este traslado ya fue registrada anteriormente')
+        }
+
+        const existingAll = getTable('inventory_transfer_items').filter(i => i.transfer_id === tId)
+        if (existingAll.length === 0) return demoErr('El traslado no contiene productos')
+        for (const row of existingAll) {
+          if (!isSameCompany(row, companyId)) {
+            return demoErr('No autorizado: un elemento del traslado pertenece a otra empresa')
+          }
+          const prodRow = prods.find(p => p.id === row.product_id && isSameCompany(p, companyId))
+          if (!prodRow) {
+            return demoErr('No autorizado: un producto del traslado pertenece a otra empresa o no existe')
+          }
+          const dispatchedQty = Number(row.quantity)
+          if (!Number.isFinite(dispatchedQty) || dispatchedQty <= 0) {
+            return demoErr('Cantidad inválida en el detalle del traslado')
+          }
+        }
+
         const incoming = Array.isArray(args.p_items) ? args.p_items : []
-        const existing = getTable('inventory_transfer_items').filter(i => i.transfer_id === tId)
-        if (incoming.length !== existing.length) {
-          return { data: null, error: { message: 'Debes informar todos los productos del traslado' } }
+        if (incoming.length === 0) {
+          return demoErr('Debes enviar el detalle de recepción')
         }
+        if (incoming.length !== existingAll.length) {
+          return demoErr('Debes informar todos los productos del traslado')
+        }
+
+        const seenProducts = new Set<string>()
+        const validatedLines: Array<{
+          row: Row
+          rec: number
+          dmg: number
+          mis: number
+          notes: string | null
+        }> = []
+
         for (const inc of incoming) {
-          const row = existing.find(e => e.product_id === inc.product_id)
-          if (!row) return { data: null, error: { message: 'Producto no pertenece al traslado' } }
-          const rec = Number(inc.received_quantity) || 0
-          const dmg = Number(inc.damaged_quantity) || 0
-          const mis = Number(inc.missing_quantity) || 0
-          if (rec < 0 || dmg < 0 || mis < 0 || Math.abs(rec + dmg + mis - Number(row.quantity)) > 0.001) {
-            return { data: null, error: { message: 'La suma de recibido, dañado y faltante debe coincidir con lo despachado' } }
+          if (!inc || typeof inc !== 'object') {
+            return demoErr('Elemento de recepción inválido')
           }
-          row.received_quantity = rec
-          row.damaged_quantity = dmg
-          row.missing_quantity = mis
-          row.receipt_notes = inc.notes || null
-          if (rec > 0) {
-            await handleRpc('register_warehouse_movement', {
-              p_warehouse_id: trf.destination_warehouse_id,
-              p_product_id: row.product_id,
-              p_movement_type: 'entry',
-              p_quantity: rec,
-              p_reference_type: 'inventory_transfer',
-              p_reference_id: tId,
-              p_notes: inc.notes || 'Recepción de traslado en destino',
-            })
+          if (inc.transfer_id !== undefined && inc.transfer_id !== null && String(inc.transfer_id).trim() !== tId) {
+            return demoErr('El elemento recibido pertenece a otro traslado')
           }
-          // Si hubo merma/faltante en tránsito, ajustar el consolidado de productos
-          if (dmg + mis > 0) {
-            const prod = prods.find(p => p.id === row.product_id)
-            if (prod) prod.stock = Math.max(0, (Number(prod.stock) || 0) - (dmg + mis))
+          if (inc.company_id !== undefined && inc.company_id !== null && String(inc.company_id).trim() !== companyId) {
+            return demoErr('No autorizado: el elemento recibido pertenece a otra empresa')
+          }
+          const incItemId = inc.item_id !== undefined && inc.item_id !== null
+            ? String(inc.item_id).trim()
+            : inc.id !== undefined && inc.id !== null
+              ? String(inc.id).trim()
+              : ''
+          const prodId = String(inc.product_id || '').trim()
+          if (!prodId) return demoErr('Falta product_id en el detalle de recepción')
+          if (seenProducts.has(prodId)) {
+            return demoErr('Hay productos repetidos en la recepción')
+          }
+          seenProducts.add(prodId)
+
+          const prod = prods.find(p => p.id === prodId && isSameCompany(p, companyId))
+          if (!prod) {
+            return demoErr('No autorizado: el producto no existe o pertenece a otra empresa')
+          }
+
+          if (incItemId) {
+            const explicitItem = getTable('inventory_transfer_items').find(i => i.id === incItemId)
+            if (
+              !explicitItem ||
+              !isSameCompany(explicitItem, companyId) ||
+              explicitItem.transfer_id !== tId ||
+              explicitItem.product_id !== prodId
+            ) {
+              return demoErr('El elemento indicado no pertenece a este traslado o empresa')
+            }
+          }
+
+          const row = existingAll.find(e => e.product_id === prodId && isSameCompany(e, companyId))
+          if (!row) return demoErr('Producto no pertenece al traslado')
+
+          const dispatchedQty = Number(row.quantity)
+          if (!Number.isFinite(dispatchedQty) || dispatchedQty <= 0) {
+            return demoErr('Cantidad inválida en el detalle del traslado')
+          }
+
+          const rec = inc.received_quantity === undefined || inc.received_quantity === null || inc.received_quantity === ''
+            ? NaN
+            : Number(inc.received_quantity)
+          const dmg = inc.damaged_quantity === undefined || inc.damaged_quantity === null || inc.damaged_quantity === ''
+            ? 0
+            : Number(inc.damaged_quantity)
+          const mis = inc.missing_quantity === undefined || inc.missing_quantity === null || inc.missing_quantity === ''
+            ? 0
+            : Number(inc.missing_quantity)
+          if (
+            !Number.isFinite(rec) ||
+            !Number.isFinite(dmg) ||
+            !Number.isFinite(mis) ||
+            rec < 0 ||
+            dmg < 0 ||
+            mis < 0 ||
+            Math.abs(rec + dmg + mis - dispatchedQty) > 0.001
+          ) {
+            return demoErr('La suma de recibido, dañado y faltante debe coincidir con lo despachado')
+          }
+
+          validatedLines.push({
+            row,
+            rec,
+            dmg,
+            mis,
+            notes: inc.notes ? String(inc.notes) : null,
+          })
+        }
+
+        if (seenProducts.size !== existingAll.length) {
+          return demoErr('Debes informar todos los productos del traslado sin duplicados')
+        }
+
+        const cloneRow = (r: Row): Row =>
+          typeof structuredClone === 'function' ? structuredClone(r) : JSON.parse(JSON.stringify(r))
+        const txTables = [
+          'products',
+          'warehouse_stock',
+          'warehouse_movements',
+          'warehouse_stock_reservations',
+          'inventory_transfers',
+          'inventory_transfer_items',
+        ]
+        const snapshot: Record<string, Row[]> = {}
+        for (const tbl of txTables) snapshot[tbl] = getTable(tbl).map(cloneRow)
+        const rollbackReceiveTx = () => {
+          for (const tbl of txTables) {
+            const arr = getTable(tbl)
+            arr.splice(0, arr.length, ...snapshot[tbl].map(cloneRow))
           }
         }
-        trf.status = 'received'
-        trf.received_by = currentSession?.user?.id || 'demo-dueno-1'
-        trf.received_at = nowIso()
-        trf.updated_at = nowIso()
-        return { data: 'Recepción registrada correctamente', error: null }
+
+        try {
+          for (const line of validatedLines) {
+            const { row, rec, dmg, mis, notes } = line
+            row.received_quantity = rec
+            row.damaged_quantity = dmg
+            row.missing_quantity = mis
+            row.receipt_notes = notes
+            if (rec > 0) {
+              const movRes = await handleRpc('register_warehouse_movement', {
+                p_warehouse_id: trf.destination_warehouse_id,
+                p_product_id: row.product_id,
+                p_movement_type: 'entry',
+                p_quantity: rec,
+                p_reference_type: 'inventory_transfer',
+                p_reference_id: tId,
+                p_notes: notes || 'Recepción de traslado en destino',
+              })
+              if (movRes.error) {
+                rollbackReceiveTx()
+                return movRes
+              }
+            }
+            // Si hubo merma/faltante en tránsito, ajustar el consolidado de productos
+            if (dmg + mis > 0) {
+              const prod = prods.find(p => p.id === row.product_id && isSameCompany(p, companyId))
+              if (!prod) {
+                rollbackReceiveTx()
+                return demoErr('Producto no encontrado al consolidar merma')
+              }
+              prod.stock = Math.max(0, Math.round(((Number(prod.stock) || 0) - (dmg + mis)) * 1000) / 1000)
+            }
+          }
+          trf.status = 'received'
+          trf.received_by = uid
+          trf.received_at = nowIso()
+          trf.updated_at = nowIso()
+          return { data: 'Recepción registrada correctamente', error: null }
+        } catch (err) {
+          rollbackReceiveTx()
+          return demoErr(err instanceof Error ? err.message : 'Error atómico al recibir el traslado')
+        }
       }
       case 'reserve_warehouse_stock': {
+        const auth = requireDemoActor(['admin', 'dueno', 'admin_empresa', 'gerente', 'almacen', 'comprador', 'vendedor'])
+        if (!auth.ok) return { data: null, error: auth.error }
+        const { companyId } = auth.actor
         const whId = String(args.p_warehouse_id || '')
         const prodId = String(args.p_product_id || '')
         const qty = Number(args.p_quantity) || 0
-        if (qty <= 0) return { data: null, error: { message: 'La cantidad a reservar debe ser mayor que cero' } }
+        if (qty <= 0) return demoErr('La cantidad a reservar debe ser mayor que cero')
+        const wh = getTable('warehouses').find(w => w.id === whId && isSameCompany(w, companyId) && w.active !== false)
+        if (!wh) return demoErr('Bodega no válida o perteneciente a otra empresa')
         const wsTable = getTable('warehouse_stock')
-        const ws = wsTable.find(r => r.warehouse_id === whId && r.product_id === prodId)
+        const ws = wsTable.find(r => isSameCompany(r, companyId) && r.warehouse_id === whId && r.product_id === prodId)
         const avail = (Number(ws?.quantity) || 0) - (Number(ws?.reserved_quantity) || 0)
         if (!ws || avail < qty) {
-          return { data: null, error: { message: `Stock disponible insuficiente para reservar (disponible: ${Math.max(0, avail)})` } }
+          return demoErr(`Stock disponible insuficiente para reservar (disponible: ${Math.max(0, avail)})`)
         }
         ws.reserved_quantity = (Number(ws.reserved_quantity) || 0) + qty
         ws.updated_at = nowIso()
         const resId = genId()
         getTable('warehouse_stock_reservations').unshift({
           id: resId,
-          company_id: DEMO_COMPANY_ID,
+          company_id: companyId,
           warehouse_id: whId,
           product_id: prodId,
           quantity: qty,
@@ -6251,11 +7247,16 @@ function createMockSupabase(silent = false): SupabaseClient {
         return { data: resId, error: null }
       }
       case 'release_warehouse_reservation': {
+        const auth = requireDemoActor(['admin', 'dueno', 'admin_empresa', 'gerente', 'almacen', 'comprador', 'vendedor'])
+        if (!auth.ok) return { data: null, error: auth.error }
+        const { companyId } = auth.actor
         const rId = String(args.p_reservation_id || '')
-        const resv = getTable('warehouse_stock_reservations').find(r => r.id === rId)
-        if (!resv) return { data: null, error: { message: 'Reserva no encontrada' } }
+        const resv = getTable('warehouse_stock_reservations').find(r => r.id === rId && isSameCompany(r, companyId))
+        if (!resv) return demoErr('Reserva no encontrada')
         if (resv.status !== 'active') return { data: 'La reserva ya fue procesada', error: null }
-        const ws = getTable('warehouse_stock').find(w => w.warehouse_id === resv.warehouse_id && w.product_id === resv.product_id)
+        const ws = getTable('warehouse_stock').find(
+          w => isSameCompany(w, companyId) && w.warehouse_id === resv.warehouse_id && w.product_id === resv.product_id
+        )
         if (ws) {
           ws.reserved_quantity = Math.max(0, (Number(ws.reserved_quantity) || 0) - (Number(resv.quantity) || 0))
           ws.updated_at = nowIso()
@@ -6264,23 +7265,28 @@ function createMockSupabase(silent = false): SupabaseClient {
         return { data: 'Reserva liberada correctamente', error: null }
       }
       case 'consume_warehouse_reservation': {
+        const auth = requireDemoActor(['admin', 'dueno', 'admin_empresa', 'gerente', 'almacen', 'comprador', 'vendedor'])
+        if (!auth.ok) return { data: null, error: auth.error }
+        const { companyId, uid } = auth.actor
         const rId = String(args.p_reservation_id || '')
-        const resv = getTable('warehouse_stock_reservations').find(r => r.id === rId)
-        if (!resv || resv.status !== 'active') return { data: null, error: { message: 'La reserva no está activa' } }
-        const ws = getTable('warehouse_stock').find(w => w.warehouse_id === resv.warehouse_id && w.product_id === resv.product_id)
-        if (!ws) return { data: null, error: { message: 'Existencia no encontrada' } }
+        const resv = getTable('warehouse_stock_reservations').find(r => r.id === rId && isSameCompany(r, companyId))
+        if (!resv || resv.status !== 'active') return demoErr('La reserva no está activa')
+        const ws = getTable('warehouse_stock').find(
+          w => isSameCompany(w, companyId) && w.warehouse_id === resv.warehouse_id && w.product_id === resv.product_id
+        )
+        if (!ws) return demoErr('Existencia no encontrada')
         const qty = Number(resv.quantity) || 0
         const before = Number(ws.quantity) || 0
         ws.reserved_quantity = Math.max(0, (Number(ws.reserved_quantity) || 0) - qty)
         ws.quantity = Math.max(0, before - qty)
         ws.updated_at = nowIso()
-        const prod = prods.find(p => p.id === resv.product_id)
+        const prod = prods.find(p => p.id === resv.product_id && isSameCompany(p, companyId))
         if (prod) prod.stock = Math.max(0, (Number(prod.stock) || 0) - qty)
         resv.status = 'consumed'
         const movId = genId()
         getTable('warehouse_movements').unshift({
           id: movId,
-          company_id: DEMO_COMPANY_ID,
+          company_id: companyId,
           warehouse_id: resv.warehouse_id,
           product_id: resv.product_id,
           movement_type: 'exit',
@@ -6290,33 +7296,39 @@ function createMockSupabase(silent = false): SupabaseClient {
           reference_type: resv.reference_type || 'reservation',
           reference_id: resv.id,
           notes: 'Consumo confirmado de reserva de inventario',
-          created_by: currentSession?.user?.id || 'demo-dueno-1',
+          created_by: uid,
           created_at: nowIso(),
         })
         return { data: movId, error: null }
       }
       case 'registrar_venta_bodega': {
+        const auth = requireDemoActor(['admin', 'dueno', 'admin_empresa', 'gerente', 'vendedor', 'almacen'])
+        if (!auth.ok) return { data: null, error: auth.error }
+        const { companyId, uid } = auth.actor
         const whId = String(args.p_warehouse_id || '')
-        const wh = getTable('warehouses').find(w => w.id === whId && w.active !== false)
-        if (!wh) return { data: null, error: { message: 'La bodega seleccionada no existe o está inactiva' } }
+        const wh = getTable('warehouses').find(w => w.id === whId && isSameCompany(w, companyId) && w.active !== false)
+        if (!wh) return demoErr('La bodega seleccionada no existe, está inactiva o pertenece a otra empresa')
         const items = Array.isArray(args.p_items) ? args.p_items : []
         const wsTable = getTable('warehouse_stock')
         for (const it of items) {
-          const ws = wsTable.find(w => w.warehouse_id === whId && w.product_id === it.product_id)
+          const ws = wsTable.find(w => isSameCompany(w, companyId) && w.warehouse_id === whId && w.product_id === it.product_id)
           const avail = (Number(ws?.quantity) || 0) - (Number(ws?.reserved_quantity) || 0)
           if (ws && avail < (Number(it.quantity) || 0)) {
-            return { data: null, error: { message: `Stock insuficiente en ${wh.name} (disponible: ${avail})` } }
+            return demoErr(`Stock insuficiente en ${wh.name} (disponible: ${avail})`)
           }
         }
         const saleRes = await handleRpc('registrar_venta', args)
         if (saleRes.error) return saleRes
         const saleId = (saleRes.data as Row)?.id || genId()
         const saleRow = sales.find(s => s.id === saleId)
-        if (saleRow) saleRow.warehouse_id = whId
+        if (saleRow) {
+          saleRow.company_id = companyId
+          saleRow.warehouse_id = whId
+        }
         for (const it of items) {
-          let ws = wsTable.find(w => w.warehouse_id === whId && w.product_id === it.product_id)
+          let ws = wsTable.find(w => isSameCompany(w, companyId) && w.warehouse_id === whId && w.product_id === it.product_id)
           if (!ws) {
-            ws = { company_id: DEMO_COMPANY_ID, warehouse_id: whId, product_id: it.product_id, quantity: 0, reserved_quantity: 0, updated_at: nowIso() }
+            ws = { company_id: companyId, warehouse_id: whId, product_id: it.product_id, quantity: 0, reserved_quantity: 0, updated_at: nowIso() }
             wsTable.push(ws)
           }
           const before = Number(ws.quantity) || 0
@@ -6325,7 +7337,7 @@ function createMockSupabase(silent = false): SupabaseClient {
           ws.updated_at = nowIso()
           getTable('warehouse_movements').unshift({
             id: genId(),
-            company_id: DEMO_COMPANY_ID,
+            company_id: companyId,
             warehouse_id: whId,
             product_id: it.product_id,
             movement_type: 'exit',
@@ -6335,7 +7347,7 @@ function createMockSupabase(silent = false): SupabaseClient {
             reference_type: 'sale',
             reference_id: saleId,
             notes: `Salida por venta (${wh.code || wh.name})`,
-            created_by: currentSession?.user?.id || 'demo-dueno-1',
+            created_by: uid,
             created_at: nowIso(),
           })
         }
@@ -6448,111 +7460,175 @@ function createMockSupabase(silent = false): SupabaseClient {
         return { data: { ok: true, product_id: prod.id, image_url: cleanUrl }, error: null }
       }
       case 'crear_orden_compra': {
+        const auth = requireDemoActor(['admin', 'dueno', 'admin_empresa', 'comprador'])
+        if (!auth.ok) return { data: null, error: auth.error }
+        const { companyId, role: actorRole, displayName } = auth.actor
+        const autoApprove = Boolean(args.p_auto_approve)
+        if (autoApprove && !['admin', 'dueno', 'admin_empresa'].includes(actorRole)) {
+          return demoErr(`No autorizado: el rol ${actorRole} no puede autoaprobar órdenes de compra`)
+        }
+        const terms = String(args.p_payment_terms || 'credito').trim() || 'credito'
+        if (!['credito', 'transferencia', 'efectivo', 'tarjeta'].includes(terms)) {
+          return demoErr(`Condición de pago inválida en orden de compra: ${terms}`)
+        }
+        const creditDays = args.p_credit_days === undefined || args.p_credit_days === null ? 30 : Number(args.p_credit_days)
+        if (!Number.isFinite(creditDays) || creditDays < 0 || creditDays > 365) {
+          return demoErr('Los días de crédito deben estar entre 0 y 365')
+        }
         const items = Array.isArray(args.p_items) ? args.p_items : []
-        if (items.length === 0) return { data: null, error: { message: 'Agrega al menos un producto a la orden de compra' } }
-        const supId = args.p_supplier_id ? String(args.p_supplier_id) : null
-        const sup = supId ? getTable('suppliers').find(s => s.id === supId) : null
-        const pos = getTable('purchase_orders')
-        const poItems = getTable('purchase_order_items')
-        const nextNum = 42 + pos.length
-        const poId = genId()
+        if (items.length === 0) return demoErr('Agrega al menos un producto a la orden de compra')
+
+        const supId = args.p_supplier_id ? String(args.p_supplier_id).trim() : null
+        const sup = supId ? getTable('suppliers').find(s => s.id === supId && isSameCompany(s, companyId)) : null
+        if (supId && !sup) {
+          return demoErr('El proveedor seleccionado no existe o pertenece a otra empresa')
+        }
+        const branchId = args.p_branch_id ? String(args.p_branch_id).trim() : null
+        if (branchId) {
+          const brRow = getTable('branches').find(b => b.id === branchId && isSameCompany(b, companyId))
+          if (!brRow) {
+            return demoErr('La sucursal seleccionada no existe o pertenece a otra empresa')
+          }
+        }
+        const targetWhId = args.p_target_warehouse_id ? String(args.p_target_warehouse_id).trim() : null
+        if (targetWhId) {
+          const whRow = getTable('warehouses').find(w => w.id === targetWhId && isSameCompany(w, companyId))
+          if (!whRow) {
+            return demoErr('La bodega destino no existe o pertenece a otra empresa')
+          }
+          if (whRow.active !== true) {
+            return demoErr('La bodega destino está inactiva')
+          }
+          if (branchId && String(whRow.branch_id || '') !== branchId) {
+            return demoErr('La bodega destino no pertenece a la sucursal de la orden de compra')
+          }
+        }
+
+        const companyProds = prods.filter(p => isSameCompany(p, companyId))
+        const validatedItems: Array<{ product: Row; orderedQty: number; unitCost: number }> = []
         let total = 0
         for (const it of items) {
-          const q = Number(it.ordered_qty ?? it.quantity) || 0
-          const c = Number(it.unit_cost ?? it.cost) || 0
+          const prodId = it?.product_id ? String(it.product_id).trim() : ''
+          const prod = companyProds.find(p => p.id === prodId)
+          if (!prod) {
+            return demoErr('Producto no válido o perteneciente a otra empresa en la orden de compra')
+          }
+          const q = Number(it.ordered_qty ?? it.quantity)
+          const c = Number(it.unit_cost ?? it.cost ?? 0)
+          if (!Number.isFinite(q) || q <= 0 || !Number.isFinite(c) || c < 0) {
+            return demoErr('Cantidad y costo unitario deben ser válidos y positivos en la orden de compra')
+          }
           total += Math.round(q * c * 100) / 100
+          validatedItems.push({ product: prod, orderedQty: q, unitCost: c })
         }
-        const actorName = currentSession?.user?.user_metadata?.full_name || currentSession?.user?.email || 'Usuario Demo'
-        const autoApprove = Boolean(args.p_auto_approve)
+
+        const pos = getTable('purchase_orders')
+        const poItems = getTable('purchase_order_items')
+        const counters = getTable('purchase_order_counters')
+        let counterRow = counters.find(c => isSameCompany(c, companyId))
+        if (!counterRow) {
+          const companyPos = pos.filter(p => isSameCompany(p, companyId))
+          let maxSeq = 0
+          for (const existingPo of companyPos) {
+            const m = /^OC-([0-9]{1,9})$/.exec(String(existingPo.po_number || ''))
+            if (m) {
+              const parsed = Number(m[1])
+              if (Number.isFinite(parsed) && parsed > maxSeq) maxSeq = parsed
+            }
+          }
+          const baseSeq = Math.max(maxSeq, companyPos.length)
+          counterRow = { company_id: companyId, last_seq: baseSeq }
+          counters.push(counterRow)
+        }
+        const nextSeq = (Number(counterRow.last_seq) || 0) + 1
+        counterRow.last_seq = nextSeq
+        const poNumber = nextSeq < 10000 ? `OC-${String(nextSeq).padStart(4, '0')}` : `OC-${nextSeq}`
+        if (pos.some(p => isSameCompany(p, companyId) && String(p.po_number || '') === poNumber)) {
+          return demoErr(`Número de orden duplicado (${poNumber}) para esta empresa`)
+        }
+
+        const poId = genId()
         pos.unshift({
           id: poId,
-          company_id: DEMO_COMPANY_ID,
-          po_number: `OC-${String(nextNum).padStart(4, '0')}`,
+          company_id: companyId,
+          po_number: poNumber,
           supplier_id: supId,
           supplier_name: sup?.name || 'Proveedor general',
-          branch_id: args.p_branch_id ? String(args.p_branch_id) : null,
-          target_warehouse_id: args.p_target_warehouse_id ? String(args.p_target_warehouse_id) : null,
+          branch_id: branchId,
+          target_warehouse_id: targetWhId,
           status: autoApprove ? 'approved' : 'draft',
-          payment_terms: String(args.p_payment_terms || 'credito'),
-          credit_days: Number(args.p_credit_days) || 30,
+          payment_terms: terms,
+          credit_days: Math.trunc(creditDays),
           expected_date: args.p_expected_date ? String(args.p_expected_date) : null,
           subtotal: Math.round(total * 100) / 100,
           total: Math.round(total * 100) / 100,
           notes: args.p_notes ? String(args.p_notes).trim() : null,
           linked_purchase_id: null,
-          created_by_name: actorName,
-          approved_by_name: autoApprove ? actorName : null,
+          created_by_name: displayName,
+          approved_by_name: autoApprove ? displayName : null,
           approved_at: autoApprove ? nowIso() : null,
           received_at: null,
           created_at: nowIso(),
           updated_at: nowIso(),
         })
-        for (const it of items) {
-          const prod = prods.find(p => p.id === it.product_id)
+        for (const it of validatedItems) {
           poItems.push({
             id: genId(),
-            company_id: DEMO_COMPANY_ID,
+            company_id: companyId,
             po_id: poId,
-            product_id: it.product_id,
-            product_name: prod?.name || it.product_name || 'Producto',
-            sku: prod?.sku || it.sku || null,
-            ordered_qty: Number(it.ordered_qty ?? it.quantity) || 1,
+            product_id: it.product.id,
+            product_name: it.product.name || 'Producto',
+            sku: it.product.sku || null,
+            ordered_qty: it.orderedQty,
             received_qty: 0,
             rejected_qty: 0,
-            unit_cost: Number(it.unit_cost ?? it.cost) || 0,
+            unit_cost: it.unitCost,
           })
         }
         return { data: poId, error: null }
       }
       case 'cambiar_estado_orden_compra': {
+        const auth = requireDemoActor(['admin', 'dueno', 'admin_empresa', 'comprador'])
+        if (!auth.ok) return { data: null, error: auth.error }
+        const { companyId, role: actorRole, displayName } = auth.actor
         const poId = String(args.p_po_id || '')
         const status = String(args.p_status || '')
-        const po = getTable('purchase_orders').find(p => p.id === poId)
-        if (!po) return { data: null, error: { message: 'Orden de compra no encontrada' } }
+        if (status === 'approved' && !['admin', 'dueno', 'admin_empresa'].includes(actorRole)) {
+          return demoErr(`No autorizado: el rol ${actorRole} no puede aprobar órdenes de compra`)
+        }
+        if (!['approved', 'sent', 'cancelled'].includes(status)) {
+          return demoErr('Estado de transición inválido')
+        }
+        const po = getTable('purchase_orders').find(p => p.id === poId && isSameCompany(p, companyId))
+        if (!po) return demoErr('Orden de compra no encontrada')
         if (po.status === 'received' || po.status === 'cancelled') {
-          return { data: null, error: { message: 'No se puede modificar una orden cerrada o cancelada' } }
+          return demoErr('No se puede modificar una orden ya cerrada o cancelada')
+        }
+        if (po.status === 'partial') {
+          return demoErr('No se puede cambiar el estado ni cancelar una orden de compra con recepción parcial')
+        }
+        if (po.status === 'draft' && !['approved', 'cancelled'].includes(status)) {
+          return demoErr('Una orden en borrador debe aprobarse antes de marcarse como enviada')
+        }
+        if (po.status === 'approved' && !['sent', 'cancelled'].includes(status)) {
+          return demoErr(`Transición inválida desde orden aprobada hacia "${status}"`)
+        }
+        if (po.status === 'sent' && status !== 'cancelled') {
+          return demoErr('Una orden enviada solo admite recepción en bodega o cancelación previa a recibir')
         }
         po.status = status
         if (status === 'approved') {
-          po.approved_by_name = currentSession?.user?.user_metadata?.full_name || 'Dirección'
+          po.approved_by_name = displayName
           po.approved_at = nowIso()
         }
         po.updated_at = nowIso()
         return { data: null, error: null }
       }
       case 'recibir_orden_compra': {
-        const uid = typeof currentSession?.user?.id === 'string' ? currentSession.user.id.trim() : ''
-        if (!uid) {
-          return { data: null, error: { message: 'No autorizado: sesión sin identidad válida' } }
-        }
-        const actorProfile = getTable('profiles').find(x => typeof x.id === 'string' && x.id.trim() === uid)
-        if (!actorProfile) {
-          return { data: null, error: { message: 'No autorizado: perfil de usuario inexistente' } }
-        }
-        if (actorProfile.active !== true) {
-          return { data: null, error: { message: 'No autorizado: perfil inactivo' } }
-        }
-        const actorRole = typeof actorProfile.role === 'string' ? actorProfile.role.trim().toLowerCase() : ''
-        const allowedRoles = new Set(['admin', 'dueno', 'admin_empresa', 'comprador', 'almacen'])
-        if (!actorRole || !allowedRoles.has(actorRole)) {
-          return { data: null, error: { message: 'No autorizado para recibir órdenes de compra' } }
-        }
-        const actorCompanyId = typeof actorProfile.company_id === 'string' ? actorProfile.company_id.trim() : ''
-        if (!actorCompanyId) {
-          return { data: null, error: { message: 'No autorizado: perfil sin empresa asignada' } }
-        }
-
-        const companyRows = getTable('companies')
-        const matchedCompanyRow = companyRows.find(c => String(c.id || '').trim() === actorCompanyId)
-        if (matchedCompanyRow && matchedCompanyRow.active === false) {
-          return { data: null, error: { message: 'No autorizado: empresa inactiva' } }
-        }
-        const companyExists =
-          Boolean(matchedCompanyRow) ||
-          getTable('company_config').some(c => String(c.company_id || '').trim() === actorCompanyId)
-        if (!companyExists) {
-          return { data: null, error: { message: 'No autorizado: empresa inexistente o inválida' } }
-        }
+        const auth = requireDemoActor(['admin', 'dueno', 'admin_empresa', 'comprador', 'almacen'])
+        if (!auth.ok) return { data: null, error: auth.error }
+        const { actor } = auth
+        const { uid, role: actorRole, companyId: actorCompanyId } = actor
 
         const poId = String(args.p_po_id || '').trim()
         if (!poId) {
@@ -6755,7 +7831,7 @@ function createMockSupabase(silent = false): SupabaseClient {
           return { data: null, error: { message: 'Indica al menos una unidad recibida conforme para ingresar al inventario' } }
         }
 
-        const purRes = await handleRpc('registrar_compra', {
+        const purRes = registrarCompraCore(actor, {
           p_supplier_id: po.supplier_id,
           p_items: purchaseItems,
           p_payment_method: method,
@@ -6771,9 +7847,7 @@ function createMockSupabase(silent = false): SupabaseClient {
           if (upd.expiryDate) upd.item.expiry_date = upd.expiryDate
         }
 
-        const purId = typeof purRes.data === 'string'
-          ? purRes.data
-          : ((purRes.data as Row)?.id || getTable('purchases')[0]?.id || genId())
+        const purId = String(purRes.data || genId())
         const purRow = getTable('purchases').find(p => p.id === purId)
         if (purRow) {
           purRow.company_id = actorCompanyId
@@ -7715,25 +8789,31 @@ function createMockSupabase(silent = false): SupabaseClient {
         }
       }
       case 'clasificar_iva_compra': {
-        const pur = getTable('purchases').find(x => x.id === args.p_purchase_id)
-        if (!pur) return { data: null, error: { message: 'Compra no encontrada' } }
-        if (pur.status !== 'recibida') return { data: null, error: { message: 'Solo se puede clasificar el IVA de compras recibidas' } }
+        const auth = requireDemoActor(['admin', 'dueno', 'admin_empresa', 'gerente', 'contador'])
+        if (!auth.ok) return { data: null, error: auth.error }
+        const { companyId, displayName } = auth.actor
+        const pur = getTable('purchases').find(x => x.id === args.p_purchase_id && isSameCompany(x, companyId))
+        if (!pur) return demoErr('Compra no encontrada')
+        if (pur.status !== 'recibida') return demoErr('Solo se puede clasificar el IVA de compras recibidas')
         if (pur.tax_status !== 'pendiente') {
-          return { data: null, error: { message: `La compra tiene estado "${pur.tax_status}" (solo se reclasifican pendientes)` } }
+          return demoErr(`La compra tiene estado "${pur.tax_status}" (solo se reclasifican pendientes)`)
         }
         const newStatus = String(args.p_new_status || '')
         if (newStatus !== 'descontable' && newStatus !== 'costo') {
-          return { data: null, error: { message: 'El nuevo estado fiscal debe ser descontable o costo' } }
+          return demoErr('El nuevo estado fiscal debe ser descontable o costo')
         }
-        const devs = getTable('purchase_devolutions').filter(d => d.purchase_id === pur.id && d.status === 'activa')
+        const devs = getTable('purchase_devolutions').filter(
+          d => isSameCompany(d, companyId) && d.purchase_id === pur.id && d.status === 'activa'
+        )
         const devTax = devs.reduce((s, d) => s + Number(d.tax_amount || 0), 0)
         const netTax = Math.max(0, Math.round((Number(pur.tax || 0) - devTax) * 100) / 100)
+        const companyProds = prods.filter(p => isSameCompany(p, companyId))
         let invAmt = 0
         let expAmt = 0
         if (newStatus === 'costo') {
           const items: Row[] = Array.isArray(pur.items) ? pur.items : []
           for (const it of items) {
-            const prod = prods.find(p => p.id === it.product_id)
+            const prod = companyProds.find(p => p.id === it.product_id)
             const bought = Number(it.quantity || 0)
             const devQty = devs.filter(d => d.product_id === it.product_id).reduce((s, d) => s + Number(d.quantity || 0), 0)
             const netQty = Math.max(0, bought - devQty)
@@ -7760,7 +8840,7 @@ function createMockSupabase(silent = false): SupabaseClient {
         pur.iva_classification_note = args.p_reason || null
         getTable('purchase_iva_adjustments').unshift({
           id: genId(),
-          company_id: pur.company_id || DEMO_COMPANY_ID,
+          company_id: companyId,
           purchase_id: pur.id,
           from_status: 'pendiente',
           to_status: newStatus,
@@ -7769,7 +8849,7 @@ function createMockSupabase(silent = false): SupabaseClient {
           amount_to_expense: Math.round(expAmt * 100) / 100,
           reason: args.p_reason || null,
           status: 'aplicado',
-          created_by_name: 'Administrador Demo',
+          created_by_name: displayName,
           created_at: nowIso(),
         })
         return { data: pur.id, error: null }

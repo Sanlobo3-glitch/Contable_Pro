@@ -460,6 +460,52 @@ export function canReverseAccounting(role: Role | undefined): boolean {
   return isCompanyManager(role)
 }
 
+export function canAccessBankReconciliation(role: Role | undefined): boolean {
+  return (
+    role === 'admin' ||
+    (role as string) === 'super_admin' ||
+    role === 'dueno' ||
+    role === 'admin_empresa' ||
+    role === 'gerente' ||
+    role === 'contador'
+  )
+}
+
+export function canManageBankAccounts(role: Role | undefined): boolean {
+  return (
+    role === 'admin' ||
+    (role as string) === 'super_admin' ||
+    role === 'dueno' ||
+    role === 'admin_empresa' ||
+    role === 'gerente'
+  )
+}
+
+export function canCaptureBankStatements(role: Role | undefined): boolean {
+  return canAccessBankReconciliation(role)
+}
+
+export function canReconcileBankStatements(role: Role | undefined): boolean {
+  return canAccessBankReconciliation(role)
+}
+
+export function canVoidBankReconciliationItems(role: Role | undefined): boolean {
+  return canManageBankAccounts(role)
+}
+
+export function canReopenBankStatements(role: Role | undefined): boolean {
+  return (
+    role === 'admin' ||
+    (role as string) === 'super_admin' ||
+    role === 'dueno' ||
+    role === 'admin_empresa'
+  )
+}
+
+export function canManageBankAccountsAndReopen(role: Role | undefined): boolean {
+  return canReopenBankStatements(role)
+}
+
 export function canManageTransport(role: Role | undefined): boolean {
   return (
     isCompanyManager(role) ||

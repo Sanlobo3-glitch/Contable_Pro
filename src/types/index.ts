@@ -1517,3 +1517,184 @@ export interface ExecutiveReportData {
 
 
 
+
+/* ============================================================================
+ * CONCILIACIÓN BANCARIA MANUAL — MIGRACIÓN 69
+ * ========================================================================== */
+
+export type BankAccountType =
+  | 'ahorros'
+  | 'corriente'
+  | 'billetera_digital'
+  | 'fiduciaria'
+  | 'otra'
+
+export type BankReconciliationStatus =
+  | 'pendiente'
+  | 'parcialmente_conciliado'
+  | 'con_diferencia'
+  | 'conciliado'
+  | 'anulado'
+
+export interface BankAccountRecord {
+  id: string
+  company_id: string
+  acc_account_id: string
+  bank_name: string
+  account_alias: string
+  account_type: BankAccountType
+  account_number_last4: string
+  account_number_masked: string
+  currency: string
+  active: boolean
+  notes: string | null
+  created_by: string | null
+  created_by_name: string | null
+  created_at: string
+  updated_at: string
+  acc_accounts?: {
+    id: string
+    code: string
+    name: string
+    type: string
+    nature: string
+  } | null
+}
+
+export interface BankStatementRecord {
+  id: string
+  company_id: string
+  bank_account_id: string
+  statement_code: string
+  period_start: string
+  period_end: string
+  cutoff_date: string
+  opening_balance: number
+  reported_closing_balance: number | null
+  status: BankReconciliationStatus
+  notes: string | null
+  confirmed_by: string | null
+  confirmed_by_name: string | null
+  confirmed_at: string | null
+  voided_by: string | null
+  voided_by_name: string | null
+  voided_at: string | null
+  void_reason: string | null
+  created_by: string | null
+  created_by_name: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface BankStatementLineRecord {
+  id: string
+  company_id: string
+  statement_id: string
+  bank_account_id: string
+  line_number: number
+  tx_date: string
+  post_date: string | null
+  description: string
+  bank_reference: string | null
+  direction: 'credit' | 'debit'
+  amount: number
+  reported_balance: number | null
+  notes: string | null
+  status: BankReconciliationStatus
+  difference_reason: string | null
+  source_origin: 'manual' | 'csv_manual'
+  created_by: string | null
+  created_by_name: string | null
+  created_at: string
+  updated_at: string
+  matched_amount?: number
+  remaining_amount?: number
+}
+
+export interface BankReconciliationMatchRecord {
+  id: string
+  company_id: string
+  statement_id: string
+  statement_line_id: string
+  acc_line_id: string
+  acc_entry_id: string
+  match_group_id: string
+  matched_amount: number
+  status: 'activo' | 'anulado'
+  notes: string | null
+  created_by: string | null
+  created_by_name: string | null
+  created_at: string
+  voided_by: string | null
+  voided_by_name: string | null
+  voided_at: string | null
+  void_reason: string | null
+}
+
+export interface BankReconciliationEventRecord {
+  id: string
+  company_id: string
+  bank_account_id: string | null
+  statement_id: string | null
+  action: string
+  actor_id: string | null
+  actor_name: string | null
+  actor_role: string | null
+  detail: Record<string, unknown>
+  created_at: string
+}
+
+export interface BankStatementSummary {
+  statement_id: string
+  statement_code: string
+  bank_account_id: string
+  bank_name: string
+  account_alias: string
+  account_number_masked: string
+  acc_account_id: string
+  acc_account_code: string
+  acc_account_name: string
+  period_start: string
+  period_end: string
+  cutoff_date: string
+  status: BankReconciliationStatus
+  is_period_open: boolean
+  opening_balance: number
+  bank_credits: number
+  bank_debits: number
+  calculated_bank_closing: number
+  reported_closing_balance: number | null
+  accounting_balance: number
+  accounting_period_debits: number
+  accounting_period_credits: number
+  bank_reconciled_total: number
+  bank_pending_total: number
+  bank_difference_lines_total: number
+  accounting_reconciled_total: number
+  accounting_pending_total: number
+  difference_bank_vs_books: number
+  difference_vs_reported_closing: number | null
+  lines_total: number
+  lines_reconciled: number
+  lines_partial: number
+  lines_with_difference: number
+  lines_pending: number
+}
+
+export interface LedgerBankLineCandidate {
+  acc_line_id: string
+  entry_id: string
+  entry_number: string
+  entry_date: string
+  entry_description: string
+  source_type: string
+  account_id: string
+  debit: number
+  credit: number
+  direction: 'credit' | 'debit'
+  amount: number
+  memo: string | null
+  matched_amount: number
+  remaining_amount: number
+}
+

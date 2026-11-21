@@ -5,6 +5,7 @@
 // Si cambias lo que ve un rol, cámbialo AQUÍ. Cada página/RPC debe exigir lo mismo o menos.
 // ---------------------------------------------------------------------------
 import {
+  canAccessBankReconciliation,
   canAccessCashAndAudit,
   canManageInventory,
   canManagePurchaseOrders,
@@ -40,6 +41,7 @@ const STRICT_ROLE_PAGES: Partial<Record<Role, string[]>> = {
     'cpa',
     'accsetup',
     'accclose',
+    'bankrecon',
     'taxes',
     'dian_compliance',
     'purchases',
@@ -118,7 +120,7 @@ const GENERIC_RULES: Record<string, Rule> = {
   kardex: role => canManageInventory(role) || canManagePurchases(role) || canViewAccounting(role),
   labels: role => canManageInventory(role),
   treasury: role => isCompanyManager(role) || canViewAccounting(role),
-  bankrecon: role => isCompanyManager(role) || canViewAccounting(role),
+  bankrecon: role => canAccessBankReconciliation(role),
   cash: role => canAccessCashAndAudit(role),
   expenses: role => isCompanyManager(role) || canViewAccounting(role),
   anomaly_detector: role => canAccessCashAndAudit(role) || isCompanyManager(role),

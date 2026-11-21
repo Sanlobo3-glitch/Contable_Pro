@@ -16,8 +16,10 @@ import sqlDianReports from '../../supabase/migrations/20261109000052_reportes_di
 import sqlCashShifts from '../../supabase/migrations/20261110000053_consolidacion_ciclo_comercial_caja_turnos_y_contabilidad.sql?raw'
 import sqlFaseAIvaCompras from '../../supabase/migrations/20261114000063_fase_a_iva_compras_contabilidad.sql?raw'
 import sqlDevolucionesCompraIva from '../../supabase/migrations/20261114000064_devoluciones_compra_con_iva.sql?raw'
+import sqlBankReconManual from '../../supabase/migrations/20261119000069_conciliacion_bancaria_manual.sql?raw'
 
 export type SqlBundleId =
+  | 'bank_recon_manual'
   | 'iva_compras'
   | 'cash_shifts'
   | 'dian_reports'
@@ -46,6 +48,23 @@ export interface SqlScriptBundle {
 }
 
 export const SQL_SCRIPT_BUNDLES: SqlScriptBundle[] = [
+  {
+    id: 'bank_recon_manual',
+    title: 'Conciliación Bancaria Manual — Migración 69',
+    filename: '20261119000069_conciliacion_bancaria_manual.sql',
+    category: 'Nuevos módulos',
+    summary:
+      'Crea cuentas bancarias vinculadas al PUC, extractos y movimientos manuales, cruces parciales N-a-M, diferencias documentadas y auditoría con permisos por rol.',
+    targetTables: [
+      'bank_accounts',
+      'bank_statement_counters',
+      'bank_statements',
+      'bank_statement_lines',
+      'bank_reconciliation_matches',
+      'bank_reconciliation_events',
+    ],
+    sql: sqlBankReconManual,
+  },
   {
     id: 'iva_compras',
     title: 'Fase A: IVA en Compras NIIF, Trazabilidad Kardex y Devoluciones con IVA',

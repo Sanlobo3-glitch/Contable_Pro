@@ -192,58 +192,64 @@ BEGIN
   --  4) Debito 250 en 111005 con fecha posterior al corte (2026-12-02)
   --  5) Credito 200 en 111099 (cuenta activo naturaleza credito => ingreso bancario)
   INSERT INTO public.acc_entries (company_id, number, entry_date, description, status, source_type, created_by)
-  VALUES (v_co_a, 'TST-BK-001', '2026-11-05', 'Cobro cliente parcial 1', 'contabilizado', 'manual', v_u_dueno_a)
+  VALUES (v_co_a, 'TST-BK-001', '2026-11-05', 'Cobro cliente parcial 1', 'borrador', 'manual', v_u_dueno_a)
   RETURNING id INTO v_entry_1;
   INSERT INTO public.acc_lines (company_id, entry_id, account_id, debit, credit, memo)
   VALUES
     (v_co_a, v_entry_1, v_acc_bank_a,   600.00, 0, 'Consignación 1'),
     (v_co_a, v_entry_1, v_acc_income_a, 0, 600.00, 'Ingreso 1');
+  UPDATE public.acc_entries SET status = 'contabilizado' WHERE id = v_entry_1;
   SELECT id INTO v_acc_line_in_1 FROM public.acc_lines WHERE entry_id = v_entry_1 AND account_id = v_acc_bank_a LIMIT 1;
 
   INSERT INTO public.acc_entries (company_id, number, entry_date, description, status, source_type, created_by)
-  VALUES (v_co_a, 'TST-BK-002', '2026-11-06', 'Cobro cliente parcial 2', 'contabilizado', 'manual', v_u_dueno_a)
+  VALUES (v_co_a, 'TST-BK-002', '2026-11-06', 'Cobro cliente parcial 2', 'borrador', 'manual', v_u_dueno_a)
   RETURNING id INTO v_entry_2;
   INSERT INTO public.acc_lines (company_id, entry_id, account_id, debit, credit, memo)
   VALUES
     (v_co_a, v_entry_2, v_acc_bank_a,   400.00, 0, 'Consignación 2'),
     (v_co_a, v_entry_2, v_acc_income_a, 0, 400.00, 'Ingreso 2');
+  UPDATE public.acc_entries SET status = 'contabilizado' WHERE id = v_entry_2;
   SELECT id INTO v_acc_line_in_2 FROM public.acc_lines WHERE entry_id = v_entry_2 AND account_id = v_acc_bank_a LIMIT 1;
 
   INSERT INTO public.acc_entries (company_id, number, entry_date, description, status, source_type, created_by)
-  VALUES (v_co_a, 'TST-BK-003', '2026-11-08', 'Pago proveedor transferencia', 'contabilizado', 'manual', v_u_dueno_a)
+  VALUES (v_co_a, 'TST-BK-003', '2026-11-08', 'Pago proveedor transferencia', 'borrador', 'manual', v_u_dueno_a)
   RETURNING id INTO v_entry_3_out;
   INSERT INTO public.acc_lines (company_id, entry_id, account_id, debit, credit, memo)
   VALUES
     (v_co_a, v_entry_3_out, v_acc_expense_a, 150.00, 0, 'Gasto servicio'),
     (v_co_a, v_entry_3_out, v_acc_bank_a,    0, 150.00, 'Salida banco');
+  UPDATE public.acc_entries SET status = 'contabilizado' WHERE id = v_entry_3_out;
   SELECT id INTO v_acc_line_out_1 FROM public.acc_lines WHERE entry_id = v_entry_3_out AND account_id = v_acc_bank_a LIMIT 1;
 
   INSERT INTO public.acc_entries (company_id, number, entry_date, description, status, source_type, created_by)
-  VALUES (v_co_a, 'TST-BK-FUT', '2026-12-02', 'Asiento futuro post corte', 'contabilizado', 'manual', v_u_dueno_a)
+  VALUES (v_co_a, 'TST-BK-FUT', '2026-12-02', 'Asiento futuro post corte', 'borrador', 'manual', v_u_dueno_a)
   RETURNING id INTO v_entry_4_fut;
   INSERT INTO public.acc_lines (company_id, entry_id, account_id, debit, credit, memo)
   VALUES
     (v_co_a, v_entry_4_fut, v_acc_bank_a,   250.00, 0, 'Consignación diciembre'),
     (v_co_a, v_entry_4_fut, v_acc_income_a, 0, 250.00, 'Ingreso diciembre');
+  UPDATE public.acc_entries SET status = 'contabilizado' WHERE id = v_entry_4_fut;
   SELECT id INTO v_acc_line_fut FROM public.acc_lines WHERE entry_id = v_entry_4_fut AND account_id = v_acc_bank_a LIMIT 1;
 
   INSERT INTO public.acc_entries (company_id, number, entry_date, description, status, source_type, created_by)
-  VALUES (v_co_a, 'TST-BK-CRP', '2026-11-09', 'Movimiento cuenta naturaleza credito', 'contabilizado', 'manual', v_u_dueno_a)
+  VALUES (v_co_a, 'TST-BK-CRP', '2026-11-09', 'Movimiento cuenta naturaleza credito', 'borrador', 'manual', v_u_dueno_a)
   RETURNING id INTO v_entry_5_crpuc;
   INSERT INTO public.acc_lines (company_id, entry_id, account_id, debit, credit, memo)
   VALUES
     (v_co_a, v_entry_5_crpuc, v_acc_expense_a, 200.00, 0, 'Cargo'),
     (v_co_a, v_entry_5_crpuc, v_acc_credit_a,  0, 200.00, 'Abono natural credito');
+  UPDATE public.acc_entries SET status = 'contabilizado' WHERE id = v_entry_5_crpuc;
   SELECT id INTO v_acc_line_crpuc FROM public.acc_lines WHERE entry_id = v_entry_5_crpuc AND account_id = v_acc_credit_a LIMIT 1;
 
   -- Asiento contabilizado en Empresa B (para verificar aislamiento resumen y cruces)
   INSERT INTO public.acc_entries (company_id, number, entry_date, description, status, source_type, created_by)
-  VALUES (v_co_b, 'TST-B-001', '2026-11-05', 'Cobro Empresa B', 'contabilizado', 'manual', v_u_dueno_b)
+  VALUES (v_co_b, 'TST-B-001', '2026-11-05', 'Cobro Empresa B', 'borrador', 'manual', v_u_dueno_b)
   RETURNING id INTO v_entry_b;
   INSERT INTO public.acc_lines (company_id, entry_id, account_id, debit, credit, memo)
   VALUES
     (v_co_b, v_entry_b, v_acc_bank_b, 9999.00, 0, 'Consignación Emp B'),
     (v_co_b, v_entry_b, (SELECT id FROM public.acc_accounts WHERE company_id = v_co_b AND code = '413505' LIMIT 1), 0, 9999.00, 'Ingreso Emp B');
+  UPDATE public.acc_entries SET status = 'contabilizado' WHERE id = v_entry_b;
   SELECT id INTO v_acc_line_b FROM public.acc_lines WHERE entry_id = v_entry_b AND account_id = v_acc_bank_b LIMIT 1;
 
   SELECT count(*) INTO v_acc_entries_before FROM public.acc_entries WHERE company_id = v_co_a;

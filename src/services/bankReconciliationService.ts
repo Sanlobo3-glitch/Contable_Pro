@@ -45,42 +45,54 @@ export interface NonBindingHint {
  * 1. LECTURA DE CUENTAS BANCARIAS Y CATÁLOGO CONTABLE (acc_accounts)
  * ========================================================================== */
 
-export async function fetchPostableBankLedgerAccounts(): Promise<PostableLedgerAccount[]> {
-  const { data, error } = await supabase
+export async function fetchPostableBankLedgerAccounts(
+  companyId?: string
+): Promise<PostableLedgerAccount[]> {
+  let query = supabase
     .from('acc_accounts')
     .select('id, code, name, type, nature, is_postable, active')
     .eq('active', true)
     .eq('is_postable', true)
     .eq('type', 'activo')
-    .order('code', { ascending: true })
 
+  if (companyId) query = query.eq('company_id', companyId)
+
+  const { data, error } = await query.order('code', { ascending: true })
   if (error) throw error
   return (data || []) as PostableLedgerAccount[]
 }
 
-export async function fetchBankAccounts(): Promise<BankAccountRecord[]> {
-  const [bankRes, accRes] = await Promise.all([
-    supabase
-      .from('bank_accounts')
-      .select('*')
-      .order('bank_name', { ascending: true }),
-    supabase
-      .from('acc_accounts')
-      .select('id, company_id, code, name, type, nature'),
-  ])
+export async function fetchBankAccounts(
+  companyId?: string
+): Promise<BankAccountRecord[]> {
+  let bankQuery = supabase
+    .from('bank_accounts')
+    .select('*')
+    .order('bank_name', { ascending: true })
 
+  let accQuery = supabase
+    .from('acc_accounts')
+    .select('id, company_id, code, name, type, nature')
+
+  if (companyId) {
+    bankQuery = bankQuery.eq('company_id', companyId)
+    accQuery = accQuery.eq('company_id', companyId)
+  }
+
+  const [bankRes, accRes] = await Promise.all([bankQuery, accQuery])
   if (bankRes.error) throw bankRes.error
   if (accRes.error) throw accRes.error
 
   const accById = new Map<string, BankAccountRecord['acc_accounts']>()
   for (const acc of (accRes.data || []) as Array<{
     id: string
-    company_id?: string | null
+    company_id: string
     code: string
     name: string
     type: string
     nature: string
   }>) {
+    if (companyId && acc.company_id !== companyId) continue
     accById.set(acc.id, {
       id: acc.id,
       code: acc.code,
@@ -91,13 +103,15 @@ export async function fetchBankAccounts(): Promise<BankAccountRecord[]> {
   }
 
   return ((bankRes.data || []) as BankAccountRecord[])
+    .filter(row => !companyId || row.company_id === companyId)
     .map(row => ({
       ...row,
-      acc_accounts: accById.get(row.acc_account_id) || row.acc_accounts || null,
+      acc_accounts: accById.get(row.acc_account_id) || null,
     }))
     .sort((a, b) => {
       if (a.active !== b.active) return a.active ? -1 : 1
-      return (a.bank_name || '').localeCompare(b.bank_name || '') || (a.account_alias || '').localeCompare(b.account_alias || '')
+      return (a.bank_name || '').localeCompare(b.bank_name || '') ||
+        (a.account_alias || '').localeCompare(b.account_alias || '')
     })
 }
 
@@ -142,22 +156,29 @@ export async function toggleBankAccountStatus(params: {
  * 2. EXTRACTOS BANCARIOS MANUALES Y RESÚMENES
  * ========================================================================== */
 
-export async function fetchBankStatements(bankAccountId?: string | null): Promise<BankStatementRecord[]> {
+export async function fetchBankStatements(
+  bankAccountId?: string | null,
+  companyId?: string
+): Promise<BankStatementRecord[]> {
   let query = supabase
     .from('bank_statements')
     .select('*')
     .order('cutoff_date', { ascending: false })
     .limit(100)
 
-  if (bankAccountId) {
-    query = query.eq('bank_account_id', bankAccountId)
-  }
+  if (bankAccountId) query = query.eq('bank_account_id', bankAccountId)
+  if (companyId) query = query.eq('company_id', companyId)
 
   const { data, error } = await query
   if (error) throw error
-  return ((data || []) as BankStatementRecord[]).sort(
-    (a, b) => (b.cutoff_date || '').localeCompare(a.cutoff_date || '') || (b.created_at || '').localeCompare(a.created_at || '')
-  )
+
+  return ((data || []) as BankStatementRecord[])
+    .filter(row => !companyId || row.company_id === companyId)
+    .sort(
+      (a, b) =>
+        (b.cutoff_date || '').localeCompare(a.cutoff_date || '') ||
+        (b.created_at || '').localeCompare(a.created_at || '')
+    )
 }
 
 export async function createBankStatement(params: {
@@ -182,10 +203,23 @@ export async function createBankStatement(params: {
   return String(data)
 }
 
-export async function fetchStatementSummary(statementId: string): Promise<BankStatementSummary> {
-  const { data, error } = await supabase.rpc('bank_statement_summary', {
-    p_statement_id: statementId,
-  })
+export async function fetchStatementSummary(
+  statementId: string,
+  support?: {
+    companyId: string
+    scope: 'lectura_diagnostico' | 'intervencion_asistida'
+  }
+): Promise<BankStatementSummary> {
+  const { data, error } = support
+    ? await supabase.rpc('bank_statement_summary_support', {
+        p_statement_id: statementId,
+        p_company_id: support.companyId,
+        p_scope: support.scope,
+      })
+    : await supabase.rpc('bank_statement_summary', {
+        p_statement_id: statementId,
+      })
+
   if (error) throw error
   return data as BankStatementSummary
 }
@@ -193,6 +227,8 @@ export async function fetchStatementSummary(statementId: string): Promise<BankSt
 export async function fetchStatementWorkspace(params: {
   statement: BankStatementRecord
   bankAccount: BankAccountRecord
+  supportCompanyId?: string
+  supportScope?: 'lectura_diagnostico' | 'intervencion_asistida'
 }): Promise<{
   summary: BankStatementSummary
   bankLines: BankStatementLineRecord[]
@@ -200,7 +236,15 @@ export async function fetchStatementWorkspace(params: {
   matches: BankReconciliationMatchRecord[]
   events: BankReconciliationEventRecord[]
 }> {
-  const { statement, bankAccount } = params
+  const { statement, bankAccount, supportCompanyId, supportScope } = params
+
+  if (
+    supportCompanyId &&
+    (statement.company_id !== supportCompanyId ||
+      bankAccount.company_id !== supportCompanyId)
+  ) {
+    throw new Error('La cuenta o el extracto no pertenecen a la empresa autorizada.')
+  }
 
   const [
     summary,
@@ -210,7 +254,15 @@ export async function fetchStatementWorkspace(params: {
     entriesRes,
     eventsRes,
   ] = await Promise.all([
-    fetchStatementSummary(statement.id),
+    fetchStatementSummary(
+      statement.id,
+      supportCompanyId
+        ? {
+            companyId: supportCompanyId,
+            scope: supportScope || 'lectura_diagnostico',
+          }
+        : undefined
+    ),
     supabase
       .from('bank_statement_lines')
       .select('*')
@@ -231,6 +283,7 @@ export async function fetchStatementWorkspace(params: {
     supabase
       .from('acc_entries')
       .select('id, company_id, number, entry_date, description, status, source_type')
+      .eq('company_id', statement.company_id)
       .eq('status', 'contabilizado')
       .lte('entry_date', statement.cutoff_date)
       .order('entry_date', { ascending: false })
@@ -252,19 +305,19 @@ export async function fetchStatementWorkspace(params: {
 
   const entryRows = ((entriesRes.data || []) as Array<{
     id: string
-    company_id?: string | null
+    company_id: string
     number: string
     entry_date: string
     description: string
     status: string
     source_type: string
-  }>).filter(e => !e.company_id || e.company_id === statement.company_id)
+  }>).filter(e => e.company_id === statement.company_id)
   const entryMap = new Map(entryRows.map(e => [e.id, e]))
   const entryIds = entryRows.map(e => e.id)
 
   const rawAccLines: Array<{
     id: string
-    company_id?: string | null
+    company_id: string
     entry_id: string
     account_id: string
     debit: number
@@ -278,12 +331,13 @@ export async function fetchStatementWorkspace(params: {
       const accLinesRes = await supabase
         .from('acc_lines')
         .select('id, company_id, entry_id, account_id, debit, credit, memo')
+        .eq('company_id', statement.company_id)
         .eq('account_id', bankAccount.acc_account_id)
         .in('entry_id', chunk)
         .limit(1000)
       if (accLinesRes.error) throw accLinesRes.error
       const filteredChunk = ((accLinesRes.data || []) as typeof rawAccLines).filter(
-        al => !al.company_id || al.company_id === statement.company_id
+        al => al.company_id === statement.company_id
       )
       rawAccLines.push(...filteredChunk)
     }
@@ -374,20 +428,23 @@ export async function fetchStatementWorkspace(params: {
   }
 }
 
-export async function fetchAuditHistory(bankAccountId?: string | null): Promise<BankReconciliationEventRecord[]> {
+export async function fetchAuditHistory(
+  bankAccountId?: string | null,
+  companyId?: string
+): Promise<BankReconciliationEventRecord[]> {
   let query = supabase
     .from('bank_reconciliation_events')
     .select('*')
     .order('created_at', { ascending: false })
     .limit(150)
 
-  if (bankAccountId) {
-    query = query.eq('bank_account_id', bankAccountId)
-  }
+  if (bankAccountId) query = query.eq('bank_account_id', bankAccountId)
+  if (companyId) query = query.eq('company_id', companyId)
 
   const { data, error } = await query
   if (error) throw error
-  return (data || []) as BankReconciliationEventRecord[]
+  return ((data || []) as BankReconciliationEventRecord[])
+    .filter(row => !companyId || row.company_id === companyId)
 }
 
 /* ============================================================================

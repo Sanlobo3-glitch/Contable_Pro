@@ -14,7 +14,7 @@
 --   1. Aislamiento entre dos empresas (RLS, RPCs, FKs compuestas y triggers)
 --   2. Usuarios con diferentes roles (dueno, admin_empresa, gerente, contador,
 --      vendedor, inactivo, tecnico con y sin autorización de soporte)
---   3. Administrador de plataforma (admin / super_admin) sin acceso cruzado
+--   3. Administrador de plataforma (admin) sin acceso cruzado
 --   4. Cruces parciales y múltiples N-a-M + inmutabilidad de acc_entries/acc_lines
 --   5. Signos, naturaleza contable (debito y credito) e independencia de orden
 --   6. Sobreasignación de importes, IDs duplicados y asientos posteriores al corte
@@ -119,10 +119,10 @@ BEGIN
   -- =========================================================================
   RESET ROLE;
 
-  INSERT INTO public.companies (id, name, active)
+  INSERT INTO public.companies (id, name)
   VALUES
-    (v_co_a, 'Banco Test Empresa A', true),
-    (v_co_b, 'Banco Test Empresa B', true)
+    (v_co_a, 'Banco Test Empresa A'),
+    (v_co_b, 'Banco Test Empresa B')
   ON CONFLICT (id) DO NOTHING;
 
   INSERT INTO auth.users (
@@ -144,7 +144,7 @@ BEGIN
 
   INSERT INTO public.profiles (id, email, full_name, role, company_id, active)
   VALUES
-    (v_u_super_a,   'bk_super_a@test.local',   'Super Admin Test A',  'super_admin',   v_co_a, true),
+    (v_u_super_a,   'bk_super_a@test.local',   'Super Admin Test A',  'admin',         v_co_a, true),
     (v_u_admin_a,   'bk_admin_a@test.local',   'Admin Test A',        'admin',         v_co_a, true),
     (v_u_dueno_a,   'bk_dueno_a@test.local',   'Dueno Test A',        'dueno',         v_co_a, true),
     (v_u_adm_emp_a, 'bk_admemp_a@test.local',  'Admin Empresa A',     'admin_empresa', v_co_a, true),
@@ -192,58 +192,64 @@ BEGIN
   --  4) Debito 250 en 111005 con fecha posterior al corte (2026-12-02)
   --  5) Credito 200 en 111099 (cuenta activo naturaleza credito => ingreso bancario)
   INSERT INTO public.acc_entries (company_id, number, entry_date, description, status, source_type, created_by)
-  VALUES (v_co_a, 'TST-BK-001', '2026-11-05', 'Cobro cliente parcial 1', 'contabilizado', 'manual', v_u_dueno_a)
+  VALUES (v_co_a, 'TST-BK-001', '2026-11-05', 'Cobro cliente parcial 1', 'borrador', 'manual', v_u_dueno_a)
   RETURNING id INTO v_entry_1;
   INSERT INTO public.acc_lines (company_id, entry_id, account_id, debit, credit, memo)
   VALUES
     (v_co_a, v_entry_1, v_acc_bank_a,   600.00, 0, 'Consignación 1'),
     (v_co_a, v_entry_1, v_acc_income_a, 0, 600.00, 'Ingreso 1');
+  UPDATE public.acc_entries SET status = 'contabilizado' WHERE id = v_entry_1;
   SELECT id INTO v_acc_line_in_1 FROM public.acc_lines WHERE entry_id = v_entry_1 AND account_id = v_acc_bank_a LIMIT 1;
 
   INSERT INTO public.acc_entries (company_id, number, entry_date, description, status, source_type, created_by)
-  VALUES (v_co_a, 'TST-BK-002', '2026-11-06', 'Cobro cliente parcial 2', 'contabilizado', 'manual', v_u_dueno_a)
+  VALUES (v_co_a, 'TST-BK-002', '2026-11-06', 'Cobro cliente parcial 2', 'borrador', 'manual', v_u_dueno_a)
   RETURNING id INTO v_entry_2;
   INSERT INTO public.acc_lines (company_id, entry_id, account_id, debit, credit, memo)
   VALUES
     (v_co_a, v_entry_2, v_acc_bank_a,   400.00, 0, 'Consignación 2'),
     (v_co_a, v_entry_2, v_acc_income_a, 0, 400.00, 'Ingreso 2');
+  UPDATE public.acc_entries SET status = 'contabilizado' WHERE id = v_entry_2;
   SELECT id INTO v_acc_line_in_2 FROM public.acc_lines WHERE entry_id = v_entry_2 AND account_id = v_acc_bank_a LIMIT 1;
 
   INSERT INTO public.acc_entries (company_id, number, entry_date, description, status, source_type, created_by)
-  VALUES (v_co_a, 'TST-BK-003', '2026-11-08', 'Pago proveedor transferencia', 'contabilizado', 'manual', v_u_dueno_a)
+  VALUES (v_co_a, 'TST-BK-003', '2026-11-08', 'Pago proveedor transferencia', 'borrador', 'manual', v_u_dueno_a)
   RETURNING id INTO v_entry_3_out;
   INSERT INTO public.acc_lines (company_id, entry_id, account_id, debit, credit, memo)
   VALUES
     (v_co_a, v_entry_3_out, v_acc_expense_a, 150.00, 0, 'Gasto servicio'),
     (v_co_a, v_entry_3_out, v_acc_bank_a,    0, 150.00, 'Salida banco');
+  UPDATE public.acc_entries SET status = 'contabilizado' WHERE id = v_entry_3_out;
   SELECT id INTO v_acc_line_out_1 FROM public.acc_lines WHERE entry_id = v_entry_3_out AND account_id = v_acc_bank_a LIMIT 1;
 
   INSERT INTO public.acc_entries (company_id, number, entry_date, description, status, source_type, created_by)
-  VALUES (v_co_a, 'TST-BK-FUT', '2026-12-02', 'Asiento futuro post corte', 'contabilizado', 'manual', v_u_dueno_a)
+  VALUES (v_co_a, 'TST-BK-FUT', '2026-12-02', 'Asiento futuro post corte', 'borrador', 'manual', v_u_dueno_a)
   RETURNING id INTO v_entry_4_fut;
   INSERT INTO public.acc_lines (company_id, entry_id, account_id, debit, credit, memo)
   VALUES
     (v_co_a, v_entry_4_fut, v_acc_bank_a,   250.00, 0, 'Consignación diciembre'),
     (v_co_a, v_entry_4_fut, v_acc_income_a, 0, 250.00, 'Ingreso diciembre');
+  UPDATE public.acc_entries SET status = 'contabilizado' WHERE id = v_entry_4_fut;
   SELECT id INTO v_acc_line_fut FROM public.acc_lines WHERE entry_id = v_entry_4_fut AND account_id = v_acc_bank_a LIMIT 1;
 
   INSERT INTO public.acc_entries (company_id, number, entry_date, description, status, source_type, created_by)
-  VALUES (v_co_a, 'TST-BK-CRP', '2026-11-09', 'Movimiento cuenta naturaleza credito', 'contabilizado', 'manual', v_u_dueno_a)
+  VALUES (v_co_a, 'TST-BK-CRP', '2026-11-09', 'Movimiento cuenta naturaleza credito', 'borrador', 'manual', v_u_dueno_a)
   RETURNING id INTO v_entry_5_crpuc;
   INSERT INTO public.acc_lines (company_id, entry_id, account_id, debit, credit, memo)
   VALUES
     (v_co_a, v_entry_5_crpuc, v_acc_expense_a, 200.00, 0, 'Cargo'),
     (v_co_a, v_entry_5_crpuc, v_acc_credit_a,  0, 200.00, 'Abono natural credito');
+  UPDATE public.acc_entries SET status = 'contabilizado' WHERE id = v_entry_5_crpuc;
   SELECT id INTO v_acc_line_crpuc FROM public.acc_lines WHERE entry_id = v_entry_5_crpuc AND account_id = v_acc_credit_a LIMIT 1;
 
   -- Asiento contabilizado en Empresa B (para verificar aislamiento resumen y cruces)
   INSERT INTO public.acc_entries (company_id, number, entry_date, description, status, source_type, created_by)
-  VALUES (v_co_b, 'TST-B-001', '2026-11-05', 'Cobro Empresa B', 'contabilizado', 'manual', v_u_dueno_b)
+  VALUES (v_co_b, 'TST-B-001', '2026-11-05', 'Cobro Empresa B', 'borrador', 'manual', v_u_dueno_b)
   RETURNING id INTO v_entry_b;
   INSERT INTO public.acc_lines (company_id, entry_id, account_id, debit, credit, memo)
   VALUES
     (v_co_b, v_entry_b, v_acc_bank_b, 9999.00, 0, 'Consignación Emp B'),
     (v_co_b, v_entry_b, (SELECT id FROM public.acc_accounts WHERE company_id = v_co_b AND code = '413505' LIMIT 1), 0, 9999.00, 'Ingreso Emp B');
+  UPDATE public.acc_entries SET status = 'contabilizado' WHERE id = v_entry_b;
   SELECT id INTO v_acc_line_b FROM public.acc_lines WHERE entry_id = v_entry_b AND account_id = v_acc_bank_b LIMIT 1;
 
   SELECT count(*) INTO v_acc_entries_before FROM public.acc_entries WHERE company_id = v_co_a;
@@ -909,7 +915,7 @@ BEGIN
       GET STACKED DIAGNOSTICS v_err_state = RETURNED_SQLSTATE;
     END;
     IF v_unexpected_ok OR v_err_state <> '42501' THEN
-      RAISE EXCEPTION 'Fallo PRUEBA 3B: admin/super_admin (%) accedió al extracto de Empresa B', v_u_plat;
+      RAISE EXCEPTION 'Fallo PRUEBA 3B: admin (%) accedió al extracto de Empresa B', v_u_plat;
     END IF;
 
     v_unexpected_ok := false;
@@ -920,7 +926,7 @@ BEGIN
       GET STACKED DIAGNOSTICS v_err_msg = MESSAGE_TEXT;
     END;
     IF v_unexpected_ok THEN
-      RAISE EXCEPTION 'Fallo PRUEBA 3C: admin/super_admin (%) vinculó cuenta PUC de Empresa B', v_u_plat;
+      RAISE EXCEPTION 'Fallo PRUEBA 3C: admin (%) vinculó cuenta PUC de Empresa B', v_u_plat;
     END IF;
   END LOOP;
 
@@ -932,6 +938,21 @@ BEGIN
   SELECT count(*) INTO v_cnt FROM public.bank_statements WHERE company_id = v_co_a;
   IF v_cnt <> 0 THEN
     RAISE EXCEPTION 'Fallo PRUEBA 2D.1: técnico sin autorización vio extractos de Empresa A';
+  END IF;
+
+  -- PRUEBA 2D.1B: RPC de soporte bloqueada sin autorización activa.
+  v_unexpected_ok := false;
+  v_err_state := null;
+  BEGIN
+    PERFORM public.bank_statement_summary_support(
+      v_stmt_a, v_co_a, 'lectura_diagnostico'
+    );
+    v_unexpected_ok := true;
+  EXCEPTION WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS v_err_state = RETURNED_SQLSTATE;
+  END;
+  IF v_unexpected_ok OR v_err_state <> '42501' THEN
+    RAISE EXCEPTION 'Fallo PRUEBA 2D.1B: técnico sin autorización ejecutó RPC de resumen';
   END IF;
 
   -- Conceder ticket + autorización activa 'accounting'/'lectura_diagnostico' (como propietario)
@@ -958,6 +979,30 @@ BEGIN
   IF v_cnt = 0 THEN
     RAISE EXCEPTION 'Fallo PRUEBA 2D.2: técnico con autorización soporte accounting/lectura_diagnostico no pudo leer por RLS';
   END IF;
+  -- PRUEBA 2D.2B: RPC de soporte permite resumen de la empresa autorizada.
+  v_summary := public.bank_statement_summary_support(
+    v_stmt_a, v_co_a, 'lectura_diagnostico'
+  );
+  IF v_summary IS NULL
+     OR v_summary->>'statement_id' <> v_stmt_a::text THEN
+    RAISE EXCEPTION 'Fallo PRUEBA 2D.2B: RPC no devolvió el resumen autorizado de Empresa A';
+  END IF;
+
+  -- PRUEBA 2D.2C: la misma autorización no permite consultar Empresa B.
+  v_unexpected_ok := false;
+  v_err_state := null;
+  BEGIN
+    PERFORM public.bank_statement_summary_support(
+      v_stmt_b, v_co_b, 'lectura_diagnostico'
+    );
+    v_unexpected_ok := true;
+  EXCEPTION WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS v_err_state = RETURNED_SQLSTATE;
+  END;
+  IF v_unexpected_ok OR v_err_state <> '42501' THEN
+    RAISE EXCEPTION 'Fallo PRUEBA 2D.2C: técnico consultó Empresa B sin autorización';
+  END IF;
+
   -- Técnico con lectura soporte NO puede ejecutar RPCs operativas
   v_unexpected_ok := false;
   BEGIN

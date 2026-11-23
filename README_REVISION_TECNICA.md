@@ -3,7 +3,7 @@
 Este paquete reúne los 11 archivos vigentes del módulo de **Conciliación Bancaria Manual** para revisión del equipo técnico.
 
 ## Estado importante
-- **Base de datos viva:** Migración 69 (`20261119000069_conciliacion_bancaria_manual.sql`) **NO aplicada aún** (pendiente de ejecución en base de pruebas/staging).
+- **Producción:** Migración 69 (`20261119000069_conciliacion_bancaria_manual.sql`) aplicada y verificada el 2026-11-23 en `supabase_migrations.schema_migrations` (versión registrada: `20261123111109`; nombre: `20261119000069_conciliacion_bancaria_manual`). **No volver a ejecutarla en producción.**
 - **Migraciones 63–68:** Intactas y sin re-ejecutar.
 - **Modalidad:** Conciliación bancaria **100% manual** (sin sincronización bancaria automática, sin cruces automáticos y sin generación automática de asientos contables).
 
@@ -35,6 +35,12 @@ Este paquete reúne los 11 archivos vigentes del módulo de **Conciliación Banc
 12. Paridad en modo demostración dentro de `src/lib/supabase.ts`.
 
 ## Siguiente paso recomendado para el equipo técnico
-Ejecutar en una base PostgreSQL / Supabase de pruebas (no producción):
-1. Revisar y aplicar `supabase/migrations/20261119000069_conciliacion_bancaria_manual.sql`.
-2. Ejecutar `supabase/tests/conciliacion_bancaria_manual_rollback_tests.sql` (envuelto en `BEGIN; ... ROLLBACK;`) con roles reales `anon` y `authenticated`.
+
+La migración 69 ya está aplicada en producción. No debe volver a ejecutarse allí.
+
+1. Realizar una validación funcional controlada del módulo con los roles empresariales previstos (`dueno`, `admin_empresa`, `gerente` y `contador`), verificando permisos, aislamiento por empresa, captura de movimientos, cruces manuales, confirmación e historial.
+2. Verificar por separado la inspección temporal de Soporte Técnico: ticket activo, empresa y módulo autorizados, lectura únicamente, y pérdida de acceso al revocar o expirar la autorización.
+3. Si se requieren pruebas de migración o de rollback, ejecutarlas únicamente en una base de datos aislada de pruebas, nunca como sustituto de la validación funcional en producción.
+4. Los tests de `supabase/tests/conciliacion_bancaria_manual_rollback_tests.sql`, envueltos en `BEGIN; ... ROLLBACK;` y ejecutados con los roles previstos, son pruebas complementarias. No demuestran por sí solos que el flujo funcional esté validado en producción.
+
+La conciliación bancaria continúa siendo manual: no hay sincronización bancaria automática, emparejamiento automático ni generación automática de asientos contables.

@@ -916,12 +916,19 @@ export const CHAPTERS: Chapter[] = [
     ],
   },
   {
-    id: 'conciliacionbancaria', title: 'Conciliación bancaria automática y 4×1000', icon: FileSpreadsheet, roles: OWNER_CPA, page: 'bankrecon', mock: 'bankrecon',
-    summary: 'Cruza tu extracto CSV, PDF o pantallazo de Bancolombia, Nequi, Daviplata, Banesco o Zelle contra tus ventas, compras y gastos en segundos.',
+    id: 'conciliacionbancaria', title: 'Conciliación bancaria manual', icon: FileSpreadsheet, roles: OWNER_CPA, page: 'bankrecon', mock: 'bankrecon',
+    summary: 'Registra cuentas bancarias, captura extractos y movimientos, y realiza cruces manuales con los registros contables de tu empresa.',
     steps: [
-      'Entra a «Conciliación bancaria» y sube el archivo CSV del banco o escanea una foto/PDF de tus movimientos.',
-      'El sistema empareja automáticamente cada abono con tus ventas o pedidos web y marca en rojo los movimientos huérfanos (ingresos no facturados o pagos sin soporte).',
-      'Detecta cobros bancarios (GMF 4×1000, comisiones de datáfono, cuota de manejo, IVA comisión, IGTF) y te permite llevarlos a Gastos Operativos con un solo clic.',
+      'Entra a «Conciliación bancaria» y registra o consulta las cuentas bancarias habilitadas. Cada cuenta se vincula con la cuenta contable PUC correspondiente.',
+      'Crea el extracto indicando el período, la fecha de corte, el saldo inicial y el saldo final reportado por el banco.',
+      'Registra los movimientos del extracto manualmente o utiliza la opción CSV cuando esté disponible. Revisa fechas, conceptos, referencias y valores antes de continuar.',
+      'Selecciona los movimientos y registros contables que correspondan para crear los cruces manuales. La conciliación admite cruces parciales o múltiples según las validaciones del sistema.',
+      'Revisa las diferencias y los saldos antes de confirmar. Consulta el historial y la auditoría para revisar las operaciones realizadas.',
+      'Los cobros bancarios, comisiones e impuesto GMF (4×1000) deben registrarse mediante el procedimiento contable correspondiente; la conciliación no los convierte automáticamente en gastos ni crea asientos por sí sola.',
+    ],
+    tips: [
+      'Las sugerencias de coincidencia son orientativas: verifica los valores y decide manualmente qué movimientos conciliar.',
+      'Esta función no sincroniza directamente con los bancos ni interpreta pantallazos o archivos PDF mediante OCR.',
     ],
   },
   {
@@ -1078,7 +1085,7 @@ export const FAQ = [
   { q: '¿Cómo hago un cambio de talla o referencia sin anular la factura original?', a: 'Entra a «Ventas y cobros → Cambios y garantías» y pulsa «Nuevo cambio rápido». Eliges la prenda que entra y la que sale: si valen igual, el cambio queda en $0 y ajusta el Kardex; si el cliente lleva una de mayor valor, solo cobras la diferencia.' },
   { q: '¿Cómo funciona el Plan Separe para apartar mercancía por abonos?', a: 'En «Plan Separe y apartados» registras el cliente, las prendas apartadas y el abono inicial. Cada cuota en efectivo entra a Caja, puedes enviar recordatorios por WhatsApp y al completar el saldo pulsas «Entregar y facturar» para generar la venta oficial.' },
   { q: '¿Cómo evito que los empleados copien el stock del sistema al contar inventario?', a: 'Usa «Inventario → Toma física ciega». El operador cuenta con celular o cámara de códigos de barras sin ver cuántas unidades dice el sistema; solo el dueño o contador ve la hoja de diferencias y aprueba el ajuste en Kardex.' },
-  { q: '¿Cómo concilio mi extracto de Nequi o Bancolombia y registro el 4×1000?', a: 'En «Caja y gastos → Conciliación bancaria» sube el CSV o foto/PDF de tu extracto. El sistema cruza ventas y pagos automáticamente y detecta comisiones y 4×1000 para registrarlos en Gastos Operativos con un clic.' },
+  { q: '¿Cómo concilio mi extracto bancario y registro el 4×1000?', a: 'Entra a «Conciliación bancaria», selecciona la cuenta y crea el extracto con su período y saldos. Registra los movimientos manualmente o mediante CSV cuando esté disponible y realiza los cruces de forma manual. Las comisiones y el GMF (4×1000) se registran por el procedimiento contable correspondiente; no se generan gastos ni asientos automáticamente.' },
   { q: '¿Qué pasa si se va la electricidad o el internet y anotamos ventas en un cuaderno?', a: 'Tienes dos respaldos: si tenías celular con batería, puedes vender sin internet y se sincroniza solo al volver la señal. Y si anotaron las ventas a mano en un cuaderno físico, al regresar la energía entra a «Ventas» o «Mostrador» y pulsa «Escanear cuaderno»: tomas una foto a la hoja, revisas las filas detectadas y el sistema carga todas las ventas descontando stock.' },
   { q: '¿También puedo escanear facturas de compra de mercancía y recibos de agua o luz?', a: 'Sí. Para mercancía entra a «Compras» → «Escanear factura / ticket» (lee proveedor, ítems, cantidades, costos y lotes). Para recibos de agua, energía, gas, internet o arriendo entra a «Gastos operativos» → «Escanear recibo (Agua, Luz, Gastos)».' },
   { q: '¿Cómo valida el sistema los captures de Nequi, Pago Móvil o transferencias en los pedidos web?', a: 'En «Pedidos de catálogo» abre el pedido y pulsa «Auditar capture (OCR)» (o sube el pantallazo recibido por WhatsApp). El sistema extrae banco, referencia, fecha, monto y estado, compara el valor contra el total del pedido y verifica automáticamente que ese número de referencia no haya sido usado en otro pedido.' },

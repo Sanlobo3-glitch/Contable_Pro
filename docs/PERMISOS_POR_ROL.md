@@ -37,6 +37,17 @@
 
 ---
 
+## 2.1. Inspección bancaria temporal por Soporte Técnico
+
+El acceso de Soporte Técnico a la conciliación bancaria no es un permiso empresarial permanente ni concede acceso general al módulo.
+
+- La inspección requiere un ticket de soporte activo, asociado a la empresa (`company_id`), al módulo `bankrecon` y a una autorización vigente.
+- La autorización se comprueba mediante los controles de soporte, incluida la validación de `support_has_active_authorization` y el registro de acceso mediante `support_register_access`.
+- El alcance de la autorización debe corresponder al ticket y a la empresa inspeccionada. Se conserva el aislamiento entre empresas.
+- La inspección es exclusivamente de lectura. Incluso si el ticket contempla `intervencion_asistida`, esta excepción no habilita al técnico para crear, editar, conciliar, confirmar, anular ni reabrir registros bancarios.
+- Al revocarse o expirar la autorización, la vista de inspección debe dejar de mostrar los datos bancarios protegidos.
+- Esta autorización temporal no sustituye los permisos empresariales de `dueno`, `admin_empresa`, `gerente` o `contador`, ni permite al administrador de plataforma consultar otras empresas por el solo hecho de ser administrador de plataforma.
+
 ## 3. Matriz completa de acceso por página (`src/lib/pagePermissions.ts`)
 
 | Sección | Página | `id` | Admin | Dueño | Adm. emp. | Gerente | Contador | Vendedor | Cajero | Almacén | Compras | Transp. | Soporte |

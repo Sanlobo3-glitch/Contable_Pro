@@ -1,7 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { AuthProvider, useAuth, isCompanyManager } from './lib/auth'
 import { isPageAllowedForRole } from './lib/pagePermissions'
 import { useAppNavigation } from './lib/navigation'
+import { isSessionAuthorizationActive } from './lib/supportTickets'
+import type { SupportTicket } from './types'
 import { getPublicStoreIdentifierFromLocation } from './lib/whatsappStudio'
 import { WarehouseProvider } from './lib/warehouseContext'
 import type { DemoRole } from './lib/supabase'
@@ -98,6 +100,18 @@ function getPublicCatalogStoreKey(): string | null {
 function AppContent() {
   const { user, loading, signOut, isDemo, isMasterAccount, masterRoleOverride, enterDemo, exitDemo } = useAuth()
   const cur = useCurrency()
+  const [supportInspectionTicket, setSupportInspectionTicket] =
+    useState<SupportTicket | null>(null)
+  const supportInspectionEnteredRef = useRef(false)
+
+  const supportInspectionAllowed = Boolean(
+    user &&
+    (user.role === 'tecnico' || isMasterAccount) &&
+    supportInspectionTicket &&
+    supportInspectionTicket.module_page === 'bankrecon' &&
+    supportInspectionTicket.company_id &&
+    isSessionAuthorizationActive(supportInspectionTicket)
+  )
 
   const scopeKey = isDemo ? 'demo' : (user?.id ?? null)
   const defaultPageForRole =
@@ -132,8 +146,41 @@ function AppContent() {
     scopeKey,
     defaultPage: defaultPageForRole,
     isAllowedPage: page =>
+      (page === 'bankrecon' && supportInspectionAllowed) ||
       isPageAllowedForRole(page, user?.role, { isMasterAccount, isDemo, masterRoleOverride }),
   })
+
+  // La excepción bancaria solo existe durante la inspección autorizada.
+  useEffect(() => {
+    if (!supportInspectionTicket) {
+      supportInspectionEnteredRef.current = false
+      return
+    }
+
+    if (!supportInspectionAllowed) {
+      supportInspectionEnteredRef.current = false
+      setSupportInspectionTicket(null)
+      return
+    }
+
+    if (current === 'bankrecon') {
+      supportInspectionEnteredRef.current = true
+      return
+    }
+
+    if (supportInspectionEnteredRef.current) {
+      supportInspectionEnteredRef.current = false
+      setSupportInspectionTicket(null)
+      return
+    }
+
+    navigateToPage('bankrecon')
+  }, [
+    supportInspectionTicket,
+    supportInspectionAllowed,
+    current,
+    navigateToPage,
+  ])
 
   // Nunca iniciar una sesión como autorizada por defecto.
   const [dev, setDev] = useState<DeviceState>({
@@ -289,6 +336,8 @@ function AppContent() {
   }
 
   async function handleSignOut() {
+    supportInspectionEnteredRef.current = false
+    setSupportInspectionTicket(null)
     resetNavigationForLogout('landing')
     if (isDemo) {
       exitDemo()
@@ -468,13 +517,16 @@ function AppContent() {
     )
   }
 
-  const safeCurrent = isPageAllowedForRole(current, user.role, {
-    isMasterAccount,
-    isDemo,
-    masterRoleOverride,
-  })
-    ? current
-    : defaultPageForRole
+  const safeCurrent =
+    current === 'bankrecon' && supportInspectionAllowed
+      ? current
+      : isPageAllowedForRole(current, user.role, {
+          isMasterAccount,
+          isDemo,
+          masterRoleOverride,
+        })
+        ? current
+        : defaultPageForRole
 
   const pages: Record<string, React.ReactNode> = {
     manager_center: <ManagerCenter key="manager_center" pageId="manager_center" onNavigate={navigateToPage} initialTab="resumen" />,
@@ -501,7 +553,12 @@ function AppContent() {
     suppliers: <Suppliers />,
     cash: <Cash onNavigate={navigateToPage} />,
     treasury: <TreasuryForecast onNavigate={navigateToPage} />,
-    bankrecon: <BankReconciliation onNavigate={navigateToPage} />,
+    bankrecon: (
+      <BankReconciliation
+        onNavigate={navigateToPage}
+        supportInspectionTicket={supportInspectionTicket}
+      />
+    ),
     expenses: <Expenses />,
     devolutions: <Devolutions onNavigate={navigateToPage} />,
     exchanges: <ExchangesWarranties onNavigate={navigateToPage} />,
@@ -550,7 +607,22 @@ function AppContent() {
     trazabilidad: <DispatchHistory onNavigate={navigateToPage} />,
     ask: <AskCopilot onNavigate={navigateToPage} />,
     lots: <Lots onNavigate={navigateToPage} />,
-    support: <TechSupport currentOriginPage={safeCurrent} onNavigate={navigateToPage} />,
+    support: (
+      <TechSupport
+        currentOriginPage={safeCurrent}
+        onNavigate={navigateToPage}
+        onInspectTicketModule={ticket => {
+          if (
+            ticket.module_page !== 'bankrecon' ||
+            !ticket.company_id ||
+            !isSessionAuthorizationActive(ticket)
+          ) {
+            return
+          }
+          setSupportInspectionTicket(ticket)
+        }}
+      />
+    ),
     sqlcenter: <SqlAdminCenter />,
     manual: <Manual role={user.role} onNavigate={navigateToPage} />,
     omnichannel: <OmnichannelInbox onNavigate={navigateToPage} />,

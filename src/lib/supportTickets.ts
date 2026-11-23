@@ -172,10 +172,12 @@ function getRpcError(payload: RpcPayload, fallback: string): string {
 }
 
 function normalizeModuleName(modulePage: string | null | undefined): string {
-  const moduleName = (modulePage || '').trim()
-  if (!moduleName) {
+  const page = (modulePage || '').trim()
+  if (!page) {
     throw new Error('El ticket no tiene un módulo asociado para autorizar.')
   }
+
+  const moduleName = page === 'bankrecon' ? 'accounting' : page
 
   if (moduleName.length > 100) {
     throw new Error('El identificador del módulo supera los 100 caracteres.')

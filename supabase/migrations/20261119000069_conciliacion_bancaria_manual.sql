@@ -44,10 +44,8 @@ begin
   select exists (
     select 1
     from public.profiles pr
-    join public.companies co on co.id = pr.company_id
     where pr.id = v_uid
       and pr.active = true
-      and coalesce(co.active, true) = true
       and pr.company_id = v_co
       and (p_roles is null or lower(pr.role) = any(p_roles))
   ) into v_ok;
@@ -70,13 +68,11 @@ as $function$
   select exists (
     select 1
     from public.profiles p
-    join public.companies co on co.id = p.company_id
     where p.id = (select auth.uid())
       and p.active = true
-      and coalesce(co.active, true) = true
       and p.company_id is not null
       and p.company_id = (select public.current_company_id())
-      and lower(p.role) in ('admin', 'super_admin', 'dueno', 'admin_empresa', 'gerente', 'contador')
+      and lower(p.role) in ('admin', 'dueno', 'admin_empresa', 'gerente', 'contador')
   );
 $function$;
 
@@ -738,12 +734,12 @@ revoke all on function public._bank_recompute_statement_states(uuid) from public
 
 -- ============================================================================
 -- 4. RPCS PÚBLICAS CON SEPARACIÓN GRANULAR DE PERMISOS POR FUNCIÓN
---   - Lectura:                admin, super_admin, dueno, admin_empresa, gerente, contador (+ soporte autorizado solo SELECT)
---   - Administración cuentas: admin, super_admin, dueno, admin_empresa, gerente
---   - Registro movimientos:   admin, super_admin, dueno, admin_empresa, gerente, contador
---   - Conciliación manual:    admin, super_admin, dueno, admin_empresa, gerente, contador
---   - Anulación:              admin, super_admin, dueno, admin_empresa, gerente
---   - Reapertura formal:      admin, super_admin, dueno, admin_empresa
+--   - Lectura:                admin, dueno, admin_empresa, gerente, contador (+ soporte autorizado solo SELECT)
+--   - Administración cuentas: admin, dueno, admin_empresa, gerente
+--   - Registro movimientos:   admin, dueno, admin_empresa, gerente, contador
+--   - Conciliación manual:    admin, dueno, admin_empresa, gerente, contador
+--   - Anulación:              admin, dueno, admin_empresa, gerente
+--   - Reapertura formal:      admin, dueno, admin_empresa
 -- ============================================================================
 
 create or replace function public.bank_upsert_account(
@@ -762,7 +758,7 @@ security definer
 set search_path to 'pg_catalog', 'public', 'pg_temp'
 as $function$
 declare
-  v_co uuid := public._bank_require_roles(array['admin', 'super_admin', 'dueno', 'admin_empresa', 'gerente']);
+  v_co uuid := public._bank_require_roles(array['admin', 'dueno', 'admin_empresa', 'gerente']);
   v_bank_name text := btrim(coalesce(p_bank_name, ''));
   v_alias text := btrim(coalesce(p_account_alias, ''));
   v_type text := coalesce(nullif(btrim(coalesce(p_account_type, '')), ''), 'ahorros');
@@ -915,7 +911,7 @@ security definer
 set search_path to 'pg_catalog', 'public', 'pg_temp'
 as $function$
 declare
-  v_co uuid := public._bank_require_roles(array['admin', 'super_admin', 'dueno', 'admin_empresa', 'gerente']);
+  v_co uuid := public._bank_require_roles(array['admin', 'dueno', 'admin_empresa', 'gerente']);
   v_acc public.bank_accounts;
 begin
   select * into v_acc
@@ -962,7 +958,7 @@ security definer
 set search_path to 'pg_catalog', 'public', 'pg_temp'
 as $function$
 declare
-  v_co uuid := public._bank_require_roles(array['admin', 'super_admin', 'dueno', 'admin_empresa', 'gerente', 'contador']);
+  v_co uuid := public._bank_require_roles(array['admin', 'dueno', 'admin_empresa', 'gerente', 'contador']);
   v_bank public.bank_accounts;
   v_seq integer;
   v_existing_count integer;
@@ -1094,7 +1090,7 @@ security definer
 set search_path to 'pg_catalog', 'public', 'pg_temp'
 as $function$
 declare
-  v_co uuid := public._bank_require_roles(array['admin', 'super_admin', 'dueno', 'admin_empresa', 'gerente', 'contador']);
+  v_co uuid := public._bank_require_roles(array['admin', 'dueno', 'admin_empresa', 'gerente', 'contador']);
   v_stmt public.bank_statements;
   v_origin text := coalesce(nullif(btrim(coalesce(p_source_origin, '')), ''), 'manual');
   v_actor_name text;
@@ -1263,7 +1259,7 @@ security definer
 set search_path to 'pg_catalog', 'public', 'pg_temp'
 as $function$
 declare
-  v_co uuid := public._bank_require_roles(array['admin', 'super_admin', 'dueno', 'admin_empresa', 'gerente']);
+  v_co uuid := public._bank_require_roles(array['admin', 'dueno', 'admin_empresa', 'gerente']);
   v_line public.bank_statement_lines;
   v_stmt public.bank_statements;
   v_reason text := btrim(coalesce(p_reason, ''));
@@ -1345,7 +1341,7 @@ security definer
 set search_path to 'pg_catalog', 'public', 'pg_temp'
 as $function$
 declare
-  v_co uuid := public._bank_require_roles(array['admin', 'super_admin', 'dueno', 'admin_empresa', 'gerente', 'contador']);
+  v_co uuid := public._bank_require_roles(array['admin', 'dueno', 'admin_empresa', 'gerente', 'contador']);
   v_stmt public.bank_statements;
   v_bank public.bank_accounts;
   v_puc public.acc_accounts;
@@ -1700,7 +1696,7 @@ security definer
 set search_path to 'pg_catalog', 'public', 'pg_temp'
 as $function$
 declare
-  v_co uuid := public._bank_require_roles(array['admin', 'super_admin', 'dueno', 'admin_empresa', 'gerente', 'contador']);
+  v_co uuid := public._bank_require_roles(array['admin', 'dueno', 'admin_empresa', 'gerente', 'contador']);
   v_line public.bank_statement_lines;
   v_stmt public.bank_statements;
   v_reason text := btrim(coalesce(p_reason, ''));
@@ -1772,7 +1768,7 @@ security definer
 set search_path to 'pg_catalog', 'public', 'pg_temp'
 as $function$
 declare
-  v_co uuid := public._bank_require_roles(array['admin', 'super_admin', 'dueno', 'admin_empresa', 'gerente']);
+  v_co uuid := public._bank_require_roles(array['admin', 'dueno', 'admin_empresa', 'gerente']);
   v_m public.bank_reconciliation_matches;
   v_stmt public.bank_statements;
   v_actor_name text;
@@ -1850,7 +1846,7 @@ security definer
 set search_path to 'pg_catalog', 'public', 'pg_temp'
 as $function$
 declare
-  v_co uuid := public._bank_require_roles(array['admin', 'super_admin', 'dueno', 'admin_empresa', 'gerente', 'contador']);
+  v_co uuid := public._bank_require_roles(array['admin', 'dueno', 'admin_empresa', 'gerente', 'contador']);
   v_stmt public.bank_statements;
   v_bank public.bank_accounts;
   v_acc public.acc_accounts;
@@ -2005,6 +2001,191 @@ begin
 end
 $function$;
 
+create or replace function public.bank_statement_summary_support(
+  p_statement_id uuid,
+  p_company_id uuid,
+  p_scope text default 'lectura_diagnostico'
+)
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path to 'pg_catalog', 'public', 'pg_temp'
+as $function$
+declare
+  v_co uuid := p_company_id;
+  v_stmt public.bank_statements;
+  v_bank public.bank_accounts;
+  v_acc public.acc_accounts;
+  v_bank_credits numeric := 0;
+  v_bank_debits numeric := 0;
+  v_bank_reconciled numeric := 0;
+  v_bank_pending numeric := 0;
+  v_bank_diff_amount numeric := 0;
+  v_lines_total int := 0;
+  v_lines_conc int := 0;
+  v_lines_part int := 0;
+  v_lines_diff int := 0;
+  v_lines_pend int := 0;
+  v_acc_balance numeric := 0;
+  v_acc_period_debit numeric := 0;
+  v_acc_period_credit numeric := 0;
+  v_acc_reconciled numeric := 0;
+  v_acc_pending numeric := 0;
+  v_calc_bank_closing numeric := 0;
+  v_period_open boolean := true;
+begin
+  if auth.uid() is null
+     or p_company_id is null
+     or p_scope is null
+     or p_scope not in ('lectura_diagnostico', 'intervencion_asistida') then
+    raise exception 'Autorización de soporte inválida' using errcode = '42501';
+  end if;
+
+  if not coalesce(
+    public.support_has_active_authorization(
+      p_company_id,
+      'accounting',
+      p_scope
+    ),
+    false
+  ) then
+    raise exception 'No existe autorización activa para consultar esta empresa' using errcode = '42501';
+  end if;
+
+  select * into v_stmt
+    from public.bank_statements
+   where id = p_statement_id
+     and company_id = v_co;
+
+  if not found then
+    raise exception 'No autorizado o extracto bancario inexistente' using errcode = '42501';
+  end if;
+
+  select * into v_bank
+    from public.bank_accounts
+   where id = v_stmt.bank_account_id
+     and company_id = v_co;
+
+  if not found then
+    raise exception 'No autorizado o cuenta bancaria inexistente' using errcode = '42501';
+  end if;
+
+  select * into v_acc
+    from public.acc_accounts
+   where id = v_bank.acc_account_id
+     and company_id = v_co;
+
+  if not found then
+    raise exception 'No autorizado o cuenta PUC vinculada inexistente' using errcode = '42501';
+  end if;
+
+  select coalesce(sum(case when l.direction = 'credit' then l.amount else 0 end), 0),
+         coalesce(sum(case when l.direction = 'debit' then l.amount else 0 end), 0),
+         count(*),
+         count(*) filter (where l.status = 'conciliado'),
+         count(*) filter (where l.status = 'parcialmente_conciliado'),
+         count(*) filter (where l.status = 'con_diferencia'),
+         count(*) filter (where l.status = 'pendiente'),
+         coalesce(sum(case when l.status = 'con_diferencia' then greatest(0, l.amount - coalesce(m.matched, 0)) else 0 end), 0),
+         coalesce(sum(coalesce(m.matched, 0)), 0),
+         coalesce(sum(greatest(0, l.amount - coalesce(m.matched, 0))), 0)
+    into v_bank_credits, v_bank_debits,
+         v_lines_total, v_lines_conc, v_lines_part, v_lines_diff, v_lines_pend,
+         v_bank_diff_amount, v_bank_reconciled, v_bank_pending
+    from public.bank_statement_lines l
+    left join (
+      select statement_line_id, sum(matched_amount) as matched
+        from public.bank_reconciliation_matches
+       where status = 'activo'
+         and company_id = v_co
+         and statement_id = p_statement_id
+       group by statement_line_id
+    ) m on m.statement_line_id = l.id
+   where l.statement_id = p_statement_id
+     and l.company_id = v_co
+     and l.status <> 'anulado';
+
+  v_calc_bank_closing := round(v_stmt.opening_balance + v_bank_credits - v_bank_debits, 2);
+
+  -- Saldo contable REAL en acc_entries contabilizados + acc_lines hasta cutoff_date (estrictamente empresa activa)
+  select coalesce(sum(case when v_acc.nature = 'credito' then (al.credit - al.debit) else (al.debit - al.credit) end), 0),
+         coalesce(sum(case when ae.entry_date >= v_stmt.period_start and ae.entry_date <= v_stmt.cutoff_date then al.debit else 0 end), 0),
+         coalesce(sum(case when ae.entry_date >= v_stmt.period_start and ae.entry_date <= v_stmt.cutoff_date then al.credit else 0 end), 0)
+    into v_acc_balance, v_acc_period_debit, v_acc_period_credit
+    from public.acc_lines al
+    join public.acc_entries ae
+      on ae.id = al.entry_id
+     and ae.company_id = v_co
+   where al.company_id = v_co
+     and al.account_id = v_bank.acc_account_id
+     and ae.status = 'contabilizado'
+     and ae.entry_date <= v_stmt.cutoff_date;
+
+  -- Movimientos contables del periodo hasta el corte vs lo conciliado en la empresa activa
+  select coalesce(sum(coalesce(ma.matched, 0)), 0),
+         coalesce(sum(greatest(0, abs(al.debit - al.credit) - coalesce(ma.matched, 0))), 0)
+    into v_acc_reconciled, v_acc_pending
+    from public.acc_lines al
+    join public.acc_entries ae
+      on ae.id = al.entry_id
+     and ae.company_id = v_co
+    left join (
+      select acc_line_id, sum(matched_amount) as matched
+        from public.bank_reconciliation_matches
+       where status = 'activo'
+         and company_id = v_co
+       group by acc_line_id
+    ) ma on ma.acc_line_id = al.id
+   where al.company_id = v_co
+     and al.account_id = v_bank.acc_account_id
+     and ae.status = 'contabilizado'
+     and ae.entry_date between v_stmt.period_start and v_stmt.cutoff_date;
+
+  v_period_open := public.acc_period_is_open(v_co, v_stmt.cutoff_date);
+
+  return jsonb_build_object(
+    'statement_id', v_stmt.id,
+    'statement_code', v_stmt.statement_code,
+    'bank_account_id', v_bank.id,
+    'bank_name', v_bank.bank_name,
+    'account_alias', v_bank.account_alias,
+    'account_number_masked', v_bank.account_number_masked,
+    'acc_account_id', v_bank.acc_account_id,
+    'acc_account_code', v_acc.code,
+    'acc_account_name', v_acc.name,
+    'period_start', v_stmt.period_start,
+    'period_end', v_stmt.period_end,
+    'cutoff_date', v_stmt.cutoff_date,
+    'status', v_stmt.status,
+    'is_period_open', v_period_open,
+    'opening_balance', round(v_stmt.opening_balance, 2),
+    'bank_credits', round(v_bank_credits, 2),
+    'bank_debits', round(v_bank_debits, 2),
+    'calculated_bank_closing', v_calc_bank_closing,
+    'reported_closing_balance', v_stmt.reported_closing_balance,
+    'accounting_balance', round(v_acc_balance, 2),
+    'accounting_period_debits', round(v_acc_period_debit, 2),
+    'accounting_period_credits', round(v_acc_period_credit, 2),
+    'bank_reconciled_total', round(v_bank_reconciled, 2),
+    'bank_pending_total', round(v_bank_pending, 2),
+    'bank_difference_lines_total', round(v_bank_diff_amount, 2),
+    'accounting_reconciled_total', round(v_acc_reconciled, 2),
+    'accounting_pending_total', round(v_acc_pending, 2),
+    'difference_bank_vs_books', round(v_calc_bank_closing - v_acc_balance, 2),
+    'difference_vs_reported_closing', case
+      when v_stmt.reported_closing_balance is null then null
+      else round(v_stmt.reported_closing_balance - v_calc_bank_closing, 2)
+    end,
+    'lines_total', v_lines_total,
+    'lines_reconciled', v_lines_conc,
+    'lines_partial', v_lines_part,
+    'lines_with_difference', v_lines_diff,
+    'lines_pending', v_lines_pend
+  );
+end
+$function$;
+
 create or replace function public.bank_confirm_statement(
   p_statement_id uuid,
   p_notes text default null::text
@@ -2015,7 +2196,7 @@ security definer
 set search_path to 'pg_catalog', 'public', 'pg_temp'
 as $function$
 declare
-  v_co uuid := public._bank_require_roles(array['admin', 'super_admin', 'dueno', 'admin_empresa', 'gerente', 'contador']);
+  v_co uuid := public._bank_require_roles(array['admin', 'dueno', 'admin_empresa', 'gerente', 'contador']);
   v_stmt public.bank_statements;
   v_actor_name text;
   v_summary jsonb;
@@ -2115,7 +2296,7 @@ security definer
 set search_path to 'pg_catalog', 'public', 'pg_temp'
 as $function$
 declare
-  v_co uuid := public._bank_require_roles(array['admin', 'super_admin', 'dueno', 'admin_empresa']);
+  v_co uuid := public._bank_require_roles(array['admin', 'dueno', 'admin_empresa']);
   v_stmt public.bank_statements;
   v_reason text := btrim(coalesce(p_reason, ''));
   v_next_status text;
@@ -2180,7 +2361,7 @@ security definer
 set search_path to 'pg_catalog', 'public', 'pg_temp'
 as $function$
 declare
-  v_co uuid := public._bank_require_roles(array['admin', 'super_admin', 'dueno', 'admin_empresa', 'gerente']);
+  v_co uuid := public._bank_require_roles(array['admin', 'dueno', 'admin_empresa', 'gerente']);
   v_stmt public.bank_statements;
   v_actor_name text;
   v_reason text := btrim(coalesce(p_reason, ''));
@@ -2281,6 +2462,12 @@ begin
   end loop;
 end
 $$;
+
+-- RPC independiente de consulta bancaria para soporte técnico.
+revoke all on function public.bank_statement_summary_support(uuid,uuid,text)
+  from public, anon, authenticated;
+grant execute on function public.bank_statement_summary_support(uuid,uuid,text)
+  to authenticated, service_role;
 
 -- ============================================================================
 -- 5. VERIFICACIÓN POSTERIOR DENTRO DE LA MISMA MIGRACIÓN

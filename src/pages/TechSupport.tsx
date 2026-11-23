@@ -321,7 +321,7 @@ export default function TechSupport({
     }
   }
 
-  function handleInspectAuthorizedModule(ticket: SupportTicket, simulateUserRole = false) {
+  async function handleInspectAuthorizedModule(ticket: SupportTicket, simulateUserRole = false) {
     if (!isSessionAuthorizationActive(ticket)) {
       setFeedback({
         ok: false,
@@ -330,29 +330,41 @@ export default function TechSupport({
       return
     }
 
-    const targetPage = (ticket.module_page || 'dashboard').trim() || 'dashboard'
+    if (!ticket.company_id) {
+      setFeedback({
+        ok: false,
+        text: 'El ticket no tiene una empresa válida para autorizar el acceso.',
+      })
+      return
+    }
 
-    void supabase.rpc('support_register_access', {
+    const targetPage = (ticket.module_page || 'dashboard').trim() || 'dashboard'
+    const authorizationModule = targetPage === 'bankrecon' ? 'accounting' : targetPage
+
+    const { data, error } = await supabase.rpc('support_register_access', {
       p_company_id: ticket.company_id,
-      p_module: targetPage,
+      p_module: authorizationModule,
       p_scope: ticket.authorization_scope || 'lectura_diagnostico',
     })
 
-    if (onInspectTicketModule) {
+    if (error || data !== true) {
+      setFeedback({
+        ok: false,
+        text: error?.message || 'El servidor rechazó el acceso. Verifica que la autorización siga vigente.',
+      })
+      return
+    }
+
+    if (onInspectTicketModule && targetPage === 'bankrecon') {
       onInspectTicketModule(ticket, simulateUserRole)
       return
     }
 
     if (simulateUserRole && isMasterAccount) {
-      switchMasterRole(
-        ticket.user_role,
-        ticket.company_id
-          ? {
-              id: ticket.company_id,
-              name: ticket.company_name || 'Empresa cliente',
-            }
-          : null
-      )
+      switchMasterRole(ticket.user_role, {
+        id: ticket.company_id,
+        name: ticket.company_name || 'Empresa cliente',
+      })
     }
 
     onNavigate?.(targetPage)

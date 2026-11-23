@@ -14,7 +14,7 @@
 --   1. Aislamiento entre dos empresas (RLS, RPCs, FKs compuestas y triggers)
 --   2. Usuarios con diferentes roles (dueno, admin_empresa, gerente, contador,
 --      vendedor, inactivo, tecnico con y sin autorización de soporte)
---   3. Administrador de plataforma (admin / super_admin) sin acceso cruzado
+--   3. Administrador de plataforma (admin) sin acceso cruzado
 --   4. Cruces parciales y múltiples N-a-M + inmutabilidad de acc_entries/acc_lines
 --   5. Signos, naturaleza contable (debito y credito) e independencia de orden
 --   6. Sobreasignación de importes, IDs duplicados y asientos posteriores al corte
@@ -119,10 +119,10 @@ BEGIN
   -- =========================================================================
   RESET ROLE;
 
-  INSERT INTO public.companies (id, name, active)
+  INSERT INTO public.companies (id, name)
   VALUES
-    (v_co_a, 'Banco Test Empresa A', true),
-    (v_co_b, 'Banco Test Empresa B', true)
+    (v_co_a, 'Banco Test Empresa A'),
+    (v_co_b, 'Banco Test Empresa B')
   ON CONFLICT (id) DO NOTHING;
 
   INSERT INTO auth.users (
@@ -144,7 +144,7 @@ BEGIN
 
   INSERT INTO public.profiles (id, email, full_name, role, company_id, active)
   VALUES
-    (v_u_super_a,   'bk_super_a@test.local',   'Super Admin Test A',  'super_admin',   v_co_a, true),
+    (v_u_super_a,   'bk_super_a@test.local',   'Super Admin Test A',  'admin',         v_co_a, true),
     (v_u_admin_a,   'bk_admin_a@test.local',   'Admin Test A',        'admin',         v_co_a, true),
     (v_u_dueno_a,   'bk_dueno_a@test.local',   'Dueno Test A',        'dueno',         v_co_a, true),
     (v_u_adm_emp_a, 'bk_admemp_a@test.local',  'Admin Empresa A',     'admin_empresa', v_co_a, true),
@@ -909,7 +909,7 @@ BEGIN
       GET STACKED DIAGNOSTICS v_err_state = RETURNED_SQLSTATE;
     END;
     IF v_unexpected_ok OR v_err_state <> '42501' THEN
-      RAISE EXCEPTION 'Fallo PRUEBA 3B: admin/super_admin (%) accedió al extracto de Empresa B', v_u_plat;
+      RAISE EXCEPTION 'Fallo PRUEBA 3B: admin (%) accedió al extracto de Empresa B', v_u_plat;
     END IF;
 
     v_unexpected_ok := false;
@@ -920,7 +920,7 @@ BEGIN
       GET STACKED DIAGNOSTICS v_err_msg = MESSAGE_TEXT;
     END;
     IF v_unexpected_ok THEN
-      RAISE EXCEPTION 'Fallo PRUEBA 3C: admin/super_admin (%) vinculó cuenta PUC de Empresa B', v_u_plat;
+      RAISE EXCEPTION 'Fallo PRUEBA 3C: admin (%) vinculó cuenta PUC de Empresa B', v_u_plat;
     END IF;
   END LOOP;
 
@@ -932,6 +932,21 @@ BEGIN
   SELECT count(*) INTO v_cnt FROM public.bank_statements WHERE company_id = v_co_a;
   IF v_cnt <> 0 THEN
     RAISE EXCEPTION 'Fallo PRUEBA 2D.1: técnico sin autorización vio extractos de Empresa A';
+  END IF;
+
+  -- PRUEBA 2D.1B: RPC de soporte bloqueada sin autorización activa.
+  v_unexpected_ok := false;
+  v_err_state := null;
+  BEGIN
+    PERFORM public.bank_statement_summary_support(
+      v_stmt_a, v_co_a, 'lectura_diagnostico'
+    );
+    v_unexpected_ok := true;
+  EXCEPTION WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS v_err_state = RETURNED_SQLSTATE;
+  END;
+  IF v_unexpected_ok OR v_err_state <> '42501' THEN
+    RAISE EXCEPTION 'Fallo PRUEBA 2D.1B: técnico sin autorización ejecutó RPC de resumen';
   END IF;
 
   -- Conceder ticket + autorización activa 'accounting'/'lectura_diagnostico' (como propietario)
@@ -958,6 +973,30 @@ BEGIN
   IF v_cnt = 0 THEN
     RAISE EXCEPTION 'Fallo PRUEBA 2D.2: técnico con autorización soporte accounting/lectura_diagnostico no pudo leer por RLS';
   END IF;
+  -- PRUEBA 2D.2B: RPC de soporte permite resumen de la empresa autorizada.
+  v_summary := public.bank_statement_summary_support(
+    v_stmt_a, v_co_a, 'lectura_diagnostico'
+  );
+  IF v_summary IS NULL
+     OR v_summary->>'statement_id' <> v_stmt_a::text THEN
+    RAISE EXCEPTION 'Fallo PRUEBA 2D.2B: RPC no devolvió el resumen autorizado de Empresa A';
+  END IF;
+
+  -- PRUEBA 2D.2C: la misma autorización no permite consultar Empresa B.
+  v_unexpected_ok := false;
+  v_err_state := null;
+  BEGIN
+    PERFORM public.bank_statement_summary_support(
+      v_stmt_b, v_co_b, 'lectura_diagnostico'
+    );
+    v_unexpected_ok := true;
+  EXCEPTION WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS v_err_state = RETURNED_SQLSTATE;
+  END;
+  IF v_unexpected_ok OR v_err_state <> '42501' THEN
+    RAISE EXCEPTION 'Fallo PRUEBA 2D.2C: técnico consultó Empresa B sin autorización';
+  END IF;
+
   -- Técnico con lectura soporte NO puede ejecutar RPCs operativas
   v_unexpected_ok := false;
   BEGIN

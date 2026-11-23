@@ -28,6 +28,8 @@ import {
   useAuth,
 } from '../lib/auth'
 import { downloadCsv } from '../lib/csv'
+import { supabase } from '../lib/supabase'
+import { isSessionAuthorizationActive } from '../lib/supportTickets'
 import { fmtDate, fmtDateTime, useCurrency } from '../lib/currency'
 import { esc, printHtml } from '../lib/documents'
 import { round2 } from '../lib/tax'
@@ -63,6 +65,7 @@ import type {
   BankStatementRecord,
   BankStatementSummary,
   LedgerBankLineCandidate,
+  SupportTicket,
 } from '../types'
 
 type WorkspaceTab = 'conciliacion' | 'extractos' | 'cuentas' | 'historial'
@@ -143,19 +146,28 @@ type ActionModalState =
 
 export default function BankReconciliation({
   onNavigate,
+  supportInspectionTicket = null,
 }: {
   onNavigate?: (page: string) => void
+  supportInspectionTicket?: SupportTicket | null
 }) {
   const { user } = useAuth()
   const { fmt: money, currency } = useCurrency()
   const role = user?.role
   const readOnly = isReadOnly(user)
-  const hasAccess = canAccessBankReconciliation(role)
-  const canManageAccounts = !readOnly && canManageBankAccounts(role)
-  const canCaptureStatements = !readOnly && canCaptureBankStatements(role)
-  const canReconcile = !readOnly && canReconcileBankStatements(role)
-  const canVoidItems = !readOnly && canVoidBankReconciliationItems(role)
-  const canReopen = !readOnly && canReopenBankStatements(role)
+  const supportMode = Boolean(supportInspectionTicket)
+  const [supportAuthorizationValid, setSupportAuthorizationValid] = useState(false)
+  const [supportAuthorizationLoading, setSupportAuthorizationLoading] = useState(
+    Boolean(supportInspectionTicket)
+  )
+  const hasAccess = supportMode
+    ? supportAuthorizationValid
+    : canAccessBankReconciliation(role)
+  const canManageAccounts = !supportMode && !readOnly && canManageBankAccounts(role)
+  const canCaptureStatements = !supportMode && !readOnly && canCaptureBankStatements(role)
+  const canReconcile = !supportMode && !readOnly && canReconcileBankStatements(role)
+  const canVoidItems = !supportMode && !readOnly && canVoidBankReconciliationItems(role)
+  const canReopen = !supportMode && !readOnly && canReopenBankStatements(role)
 
   const csvFileInputRef = useRef<HTMLInputElement>(null)
 
@@ -251,6 +263,167 @@ export default function BankReconciliation({
   // Diálogo unificado de confirmaciones / motivos (sin window.alert/prompt)
   const [actionModal, setActionModal] = useState<ActionModalState>(null)
 
+  // La inspección técnica requiere autorización activa del servidor.
+  // Esta vista siempre es de solo lectura, incluso con intervención asistida.
+  useEffect(() => {
+    let cancelled = false
+
+    const clearInspectionData = () => {
+      setLedgerAccounts([])
+      setBankAccounts([])
+      setStatements([])
+      setHistoryEvents([])
+      setSelectedAccountId('')
+      setSelectedStatementId('')
+      setSummary(null)
+      setBankLines([])
+      setLedgerLines([])
+      setMatches([])
+      setStatementEvents([])
+    }
+
+    const validateSupportAuthorization = async () => {
+      if (!supportInspectionTicket) {
+        setSupportAuthorizationValid(false)
+        setSupportAuthorizationLoading(false)
+        return
+      }
+
+      clearInspectionData()
+      setSupportAuthorizationValid(false)
+      setSupportAuthorizationLoading(true)
+
+      try {
+        if (
+          supportInspectionTicket.module_page !== 'bankrecon' ||
+          !supportInspectionTicket.company_id ||
+          !isSessionAuthorizationActive(supportInspectionTicket)
+        ) {
+          throw new Error('El ticket de soporte no tiene una autorización bancaria vigente.')
+        }
+
+        const { data, error } = await supabase.rpc(
+          'support_has_active_authorization',
+          {
+            p_company_id: supportInspectionTicket.company_id,
+            p_module: 'accounting',
+            p_scope: supportInspectionTicket.authorization_scope || 'lectura_diagnostico',
+          }
+        )
+
+        if (error) throw error
+        if (data !== true) {
+          throw new Error('Supabase no confirmó la autorización para consultar esta empresa.')
+        }
+
+        if (!cancelled) setSupportAuthorizationValid(true)
+      } catch (err) {
+        if (!cancelled) {
+          setSupportAuthorizationValid(false)
+          setFeedback({
+            ok: false,
+            text: err instanceof Error
+              ? err.message
+              : 'No se pudo validar la autorización técnica.',
+          })
+        }
+      } finally {
+        if (!cancelled) setSupportAuthorizationLoading(false)
+      }
+    }
+
+    void validateSupportAuthorization()
+
+    return () => {
+      cancelled = true
+    }
+  }, [supportInspectionTicket])
+
+
+  // Vigilar vencimiento y revocación de la autorización durante la inspección.
+  useEffect(() => {
+    const ticket = supportInspectionTicket
+    if (!ticket) return
+
+    let stopped = false
+    let checking = false
+
+    const clearInspectionData = () => {
+      setSupportAuthorizationValid(false)
+      setLedgerAccounts([])
+      setBankAccounts([])
+      setStatements([])
+      setHistoryEvents([])
+      setSelectedAccountId('')
+      setSelectedStatementId('')
+      setSummary(null)
+      setBankLines([])
+      setLedgerLines([])
+      setMatches([])
+      setStatementEvents([])
+    }
+
+    const revokeInspectionView = (message: string) => {
+      if (stopped) return
+      clearInspectionData()
+      setFeedback({ ok: false, text: message })
+    }
+
+    const verifyAuthorization = async () => {
+      if (stopped || checking) return
+      checking = true
+
+      try {
+        if (
+          !ticket.company_id ||
+          ticket.module_page !== 'bankrecon' ||
+          !isSessionAuthorizationActive(ticket)
+        ) {
+          revokeInspectionView('La autorización de soporte venció o dejó de estar activa.')
+          return
+        }
+
+        const { data, error } = await supabase.rpc(
+          'support_has_active_authorization',
+          {
+            p_company_id: ticket.company_id,
+            p_module: 'accounting',
+            p_scope: ticket.authorization_scope || 'lectura_diagnostico',
+          }
+        )
+
+        if (error) throw error
+
+        if (data !== true) {
+          revokeInspectionView('La autorización de soporte fue revocada. Se cerró la consulta de esta empresa.')
+        }
+      } catch {
+        revokeInspectionView('No fue posible confirmar la autorización. Por seguridad, se ocultaron los datos de la inspección.')
+      } finally {
+        checking = false
+      }
+    }
+
+    const expiresAt = Date.parse(ticket.authorized_until || '')
+    const expiryDelay = Number.isFinite(expiresAt)
+      ? Math.max(0, expiresAt - Date.now())
+      : 0
+
+    const expiryTimer = window.setTimeout(() => {
+      revokeInspectionView('La autorización de soporte venció. Se ocultaron los datos de la inspección.')
+    }, expiryDelay)
+
+    const interval = window.setInterval(() => {
+      void verifyAuthorization()
+    }, 15000)
+
+    return () => {
+      stopped = true
+      window.clearTimeout(expiryTimer)
+      window.clearInterval(interval)
+    }
+  }, [supportInspectionTicket])
+
   const selectedAccount = useMemo(
     () => bankAccounts.find(a => a.id === selectedAccountId) || null,
     [bankAccounts, selectedAccountId]
@@ -271,17 +444,38 @@ export default function BankReconciliation({
 
   const loadMasterCatalogs = useCallback(
     async (preferAccountId?: string, preferStatementId?: string) => {
+      if (supportMode && supportAuthorizationLoading) {
+        setLoadingInit(true)
+        return
+      }
       if (!hasAccess) {
+        if (supportMode) {
+          setLedgerAccounts([])
+          setBankAccounts([])
+          setStatements([])
+          setHistoryEvents([])
+          setSelectedAccountId('')
+          setSelectedStatementId('')
+          setSummary(null)
+          setBankLines([])
+          setLedgerLines([])
+          setMatches([])
+          setStatementEvents([])
+        }
         setLoadingInit(false)
         return
       }
       setLoadingInit(true)
       try {
+        const supportCompanyId = supportMode
+          ? supportInspectionTicket?.company_id || undefined
+          : undefined
+
         const [pucRows, accRows, stmtRows, auditRows] = await Promise.all([
-          fetchPostableBankLedgerAccounts(),
-          fetchBankAccounts(),
-          fetchBankStatements(),
-          fetchAuditHistory(),
+          fetchPostableBankLedgerAccounts(supportCompanyId),
+          fetchBankAccounts(supportCompanyId),
+          fetchBankStatements(undefined, supportCompanyId),
+          fetchAuditHistory(undefined, supportCompanyId),
         ])
         setLedgerAccounts(pucRows)
         setBankAccounts(accRows)
@@ -311,6 +505,19 @@ export default function BankReconciliation({
 
         setSelectedStatementId(targetStmtId)
       } catch (err) {
+        if (supportMode) {
+          setLedgerAccounts([])
+          setBankAccounts([])
+          setStatements([])
+          setHistoryEvents([])
+          setSelectedAccountId('')
+          setSelectedStatementId('')
+          setSummary(null)
+          setBankLines([])
+          setLedgerLines([])
+          setMatches([])
+          setStatementEvents([])
+        }
         setFeedback({
           ok: false,
           text:
@@ -322,7 +529,14 @@ export default function BankReconciliation({
         setLoadingInit(false)
       }
     },
-    [hasAccess, selectedAccountId, selectedStatementId]
+    [
+      hasAccess,
+      selectedAccountId,
+      selectedStatementId,
+      supportMode,
+      supportInspectionTicket,
+      supportAuthorizationLoading,
+    ]
   )
 
   const loadWorkspace = useCallback(async () => {
@@ -336,9 +550,28 @@ export default function BankReconciliation({
     }
     setLoadingWorkspace(true)
     try {
+      if (
+        supportMode &&
+        (
+          !supportAuthorizationValid ||
+          !supportInspectionTicket?.company_id ||
+          selectedStatement.company_id !== supportInspectionTicket.company_id ||
+          selectedAccount.company_id !== supportInspectionTicket.company_id ||
+          !isSessionAuthorizationActive(supportInspectionTicket)
+        )
+      ) {
+        throw new Error('El extracto o la cuenta no pertenecen a la empresa autorizada, o el ticket expiró.')
+      }
+
       const ws = await fetchStatementWorkspace({
         statement: selectedStatement,
         bankAccount: selectedAccount,
+        ...(supportMode
+          ? {
+              supportCompanyId: supportInspectionTicket?.company_id || undefined,
+              supportScope: supportInspectionTicket?.authorization_scope || 'lectura_diagnostico',
+            }
+          : {}),
       })
       setSummary(ws.summary)
       setBankLines(ws.bankLines)
@@ -349,6 +582,13 @@ export default function BankReconciliation({
       setSelectedAccAllocs({})
       setHighlightedAccLineId(null)
     } catch (err) {
+      if (supportMode) {
+        setSummary(null)
+        setBankLines([])
+        setLedgerLines([])
+        setMatches([])
+        setStatementEvents([])
+      }
       setFeedback({
         ok: false,
         text:
@@ -359,7 +599,13 @@ export default function BankReconciliation({
     } finally {
       setLoadingWorkspace(false)
     }
-  }, [selectedStatement, selectedAccount])
+  }, [
+    selectedStatement,
+    selectedAccount,
+    supportMode,
+    supportAuthorizationValid,
+    supportInspectionTicket,
+  ])
 
   useEffect(() => {
     void loadMasterCatalogs()
@@ -532,7 +778,7 @@ export default function BankReconciliation({
   }
 
   const handleCreateManualMatch = async () => {
-    if (!selectedStatement || !matchTotals.canMatch || !statementEditable || !canReconcile) return
+    if (supportMode || !selectedStatement || !matchTotals.canMatch || !statementEditable || !canReconcile) return
     setBusy(true)
     setFeedback(null)
     try {
@@ -592,7 +838,7 @@ export default function BankReconciliation({
 
   const handleSaveAccount = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!canManageAccounts) return
+    if (supportMode || !canManageAccounts) return
     setBusy(true)
     setFeedback(null)
     try {
@@ -649,7 +895,7 @@ export default function BankReconciliation({
 
   const handleCreateStatement = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!canCaptureStatements) return
+    if (supportMode || !canCaptureStatements) return
     if (statementForm.period_end < statementForm.period_start) {
       setFeedback({
         ok: false,
@@ -774,7 +1020,7 @@ export default function BankReconciliation({
   }
 
   const handleSaveManualLines = async () => {
-    if (!selectedStatement || !statementEditable || !canCaptureStatements) return
+    if (supportMode || !selectedStatement || !statementEditable || !canCaptureStatements) return
     const valid = manualRows
       .map(r => ({
         ...r,
@@ -837,7 +1083,7 @@ export default function BankReconciliation({
 
   const handleExecuteActionModal = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!actionModal) return
+    if (supportMode || !actionModal) return
     setBusy(true)
     setFeedback(null)
     try {
@@ -1053,6 +1299,20 @@ export default function BankReconciliation({
         </body>
       </html>
     `)
+  }
+
+  if (supportMode && supportAuthorizationLoading) {
+    return (
+      <div className="bg-white border border-slate-200 rounded-xl p-8 text-center max-w-xl mx-auto my-12">
+        <ShieldCheck className="w-10 h-10 text-slate-500 mx-auto mb-3" />
+        <h2 className="text-lg font-bold text-slate-900">
+          Verificando autorización de soporte
+        </h2>
+        <p className="text-sm text-slate-600 mt-2">
+          Estamos comprobando que el permiso para esta empresa siga vigente.
+        </p>
+      </div>
+    )
   }
 
   if (!hasAccess) {

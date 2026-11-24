@@ -36,6 +36,25 @@ export function createCustomerDocVerifyHandler(opts?: {
       return res.status(405).json({ ok: false, error: 'Método no permitido. Use POST.' })
     }
 
+    // --- Sesión obligatoria (evita que terceros consuman la cuota de Gemini) ---
+    const authHeader = String(req.headers?.authorization ?? req.headers?.Authorization ?? '')
+    const bearer = authHeader.match(/^Bearer\s+(.+)$/i)?.[1]?.trim()
+    const sbUrl = (env.SUPABASE_URL || env.VITE_SUPABASE_URL || '').trim().replace(/\/+$/, '')
+    const sbAnon = (env.SUPABASE_ANON_KEY || env.VITE_SUPABASE_ANON_KEY || '').trim()
+    if (!bearer) {
+      return res.status(401).json({ ok: false, error: 'Sesión requerida.' })
+    }
+    if (sbUrl && sbAnon) {
+      try {
+        const who = await fetch(`${sbUrl}/auth/v1/user`, {
+          headers: { apikey: sbAnon, Authorization: `Bearer ${bearer}` },
+        })
+        if (!who.ok) return res.status(401).json({ ok: false, error: 'Sesión inválida o expirada.' })
+      } catch {
+        return res.status(502).json({ ok: false, error: 'No se pudo verificar la sesión.' })
+      }
+    }
+
     try {
       const body = req.body as CustomerDocVerifyPayload
       const {
@@ -47,8 +66,12 @@ export function createCustomerDocVerifyHandler(opts?: {
         documentType = 'rif',
       } = body || {}
 
-      if (!image) {
+      if (!image || typeof image !== 'string') {
         return res.status(400).json({ ok: false, error: 'La imagen del documento es obligatoria.' })
+      }
+      // Límite ~6 MB en base64 (reduce abuso)
+      if (image.length > 8_000_000) {
+        return res.status(413).json({ ok: false, error: 'La imagen es demasiado grande.' })
       }
 
       // Procesamiento de formato de imagen (data URL o Base64 puro)

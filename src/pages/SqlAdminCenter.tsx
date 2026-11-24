@@ -81,19 +81,6 @@ export default function SqlAdminCenter() {
     !['contador', 'gerente', 'vendedor'].includes(role || '')
   const allowed = isSuperAdmin
 
-  if (!isSuperAdmin) {
-    return (
-      <div className="bg-red-50 border border-red-200 rounded-2xl p-8 text-center max-w-xl mx-auto my-12 shadow-sm">
-        <ShieldCheck className="w-12 h-12 text-red-600 mx-auto mb-4" />
-        <h2 className="text-lg font-bold text-red-950">Acceso Restringido: Administrador Central Requerido</h2>
-        <p className="text-sm text-red-700 mt-2">
-          El Centro de Scripts SQL y Supabase es exclusivo del Administrador Central ('super_admin').
-          Los roles de Contador, Gerente y Vendedor tienen prohibido el acceso o ejecución de este panel por políticas estrictas de seguridad.
-        </p>
-      </div>
-    )
-  }
-
   const realConfigured = hasRealSupabaseConfig()
   const supabaseHost = getConfiguredSupabaseHost()
   const sqlEditorUrl = getSupabaseSqlEditorUrl()

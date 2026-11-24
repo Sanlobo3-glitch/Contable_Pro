@@ -311,3 +311,10 @@ function runHeuristicVerification(
     review_recommended: hasDiscrepancy,
   }
 }
+
+
+const defaultHandler = createCustomerDocVerifyHandler()
+
+export default async function handler(req: any, res: any): Promise<void> {
+  await defaultHandler(req, res)
+}

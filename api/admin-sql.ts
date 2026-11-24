@@ -132,6 +132,65 @@ function isVerifyQueryRequested(req: AdminSqlReq): boolean {
   return /[?&]verify=(1|true)\b/i.test(rawUrl)
 }
 
+type MasterCheck =
+  | { ok: true; userId: string; email: string }
+  | { ok: false; status: number; error: string }
+
+/**
+ * Verifica contra Supabase Auth que el token pertenece a la cuenta maestra.
+ * - Compara por correo Y, si existe MASTER_ADMIN_USER_ID en el servidor, por id de usuario.
+ * - Exige correo confirmado.
+ * - Si existe REQUIRE_MFA=1, exige sesión con MFA (aal2).
+ */
+async function verifyMaster(
+  fetchFn: typeof fetch,
+  env: Record<string, string | undefined>,
+  supabaseUrl: string,
+  supabaseAnonKey: string,
+  userJwt: string
+): Promise<MasterCheck> {
+  const authResp = await fetchFn(`${supabaseUrl}/auth/v1/user`, {
+    method: 'GET',
+    headers: { apikey: supabaseAnonKey, Authorization: `Bearer ${userJwt}` },
+  })
+  if (!authResp.ok) return { ok: false, status: 401, error: 'Sesión de Supabase inválida o expirada.' }
+
+  const u = (await authResp.json()) as {
+    id?: string
+    email?: string
+    email_confirmed_at?: string | null
+    confirmed_at?: string | null
+  }
+  const email = (u?.email || '').trim().toLowerCase()
+  const masterId = (env.MASTER_ADMIN_USER_ID || '').trim().toLowerCase()
+  const idOk = !masterId || (u?.id || '').toLowerCase() === masterId
+  const confirmed = Boolean(u?.email_confirmed_at || u?.confirmed_at)
+
+  if (email !== MASTER_ADMIN_EMAIL || !idOk || !confirmed || !u?.id) {
+    return {
+      ok: false,
+      status: 403,
+      error: 'Acceso denegado: exclusivo para la cuenta maestra verificada.',
+    }
+  }
+
+  if ((env.REQUIRE_MFA || '') === '1') {
+    // El claim "aal" viene dentro del JWT; se decodifica sin validar firma porque
+    // /auth/v1/user ya validó el token.
+    try {
+      const payload = JSON.parse(Buffer.from(userJwt.split('.')[1], 'base64url').toString('utf8')) as {
+        aal?: string
+      }
+      if (payload.aal !== 'aal2') {
+        return { ok: false, status: 403, error: 'Se requiere verificación en dos pasos (MFA) para esta acción.' }
+      }
+    } catch {
+      return { ok: false, status: 403, error: 'No se pudo comprobar el nivel de autenticación (MFA).' }
+    }
+  }
+  return { ok: true, userId: u.id, email }
+}
+
 export function createAdminSqlHandler(deps?: {
   fetchFn?: typeof fetch
   env?: Record<string, string | undefined>
@@ -156,10 +215,19 @@ export function createAdminSqlHandler(deps?: {
         res.status(200).json({
           ok: true,
           serverSqlConfigured: configured,
-          hasAccessToken: Boolean(managementToken),
-          hasSupabaseUrl: Boolean(supabaseUrl),
-          projectRef: projectRef || null,
         })
+        return
+      }
+
+      // El diagnóstico en vivo usa el token de gestión: solo para la cuenta maestra.
+      const getJwt = getBearerToken(req.headers)
+      if (!getJwt || !supabaseUrl || !supabaseAnonKey) {
+        res.status(401).json({ ok: false, error: 'Falta token de sesión de usuario.' })
+        return
+      }
+      const getCheck = await verifyMaster(fetchFn, env, supabaseUrl, supabaseAnonKey, getJwt)
+      if (!getCheck.ok) {
+        res.status(getCheck.status).json({ ok: false, error: getCheck.error })
         return
       }
 
@@ -252,29 +320,13 @@ export function createAdminSqlHandler(deps?: {
       return
     }
 
-    // Verificar identidad real contra Supabase Auth
-    const authResp = await fetchFn(`${supabaseUrl}/auth/v1/user`, {
-      method: 'GET',
-      headers: {
-        apikey: supabaseAnonKey,
-        Authorization: `Bearer ${userJwt}`,
-      },
-    })
-
-    if (!authResp.ok) {
-      res.status(401).json({ ok: false, error: 'Sesión de Supabase inválida o expirada.' })
+    // Verificar identidad real contra Supabase Auth (correo + id + confirmado + MFA opcional)
+    const masterCheck = await verifyMaster(fetchFn, env, supabaseUrl, supabaseAnonKey, userJwt)
+    if (!masterCheck.ok) {
+      res.status(masterCheck.status).json({ ok: false, error: masterCheck.error })
       return
     }
-
-    const authUser = (await authResp.json()) as { id?: string; email?: string }
-    const email = (authUser?.email || '').trim().toLowerCase()
-    if (email !== MASTER_ADMIN_EMAIL) {
-      res.status(403).json({
-        ok: false,
-        error: 'Acceso denegado: exclusivo para la cuenta maestra sanlobo3@hotmail.com.',
-      })
-      return
-    }
+    const authUser = { id: masterCheck.userId, email: masterCheck.email }
 
     const body = (typeof req.body === 'object' && req.body !== null ? req.body : {}) as {
       sql?: string

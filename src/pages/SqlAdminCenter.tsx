@@ -133,7 +133,12 @@ export default function SqlAdminCenter() {
       // 1. Consultar pasarela de Management API en el servidor con verificación en vivo (?verify=1)
       let managementDiagUsed = false
       try {
-        const apiCheck = await fetch('/api/admin-sql?verify=1', { method: 'GET' })
+        const { data: diagSession } = await supabase.auth.getSession()
+        const diagJwt = diagSession?.session?.access_token
+        const apiCheck = await fetch('/api/admin-sql?verify=1', {
+          method: 'GET',
+          headers: diagJwt ? { Authorization: `Bearer ${diagJwt}` } : {},
+        })
         if (apiCheck.ok) {
           const json = (await apiCheck.json()) as {
             serverSqlConfigured?: boolean
